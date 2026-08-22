@@ -91,6 +91,7 @@ pub struct SettingsScreen {
     pub notifications: bool,
     pub notify_on_question: bool,
     pub notify_on_plan_ready: bool,
+    pub notify_on_permission: bool,
     pub notify_on_turn_complete: bool,
     pub notify_sound: bool,
     pub show_turn_duration: bool,
@@ -146,6 +147,7 @@ impl SettingsScreen {
             notifications: true,
             notify_on_question: true,
             notify_on_plan_ready: true,
+            notify_on_permission: true,
             notify_on_turn_complete: true,
             notify_sound: false,
             show_turn_duration: false,
@@ -194,6 +196,7 @@ impl SettingsScreen {
         self.notifications = self.settings_snapshot.notifications;
         self.notify_on_question = self.settings_snapshot.notify_on_question;
         self.notify_on_plan_ready = self.settings_snapshot.notify_on_plan_ready;
+        self.notify_on_permission = self.settings_snapshot.notify_on_permission;
         self.notify_on_turn_complete = self.settings_snapshot.notify_on_turn_complete;
         self.notify_sound = self.settings_snapshot.notify_sound;
         self.show_turn_duration = self.settings_snapshot.show_turn_duration;
@@ -584,6 +587,13 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             description: "Notify when a plan is waiting for approval.".into(),
             kind: SettingKind::Bool,
             value: if screen.notify_on_plan_ready { "true" } else { "false" }.to_string(),
+        },
+        SettingsEntry {
+            key: "notify_on_permission".into(),
+            label: "Notify on permission".into(),
+            description: "Notify when a tool is waiting for permission.".into(),
+            kind: SettingKind::Bool,
+            value: if screen.notify_on_permission { "true" } else { "false" }.to_string(),
         },
         SettingsEntry {
             key: "notify_on_turn_complete".into(),
@@ -1323,6 +1333,10 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                     "notify_on_plan_ready" => {
                         screen.notify_on_plan_ready = new_value;
                         screen.settings_snapshot.notify_on_plan_ready = new_value;
+                    }
+                    "notify_on_permission" => {
+                        screen.notify_on_permission = new_value;
+                        screen.settings_snapshot.notify_on_permission = new_value;
                     }
                     "notify_on_turn_complete" => {
                         screen.notify_on_turn_complete = new_value;

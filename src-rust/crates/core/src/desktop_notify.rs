@@ -1,8 +1,8 @@
 //! Desktop notifications for the moments a session needs the user back.
 //!
-//! A long turn runs while the user is in another window. The three events
-//! below are the points where the session either stops and waits, or has
-//! nothing left to do, and the terminal alone gives no sign of it.
+//! A long turn runs while the user is in another window. The events below are
+//! the points where the session either stops and waits, or has nothing left to
+//! do, and the terminal alone gives no sign of it.
 //!
 //! Delivery is best-effort. A machine with no notification daemon, or a
 //! terminal without notification permission, must not stall a turn, so a
@@ -43,16 +43,30 @@ pub enum NotifyEvent {
     QuestionAsked,
     /// A plan is waiting for approval.
     PlanReady,
+    /// A tool is waiting for permission and the turn is blocked on the answer.
+    PermissionRequested,
     /// The turn finished and the prompt is free again.
     TurnComplete,
 }
 
 impl NotifyEvent {
+    /// Every event, for a caller that has to cover all of them.
+    ///
+    /// A new variant belongs here as well as in the two matches below. The
+    /// matches are exhaustive, so the compiler stops on them first.
+    pub const ALL: [Self; 4] = [
+        Self::QuestionAsked,
+        Self::PlanReady,
+        Self::PermissionRequested,
+        Self::TurnComplete,
+    ];
+
     /// The notification title.
     fn summary(self) -> &'static str {
         match self {
             Self::QuestionAsked => "MikMik is waiting on an answer",
             Self::PlanReady => "MikMik has a plan ready",
+            Self::PermissionRequested => "MikMik is waiting for permission",
             Self::TurnComplete => "MikMik finished",
         }
     }
@@ -62,7 +76,19 @@ impl NotifyEvent {
         match self {
             Self::QuestionAsked => settings.notify_on_question,
             Self::PlanReady => settings.notify_on_plan_ready,
+            Self::PermissionRequested => settings.notify_on_permission,
             Self::TurnComplete => settings.notify_on_turn_complete,
+        }
+    }
+
+    /// Switch this event off, for a test that needs one silenced.
+    #[cfg(test)]
+    fn disable_in(self, settings: &mut Settings) {
+        match self {
+            Self::QuestionAsked => settings.notify_on_question = false,
+            Self::PlanReady => settings.notify_on_plan_ready = false,
+            Self::PermissionRequested => settings.notify_on_permission = false,
+            Self::TurnComplete => settings.notify_on_turn_complete = false,
         }
     }
 }
@@ -136,17 +162,14 @@ mod tests {
             notifications: true,
             notify_on_question: true,
             notify_on_plan_ready: true,
+            notify_on_permission: true,
             notify_on_turn_complete: true,
             notify_sound: true,
             ..Default::default()
         }
     }
 
-    const EVENTS: [NotifyEvent; 3] = [
-        NotifyEvent::QuestionAsked,
-        NotifyEvent::PlanReady,
-        NotifyEvent::TurnComplete,
-    ];
+    const EVENTS: [NotifyEvent; NotifyEvent::ALL.len()] = NotifyEvent::ALL;
 
     #[test]
     fn the_master_switch_silences_every_event() {
@@ -166,13 +189,9 @@ mod tests {
     fn each_event_is_switched_off_on_its_own() {
         for event in EVENTS {
             let mut settings = all_on();
-            match event {
-                NotifyEvent::QuestionAsked => settings.notify_on_question = false,
-                NotifyEvent::PlanReady => settings.notify_on_plan_ready = false,
-                NotifyEvent::TurnComplete => settings.notify_on_turn_complete = false,
-            }
+            event.disable_in(&mut settings);
             assert!(!should_notify(&settings, event), "{event:?} stayed on");
-            // The other two are untouched: one switch must not silence a
+            // The others are untouched: one switch must not silence a
             // sibling event.
             for other in EVENTS.into_iter().filter(|other| *other != event) {
                 assert!(
@@ -232,11 +251,7 @@ mod tests {
     fn an_event_switched_off_makes_no_sound_of_its_own() {
         for event in EVENTS {
             let mut settings = all_on();
-            match event {
-                NotifyEvent::QuestionAsked => settings.notify_on_question = false,
-                NotifyEvent::PlanReady => settings.notify_on_plan_ready = false,
-                NotifyEvent::TurnComplete => settings.notify_on_turn_complete = false,
-            }
+            event.disable_in(&mut settings);
             assert!(
                 !should_play_sound(&settings, event),
                 "{event:?} was switched off but still made a sound"

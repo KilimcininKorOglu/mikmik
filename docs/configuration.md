@@ -146,15 +146,16 @@ and render without one.
 
 ### Desktop notifications
 
-The three moments a session either stops and waits or has nothing left to do.
-Each is sent through the operating system's own notification service, so it
-arrives while the terminal is in the background.
+The moments a session either stops and waits or has nothing left to do. Each is
+sent through the operating system's own notification service, so it arrives
+while the terminal is in the background.
 
 | Key                    | Type    | Default | Description                                                             |
 |------------------------|---------|---------|-------------------------------------------------------------------------|
 | `notifications`        | boolean | true    | Master switch. Off means nothing is sent, whatever the keys below say.   |
 | `notifyOnQuestion`     | boolean | true    | The model called `AskUserQuestion` and the turn is blocked on an answer. |
 | `notifyOnPlanReady`    | boolean | true    | A plan is waiting for approval (see [`plan`](#plan)).                    |
+| `notifyOnPermission`   | boolean | true    | A tool is waiting for permission and the turn is blocked on the answer. The dialog's own explanation is used as the body. |
 | `notifyOnTurnComplete` | boolean | true    | The turn finished, tool round-trips included, and the prompt is free. The last thing the model said is used as the body. |
 | `notifySound`          | boolean | false   | Play a short sound with each notification.                              |
 

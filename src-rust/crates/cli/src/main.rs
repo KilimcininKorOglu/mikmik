@@ -5085,6 +5085,15 @@ async fn run_interactive(
                             }),
                         )
                         .await;
+                        // The turn is now blocked on an answer, the same as it
+                        // is for a question. Read the settings here rather than
+                        // caching them at startup, so a toggle in the settings
+                        // screen takes effect on the very next prompt.
+                        mikmik_core::desktop_notify::notify(
+                            &mikmik_core::config::Settings::load_sync().unwrap_or_default(),
+                            mikmik_core::desktop_notify::NotifyEvent::PermissionRequested,
+                            &dialog.description,
+                        );
                         app.permission_request = Some(dialog);
                         pending_permissions
                             .lock()

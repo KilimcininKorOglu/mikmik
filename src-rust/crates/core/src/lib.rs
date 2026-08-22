@@ -1963,6 +1963,14 @@ pub mod config {
         /// Notify when a plan is ready for approval. Defaults to true.
         #[serde(default = "default_true", rename = "notifyOnPlanReady")]
         pub notify_on_plan_ready: bool,
+        /// Notify when a tool asks for permission and the turn is waiting on
+        /// the answer. Defaults to true.
+        ///
+        /// A permission prompt blocks the turn exactly as a question does, and
+        /// a session that stalls behind one is the commonest way a long run is
+        /// found finished-but-waiting an hour later.
+        #[serde(default = "default_true", rename = "notifyOnPermission")]
+        pub notify_on_permission: bool,
         /// Notify when a turn finishes and the prompt is free again.
         /// Defaults to true.
         #[serde(default = "default_true", rename = "notifyOnTurnComplete")]
@@ -3468,6 +3476,7 @@ pub mod config {
                 notifications: base.notifications,
                 notify_on_question: base.notify_on_question,
                 notify_on_plan_ready: base.notify_on_plan_ready,
+                notify_on_permission: base.notify_on_permission,
                 notify_on_turn_complete: base.notify_on_turn_complete,
                 auto_memory_enabled: base.auto_memory_enabled,
                 agents_md_enabled: base.agents_md_enabled,
@@ -3873,6 +3882,7 @@ pub mod config {
                 notifications: true,
                 notify_on_question: true,
                 notify_on_plan_ready: true,
+                notify_on_permission: true,
                 notify_on_turn_complete: true,
                 notify_sound: true,
                 auto_memory_enabled: Some(true),
@@ -3903,6 +3913,7 @@ pub mod config {
             // notification is the same overreach as deciding the theme.
             assert!(!merged.notify_on_question);
             assert!(!merged.notify_on_plan_ready);
+            assert!(!merged.notify_on_permission);
             assert!(!merged.notify_on_turn_complete);
             // A repository deciding when the developer's speakers make a noise
             // is the same overreach again.

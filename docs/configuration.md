@@ -598,6 +598,40 @@ unconditionally.
 Use with caution: the model can read and modify any file reachable from the
 current working directory without any user confirmation.
 
+### Commands that destroy data always ask
+
+Permission is granted per tool, not per command. Approving `Bash` once while
+running `ls`, or adding a `make ` prefix to the allowlist, approved every later
+shell command with it. Deletion cannot be undone and the approval carried no
+information about it, so a command whose purpose is to destroy data prompts
+again even when an allow rule or a prefix matches.
+
+| Command                       | Why it counts                                            |
+|-------------------------------|----------------------------------------------------------|
+| `rm`                          | Deletes files                                            |
+| `shred`, `wipefs`             | Overwrites data so it cannot be recovered                |
+| `dd`, `truncate`              | Overwrites or empties a file or device                   |
+| `mkfs`, `mkfs.*`              | Formats a filesystem                                     |
+| `mv -f`, `mv --force`         | An explicit instruction to overwrite the target          |
+| `git clean -f`, `--force`     | Deletes untracked files, which git cannot bring back     |
+
+Every segment of the command line is inspected, so `make && rm -rf dist` is
+caught by its second half. A path-qualified call is the same command:
+`/bin/rm` counts as `rm`. A plain `mv a b` does not count, because it names a
+rename far more often than an overwrite and the check cannot see whether the
+target exists.
+
+Two consequences:
+
+- The dialog for such a command offers no "Allow commands matching `<prefix>*`"
+  option, because the allowlist would never honour it.
+- `bypassPermissions` still allows them. That mode is an explicit decision to
+  stop being asked, so it is not overridden here.
+
+A command classified as **Critical** risk (`rm -rf /`, a fork bomb, `mkfs` on a
+device, piping a download into a shell) is not asked about at all: the bash
+tool refuses to run it whatever the permission mode says.
+
 Because of that, the mode is gated behind a warning dialog. It appears when a
 session starts in `bypassPermissions` and again whenever the mode is switched
 to it while a session is running, by `shift+tab`, `/yolo on`, `/permissions set

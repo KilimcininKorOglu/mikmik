@@ -534,6 +534,124 @@ pub fn is_auto_approvable(command: &str, permission_mode: &PermissionMode) -> bo
 }
 
 // ---------------------------------------------------------------------------
+// Irreversible commands
+// ---------------------------------------------------------------------------
+
+/// Commands whose whole purpose is to destroy data.
+///
+/// `mv` is absent: it names a rename far more often than an overwrite, and the
+/// classifier cannot see whether the target exists. `mv -f` is caught below,
+/// because that flag is an explicit instruction to overwrite without asking.
+const DESTRUCTIVE_COMMANDS: &[&str] = &["rm", "shred", "dd", "truncate", "mkfs", "wipefs"];
+
+/// Name the command that makes `command` irreversible, if one does.
+///
+/// Permission is granted per tool, so approving `Bash` once while running `ls`
+/// also approves every future `rm`. The approval carried no information about
+/// deletion and deletion cannot be undone, so a caller that would skip the
+/// prompt asks again when this returns `Some`.
+///
+/// Each segment is inspected, because `ls && rm -rf build` is one command
+/// string with a destructive half.
+pub fn destructive_command_in(command: &str) -> Option<&'static str> {
+    split_shell_segments(command)
+        .into_iter()
+        .find_map(destructive_in_segment)
+}
+
+/// The commands that run another command, and are transparent to this check.
+///
+/// `xargs rm` deletes exactly as `rm` does, and reading the first token alone
+/// saw only `xargs`.
+const COMMAND_WRAPPERS: &[&str] = &["xargs", "sudo", "doas", "env", "nice", "nohup", "time"];
+
+/// Name the irreversible command in one segment, looking through any wrapper.
+fn destructive_in_segment(segment: &str) -> Option<&'static str> {
+    let (name, args) = split_command(segment);
+    // A path-qualified call is the same command: `/bin/rm` is `rm`.
+    let name = name.rsplit('/').next().unwrap_or(name);
+
+    // `mkfs.ext4` and `mkfs.xfs` are the same command with the type appended.
+    if name == "mkfs" || name.starts_with("mkfs.") {
+        return Some("mkfs");
+    }
+    if let Some(found) = DESTRUCTIVE_COMMANDS
+        .iter()
+        .find(|candidate| name == **candidate)
+    {
+        return Some(found);
+    }
+    if name == "mv" && (has_flag(args, "-f") || has_flag(args, "--force")) {
+        return Some("mv");
+    }
+    // `git clean -f` deletes untracked files, and nothing in git recovers a
+    // file that was never added.
+    if name == "git" {
+        let (subcommand, git_args) = split_command(args);
+        if subcommand == "clean" && (has_flag(git_args, "-f") || has_flag(git_args, "--force")) {
+            return Some("git clean");
+        }
+    }
+    // `find` deletes two ways: `-delete` names no command at all, and
+    // `-exec rm {} +` hides one among the arguments.
+    if name == "find" {
+        if has_flag(args, "-delete") {
+            return Some("find -delete");
+        }
+        return args
+            .split_whitespace()
+            .filter_map(|word| word.rsplit('/').next())
+            .find_map(|word| {
+                DESTRUCTIVE_COMMANDS
+                    .iter()
+                    .find(|candidate| word == **candidate)
+                    .copied()
+            });
+    }
+    // A wrapper runs whatever follows it, so look at that instead.
+    if COMMAND_WRAPPERS.contains(&name) && !args.is_empty() {
+        return destructive_in_segment(args);
+    }
+    None
+}
+
+/// Split a command string on the separators that start a new command.
+///
+/// Quoting is not parsed. A separator inside a quoted string splits the
+/// segment as well, which can only produce extra segments, never fewer, so the
+/// check errs toward asking.
+fn split_shell_segments(command: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let bytes = command.as_bytes();
+    let mut start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let (is_separator, width) = match bytes[i] {
+            b';' | b'\n' | b'|' | b'&' => {
+                // `&&` and `||` are two bytes; a single `|` or `&` also ends a
+                // command, so one arm covers both.
+                let doubled = bytes.get(i + 1) == Some(&bytes[i]);
+                (true, if doubled { 2 } else { 1 })
+            }
+            _ => (false, 1),
+        };
+        if is_separator {
+            segments.push(&command[start..i]);
+            start = i + width;
+            i += width;
+        } else {
+            i += 1;
+        }
+    }
+    segments.push(&command[start..]);
+    segments
+        .into_iter()
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -677,5 +795,71 @@ mod tests {
     #[test]
     fn test_auto_approvable_plan_denies_all() {
         assert!(!is_auto_approvable("git status", &PermissionMode::Plan));
+    }
+
+    // ---- Irreversible commands --------------------------------------------
+
+    #[test]
+    fn a_destructive_command_is_named() {
+        for (command, expected) in [
+            ("rm foo.txt", "rm"),
+            ("rm -rf build", "rm"),
+            ("/bin/rm foo", "rm"),
+            ("sudo rm foo", "rm"),
+            ("shred secret.key", "shred"),
+            ("dd if=/dev/zero of=disk.img", "dd"),
+            ("truncate -s 0 log.txt", "truncate"),
+            ("mkfs.ext4 /dev/sdb1", "mkfs"),
+            ("mv -f a b", "mv"),
+            ("git clean -fd", "git clean"),
+            ("mkfs /dev/sdb1", "mkfs"),
+            ("find . -name '*.log' -delete", "find -delete"),
+            ("find . -name '*.tmp' -exec rm {} +", "rm"),
+            ("xargs rm < list.txt", "rm"),
+        ] {
+            assert_eq!(
+                destructive_command_in(command),
+                Some(expected),
+                "{command} should be named destructive"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ordinary_command_is_not_destructive() {
+        for command in [
+            "ls -la",
+            "git status",
+            "cargo build",
+            "mv a b", // a rename; the classifier cannot see whether b exists
+            "git clean -n",
+            "grep -rn rm src/",   // `rm` inside an argument is not the command
+            "echo 'rm -rf /'",    // and neither is `rm` inside a string
+            "npm run remove-old", // a name that merely starts with the letters
+        ] {
+            assert_eq!(
+                destructive_command_in(command),
+                None,
+                "{command} must not be treated as destructive"
+            );
+        }
+    }
+
+    #[test]
+    fn a_destructive_half_of_a_chain_is_found() {
+        // The whole string is one Bash call, so a prefix allowlist that
+        // matched on `ls` would have carried the `rm` through with it.
+        for command in [
+            "ls && rm -rf build",
+            "make; rm -rf dist",
+            "cargo build || rm -rf target",
+            "cat list.txt | xargs rm",
+            "make build & rm tmp",
+        ] {
+            assert!(
+                destructive_command_in(command).is_some(),
+                "{command} hides a destructive command"
+            );
+        }
     }
 }

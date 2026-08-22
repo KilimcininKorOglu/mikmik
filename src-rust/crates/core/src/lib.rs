@@ -5151,6 +5151,19 @@ pub mod permissions {
         Ask { reason: String },
     }
 
+    /// Name the irreversible command in a Bash request, if there is one.
+    ///
+    /// The bash tool passes the whole command string as the request's `path`,
+    /// so that is where the command is read from. Any other tool answers
+    /// `None`: the check is about what a shell command does, not about the
+    /// permission level.
+    pub fn destructive_bash_in(tool_name: &str, path: Option<&str>) -> Option<&'static str> {
+        if !matches!(tool_name, "Bash" | "bash") {
+            return None;
+        }
+        crate::bash_classifier::destructive_command_in(path?)
+    }
+
     // -----------------------------------------------------------------------
     // Format a human-readable explanation for the dialog
     // -----------------------------------------------------------------------
@@ -5318,6 +5331,21 @@ pub mod permissions {
             }
 
             if allow_matched {
+                // An allow rule names a tool, not a command. A user who
+                // approved `Bash` while running `ls` approved every later
+                // `rm` with it, and deletion cannot be undone, so a command
+                // whose purpose is to destroy data asks again.
+                //
+                // `BypassPermissions` returned above and is unaffected: that
+                // mode is an explicit decision to stop being asked.
+                if let Some(destructive) = destructive_bash_in(tool_name, path) {
+                    return PermissionDecision::Ask {
+                        reason: format!(
+                            "`{destructive}` deletes data and cannot be undone. \
+                             Allowing {tool_name} does not cover it."
+                        ),
+                    };
+                }
                 return PermissionDecision::Allow;
             }
 
@@ -5721,6 +5749,53 @@ pub mod permissions {
             let m = mgr(PermissionMode::BypassPermissions);
             assert_eq!(
                 m.evaluate("Bash", "rm -rf /", None, None, &[]),
+                PermissionDecision::Allow
+            );
+        }
+
+        /// An allow rule names a tool. `rm` is not what the user approved.
+        #[test]
+        fn an_allow_rule_for_bash_does_not_cover_a_deletion() {
+            let mut m = mgr(PermissionMode::Default);
+            m.add_session_allow("Bash");
+
+            // The approval still stands for everything else.
+            assert_eq!(
+                m.evaluate("Bash", "list files", Some("ls -la"), None, &[]),
+                PermissionDecision::Allow
+            );
+
+            for command in ["rm build/out", "make && rm -rf dist", "shred key.pem"] {
+                match m.evaluate("Bash", "run a command", Some(command), None, &[]) {
+                    PermissionDecision::Ask { reason } => {
+                        assert!(
+                            reason.contains("cannot be undone"),
+                            "the prompt should say why it came back: {reason}"
+                        );
+                    }
+                    other => panic!("{command} was allowed without asking: {other:?}"),
+                }
+            }
+        }
+
+        /// Bypass is an explicit decision to stop being asked, so it still wins.
+        #[test]
+        fn bypass_still_covers_a_deletion() {
+            let m = mgr(PermissionMode::BypassPermissions);
+            assert_eq!(
+                m.evaluate("Bash", "delete", Some("rm -rf build"), None, &[]),
+                PermissionDecision::Allow
+            );
+        }
+
+        /// The check reads a shell command, not a file path.
+        #[test]
+        fn another_tool_is_unaffected_by_the_deletion_check() {
+            let mut m = mgr(PermissionMode::Default);
+            m.add_session_allow("Write");
+            // A path that would read as a destructive command if it were one.
+            assert_eq!(
+                m.evaluate("Write", "write file", Some("rm.txt"), None, &[]),
                 PermissionDecision::Allow
             );
         }

@@ -2289,11 +2289,19 @@ fn permission_request_from_core(
 
     match (tool_name.as_str(), pending.request.path.clone()) {
         ("Bash", Some(command)) => {
-            let suggested_prefix = command
-                .split_whitespace()
-                .next()
-                .filter(|prefix| !prefix.is_empty())
-                .map(|prefix| format!("{} ", prefix));
+            // No prefix option for a command that destroys data. The
+            // allowlist refuses to cover one, so offering to add a prefix
+            // would promise an approval that never applies again.
+            let suggested_prefix = mikmik_core::bash_classifier::destructive_command_in(&command)
+                .is_none()
+                .then(|| {
+                    command
+                        .split_whitespace()
+                        .next()
+                        .filter(|prefix| !prefix.is_empty())
+                        .map(|prefix| format!("{} ", prefix))
+                })
+                .flatten();
             mikmik_tui::dialogs::PermissionRequest::bash(
                 tool_use_id,
                 tool_name,

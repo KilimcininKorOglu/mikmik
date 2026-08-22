@@ -195,6 +195,8 @@ Output (stdout + stderr) is returned as a string, and long output is truncated.
 
 A command the risk classifier rates `Critical` (`rm -rf /`, a fork bomb, `dd if=`) is `Forbidden`: no permission mode approves it.
 
+A command that destroys data (`rm`, `shred`, `dd`, `truncate`, `mkfs`, `mv -f`, `git clean -f`) prompts even when an allow rule or a prefix allowlist entry already covers `Bash`, because that approval was granted for a tool rather than for a deletion. `bypassPermissions` still allows it. See [Configuration](configuration.md#commands-that-destroy-data-always-ask).
+
 When `run_in_background` is `true`, the task ID is returned immediately. Use `monitor` to check status, retrieve output, or cancel the task.
 
 ---

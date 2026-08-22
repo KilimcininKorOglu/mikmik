@@ -7109,7 +7109,15 @@ impl App {
     /// Returns `true` if the given bash `command` is covered by the session-local
     /// prefix allowlist (i.e. its first word matches an entry in
     /// `bash_prefix_allowlist`).  Used by callers to skip the permission dialog.
+    ///
+    /// A command that destroys data is never covered, however the allowlist
+    /// reads. The prefix bounds the first word only, so approving `make` also
+    /// carried `make && rm -rf dist` through, and the approval said nothing
+    /// about deleting anything.
     pub fn bash_command_allowed_by_prefix(&self, command: &str) -> bool {
+        if mikmik_core::bash_classifier::destructive_command_in(command).is_some() {
+            return false;
+        }
         let first_word = command.split_whitespace().next().unwrap_or("");
         !first_word.is_empty() && self.bash_prefix_allowlist.contains(first_word)
     }
@@ -10290,6 +10298,36 @@ mod tests {
         assert!(app.bash_command_allowed_by_prefix("git push origin main"));
         // Other commands should NOT be allowed.
         assert!(!app.bash_command_allowed_by_prefix("rm -rf /tmp"));
+    }
+
+    /// The prefix bounds the first word, and nothing after it.
+    ///
+    /// Approving `make ` covered `make && rm -rf dist` in full, because the
+    /// check read the first word and stopped. The approval said nothing about
+    /// deleting anything, so a destructive command is never covered.
+    #[test]
+    fn a_prefix_allowlist_never_covers_a_deletion() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _home = HomeGuard::new();
+
+        let mut app = make_app();
+        app.bash_prefix_allowlist.insert("make".to_string());
+        app.bash_prefix_allowlist.insert("rm".to_string());
+
+        assert!(
+            app.bash_command_allowed_by_prefix("make build"),
+            "the prefix should still cover what it was approved for"
+        );
+        for command in [
+            "make && rm -rf dist",
+            "make; shred key.pem",
+            "rm build/out", // even when `rm` itself is the approved prefix
+        ] {
+            assert!(
+                !app.bash_command_allowed_by_prefix(command),
+                "{command} skipped the dialog on a prefix approval"
+            );
+        }
     }
 
     #[test]

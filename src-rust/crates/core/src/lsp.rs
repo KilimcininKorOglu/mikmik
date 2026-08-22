@@ -2789,6 +2789,13 @@ fn extract_locations(result: &serde_json::Value) -> Vec<String> {
 }
 
 /// Recursively collect symbol names from a DocumentSymbol or SymbolInformation node.
+/// Render one symbol and everything under it.
+///
+/// A server answers with one of two shapes. A `DocumentSymbol` nests its
+/// children and carries a `range`; a `SymbolInformation` is flat and carries a
+/// `location`. Both are read, and the line number comes from whichever one is
+/// present: a symbol list without line numbers makes the reader search the
+/// file for every entry.
 fn collect_symbol(sym: &serde_json::Value, depth: usize, out: &mut Vec<String>) {
     let indent = "  ".repeat(depth);
     let name = sym
@@ -2797,7 +2804,24 @@ fn collect_symbol(sym: &serde_json::Value, depth: usize, out: &mut Vec<String>) 
         .unwrap_or("<unnamed>");
     let kind = sym.get("kind").and_then(|k| k.as_u64()).unwrap_or(0);
     let kind_str = symbol_kind_name(kind);
-    out.push(format!("{}{} ({})", indent, name, kind_str));
+    let line = sym
+        .pointer("/selectionRange/start/line")
+        .or_else(|| sym.pointer("/range/start/line"))
+        .or_else(|| sym.pointer("/location/range/start/line"))
+        .and_then(|v| v.as_u64())
+        .map(|line| format!(":{}", line + 1))
+        .unwrap_or_default();
+    let deprecated = sym
+        .get("deprecated")
+        .and_then(|d| d.as_bool())
+        .unwrap_or(false)
+        || sym
+            .get("tags")
+            .and_then(|t| t.as_array())
+            .map(|tags| tags.iter().any(|tag| tag.as_u64() == Some(1)))
+            .unwrap_or(false);
+    let mark = if deprecated { " [deprecated]" } else { "" };
+    out.push(format!("{indent}{name} ({kind_str}){line}{mark}"));
 
     // DocumentSymbol may have nested children
     if let Some(children) = sym.get("children").and_then(|c| c.as_array()) {
@@ -3011,28 +3035,54 @@ impl LspManager {
         if diagnostics.is_empty() {
             return "No diagnostics.".to_string();
         }
-        diagnostics
-            .iter()
-            .map(|d| {
-                format!(
-                    "[{}] {}:{}:{} - {}{}{}",
-                    d.severity.as_str().to_uppercase(),
-                    d.file,
-                    d.line,
-                    d.column,
-                    d.message,
-                    d.source
-                        .as_deref()
-                        .map(|s| format!(" ({})", s))
-                        .unwrap_or_default(),
-                    d.code
-                        .as_deref()
-                        .map(|c| format!(" [{}]", c))
-                        .unwrap_or_default(),
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+
+        // One file: the path on every line is noise, because the reader
+        // already knows which file they asked about. Several files: the path
+        // is the only thing telling them apart, so each file gets a heading
+        // and the lines under it are positions.
+        let mut files: Vec<&str> = diagnostics.iter().map(|d| d.file.as_str()).collect();
+        files.sort_unstable();
+        files.dedup();
+
+        let describe = |d: &LspDiagnostic, with_file: bool| {
+            let where_ = if with_file {
+                format!("{}:{}:{}", d.file, d.line, d.column)
+            } else {
+                format!("{}:{}", d.line, d.column)
+            };
+            format!(
+                "[{}] {} - {}{}{}",
+                d.severity.as_str().to_uppercase(),
+                where_,
+                d.message,
+                d.source
+                    .as_deref()
+                    .map(|s| format!(" ({s})"))
+                    .unwrap_or_default(),
+                d.code
+                    .as_deref()
+                    .map(|c| format!(" [{c}]"))
+                    .unwrap_or_default(),
+            )
+        };
+
+        if files.len() == 1 {
+            let mut lines = vec![format!("{}:", files[0])];
+            lines.extend(diagnostics.iter().map(|d| describe(d, false)));
+            return lines.join("\n");
+        }
+
+        let mut lines = Vec::new();
+        for file in files {
+            lines.push(format!("{file}:"));
+            lines.extend(
+                diagnostics
+                    .iter()
+                    .filter(|d| d.file == file)
+                    .map(|d| describe(d, false)),
+            );
+        }
+        lines.join("\n")
     }
 }
 
@@ -3044,6 +3094,11 @@ impl LspManager {
 /// to the correct server based on extension mappings.
 /// How long a server that failed to start is left alone.
 pub const INIT_FAILURE_BACKOFF: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// How many times an empty reference list is asked for again.
+pub const REFERENCES_RETRY_COUNT: usize = 2;
+/// How long to wait between those attempts.
+pub const REFERENCES_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// One running server: its name and the workspace root it was started for.
 ///
@@ -3437,6 +3492,10 @@ impl LspManager {
     }
 
     /// Get references for a symbol in `file_path` at the given 1-based position.
+    ///
+    /// An answer holding nothing but the declaration that was asked about is
+    /// usually a server that has not finished indexing rather than a symbol
+    /// nothing uses, so it is asked again a couple of times.
     pub async fn references(
         &mut self,
         file_path: &str,
@@ -3445,8 +3504,20 @@ impl LspManager {
         character: u32,
     ) -> anyhow::Result<Vec<String>> {
         let uri = path_to_uri(file_path);
+        let here = format!("{file_path}:{line}:{character}");
         let client = self.navigation_client(file_path, root_dir).await?;
-        client.references(&uri, line, character).await
+
+        let mut answer = client.references(&uri, line, character).await?;
+        for _ in 0..REFERENCES_RETRY_COUNT {
+            let only_the_declaration = answer.len() == 1 && answer[0] == here;
+            if !(answer.is_empty() || only_the_declaration) {
+                break;
+            }
+            tokio::time::sleep(REFERENCES_RETRY_DELAY).await;
+            client.wait_for_project_loaded().await;
+            answer = client.references(&uri, line, character).await?;
+        }
+        Ok(answer)
     }
 
     /// List document symbols for `file_path`.
@@ -4260,15 +4331,36 @@ mod tests {
 
     #[test]
     fn test_format_diagnostics_multiple() {
+        // Two files: each gets a heading, and the lines under it carry the
+        // position only, because the path is already above them.
         let diags = vec![
             make_diagnostic("a.rs", 1, 1, DiagnosticSeverity::Error, "err1"),
             make_diagnostic("b.rs", 2, 3, DiagnosticSeverity::Warning, "warn1"),
         ];
         let result = LspManager::format_diagnostics(&diags);
         let lines: Vec<&str> = result.lines().collect();
-        assert_eq!(lines.len(), 2);
-        assert!(lines[0].contains("[ERROR]"));
-        assert!(lines[1].contains("[WARNING]"));
+        assert_eq!(
+            lines,
+            vec![
+                "a.rs:",
+                "[ERROR] 1:1 - err1",
+                "b.rs:",
+                "[WARNING] 2:3 - warn1",
+            ]
+        );
+    }
+
+    #[test]
+    fn one_file_is_named_once() {
+        // Repeating the path on every line is noise: the reader asked about
+        // that file.
+        let diags = vec![
+            make_diagnostic("a.rs", 1, 1, DiagnosticSeverity::Error, "err1"),
+            make_diagnostic("a.rs", 9, 2, DiagnosticSeverity::Warning, "warn1"),
+        ];
+        let result = LspManager::format_diagnostics(&diags);
+        assert_eq!(result.matches("a.rs").count(), 1, "result = {result}");
+        assert!(result.contains("[ERROR] 1:1 - err1"), "result = {result}");
     }
 
     #[test]

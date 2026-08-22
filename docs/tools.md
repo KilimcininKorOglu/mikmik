@@ -948,7 +948,16 @@ detected automatically; more can be declared in `settings.json` under
 **Naming a position.** `symbol` is the reliable way to point at a token:
 counting columns by hand is the commonest way a request lands on the wrong one
 and answers nothing. With neither `column` nor `symbol`, the first
-non-whitespace column of the line is used.
+non-whitespace column of the line is used, and `definition`, `references` and
+`rename` refuse rather than use it: their wrong answer is an empty list, which
+reads as "nothing found" and is acted on.
+
+`references` asks again, twice, when the only answer is the declaration it was
+given. That is usually a server that has not finished indexing rather than a
+symbol nothing uses.
+
+A symbol list carries the line of each entry, and a symbol the server marks as
+deprecated says so.
 
 **Rename.** `rename` applies the edits unless `apply` is `false`. A create,
 rename or delete of a whole file inside the server's answer is reported and not

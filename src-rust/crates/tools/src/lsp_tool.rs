@@ -189,6 +189,37 @@ fn resolve_column(
     lsp::resolve_symbol_column(file_path, line, symbol).map_err(|e| e.to_string())
 }
 
+/// The actions where guessing the column is worse than refusing.
+///
+/// Hover on the wrong token shows the wrong documentation, which the reader
+/// notices. These three answer with an empty list instead, which reads as "the
+/// symbol is unused" or "it has no definition", and that is a wrong answer the
+/// caller acts on.
+const ACTIONS_NEEDING_A_SYMBOL: &[&str] = &["definition", "references", "rename"];
+
+/// Refuse a position that was neither given nor named.
+fn require_a_position(
+    action: &str,
+    input: &Value,
+    column: Option<u32>,
+    symbol: Option<&str>,
+) -> Result<(), String> {
+    if !ACTIONS_NEEDING_A_SYMBOL.contains(&action) {
+        return Ok(());
+    }
+    if column.is_some() || symbol.is_some_and(|s| !s.is_empty()) {
+        return Ok(());
+    }
+    if input.get("line").is_none() {
+        return Ok(());
+    }
+    Err(format!(
+        "`{action}` with a `line` needs `symbol` (or `column`) to say which token on \
+         that line. Without one the first non-whitespace column is used, and the \
+         answer would be an empty list that reads as \"nothing found\"."
+    ))
+}
+
 #[async_trait]
 impl Tool for LspTool {
     // Gates itself: calls `ctx.check_permission_for_path` in `execute()` (#210).
@@ -307,6 +338,9 @@ impl Tool for LspTool {
             .and_then(|v| v.as_u64())
             .map(|c| c as u32);
         let symbol = input.get("symbol").and_then(|v| v.as_str());
+        if let Err(e) = require_a_position(&action, &input, column, symbol) {
+            return ToolResult::error(e);
+        }
         let query = input.get("query").and_then(|v| v.as_str()).unwrap_or("");
         let new_name = input.get("new_name").and_then(|v| v.as_str()).unwrap_or("");
         let apply = input.get("apply").and_then(|v| v.as_bool());
@@ -981,6 +1015,28 @@ mod tests {
                 "'{action}' is in the schema but is neither read-only nor a known write"
             );
         }
+    }
+
+    #[test]
+    fn a_line_without_a_symbol_is_refused_where_it_matters() {
+        // The answer would be an empty list, which reads as "the symbol is
+        // unused" rather than "the request pointed at the wrong column".
+        let with_line = serde_json::json!({ "line": 42 });
+        assert!(require_a_position("definition", &with_line, None, None).is_err());
+        assert!(require_a_position("references", &with_line, None, None).is_err());
+        assert!(require_a_position("rename", &with_line, None, None).is_err());
+
+        // Either one answers it.
+        assert!(require_a_position("definition", &with_line, Some(7), None).is_ok());
+        assert!(require_a_position("definition", &with_line, None, Some("parse")).is_ok());
+
+        // Hover shows the wrong documentation, which the reader notices, so it
+        // is not worth refusing.
+        assert!(require_a_position("hover", &with_line, None, None).is_ok());
+
+        // No line at all: the caller is asking about the file, not a position.
+        let no_line = serde_json::json!({});
+        assert!(require_a_position("definition", &no_line, None, None).is_ok());
     }
 
     #[test]

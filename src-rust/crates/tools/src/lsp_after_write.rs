@@ -50,6 +50,9 @@ pub async fn report_after_write(file_path: &str, ctx: &ToolContext) -> Option<St
         if ctx.config.effective_lsp_auto_detect() {
             manager.seed_detected(&ctx.working_dir);
         }
+        // The precedence order: the catalogue, then `lsp.json`, then the
+        // settings file, each overriding the one before it.
+        manager.apply_file_config(&ctx.working_dir);
         manager.seed_from_config(&ctx.config.lsp_servers);
         if manager.servers_for_file(file_path).is_empty() {
             // No server for this file type. Nothing to start, nothing to say.

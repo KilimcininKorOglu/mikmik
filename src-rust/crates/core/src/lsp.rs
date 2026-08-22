@@ -417,6 +417,180 @@ pub fn resolve_command(command: &str, cwd: &Path) -> Option<std::path::PathBuf> 
     which::which(command).ok()
 }
 
+/// The file names a language-server configuration may use, most preferred
+/// first.
+///
+/// Both spellings of each format, because a dot-file is the convention in some
+/// projects and a plain name in others, and a user who picks the wrong one
+/// gets silence rather than an error.
+const CONFIG_FILE_NAMES: &[&str] = &["lsp.json", ".lsp.json", "lsp.toml", ".lsp.toml"];
+
+/// A configuration file for language servers.
+///
+/// The shape is the same in JSON and TOML: a map of server name to the fields
+/// of [`LspServerConfig`], either at the top level or under `servers`.
+#[derive(Debug, Default, Deserialize)]
+struct LspConfigFile {
+    #[serde(default)]
+    servers: HashMap<String, serde_json::Value>,
+    /// Stop a server after this long without a request.
+    #[serde(default)]
+    idle_timeout_ms: Option<u64>,
+    /// Everything else at the top level, read as a server when `servers` is
+    /// absent. The flat form is what a one-server file usually looks like.
+    #[serde(flatten)]
+    flat: HashMap<String, serde_json::Value>,
+}
+
+/// What one configuration file contributes.
+#[derive(Debug, Default)]
+pub struct LspFileConfig {
+    /// Per-server overrides, by name. Each is a partial object: only the
+    /// fields the file names.
+    pub overrides: HashMap<String, serde_json::Value>,
+    pub idle_timeout_ms: Option<u64>,
+}
+
+/// Read one configuration file.
+///
+/// A file that cannot be read or parsed contributes nothing and says so in the
+/// log. Refusing to start over a stray comma in an optional file would be
+/// worse than running without it.
+fn read_lsp_config_file(path: &Path) -> Option<LspFileConfig> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let parsed: Result<LspConfigFile, String> =
+        if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+            toml::from_str(&text).map_err(|e| e.to_string())
+        } else {
+            serde_json::from_str(&text).map_err(|e| e.to_string())
+        };
+
+    match parsed {
+        Ok(file) => {
+            let mut overrides = file.servers;
+            if overrides.is_empty() {
+                // The flat form. `idle_timeout_ms` is captured by its own
+                // field, so whatever is left is a server.
+                overrides = file
+                    .flat
+                    .into_iter()
+                    .filter(|(_, value)| value.is_object())
+                    .collect();
+            }
+            Some(LspFileConfig {
+                overrides,
+                idle_timeout_ms: file.idle_timeout_ms,
+            })
+        }
+        Err(e) => {
+            tracing::warn!("ignoring {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// Where a language-server configuration file may live, least preferred first.
+///
+/// The order matches the settings files: the machine's own configuration
+/// first, then the project's, so a repository can adjust what the user set
+/// without replacing it.
+pub fn lsp_config_paths(cwd: &Path) -> Vec<std::path::PathBuf> {
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home);
+    }
+    roots.push(crate::mikmik_home());
+    roots.push(cwd.join(".mikmik"));
+    roots.push(cwd.to_path_buf());
+
+    roots
+        .into_iter()
+        .flat_map(|root| CONFIG_FILE_NAMES.iter().map(move |name| root.join(name)))
+        .collect()
+}
+
+/// Read every configuration file that applies to `cwd`, in precedence order.
+///
+/// Merging is per field, not per server: a file that sets one argument for
+/// `rust-analyzer` keeps everything else the catalogue and the lower-precedence
+/// files said. That is only possible on the JSON level, before the values
+/// become typed, which is why the overrides are carried as raw objects.
+pub fn load_lsp_config_files(cwd: &Path) -> LspFileConfig {
+    let mut merged = LspFileConfig::default();
+    for path in lsp_config_paths(cwd) {
+        let Some(file) = read_lsp_config_file(&path) else {
+            continue;
+        };
+        tracing::debug!("read language server config {}", path.display());
+        if let Some(idle) = file.idle_timeout_ms {
+            merged.idle_timeout_ms = Some(idle);
+        }
+        for (name, value) in file.overrides {
+            match merged.overrides.get_mut(&name) {
+                Some(existing) => merge_json_objects(existing, value),
+                None => {
+                    merged.overrides.insert(name, value);
+                }
+            }
+        }
+    }
+    merged
+}
+
+/// Copy the fields of `patch` over `base`, one level deep.
+///
+/// Shallow on purpose: `settings` and `initialization_options` are whole
+/// documents a server reads as a unit, and merging them field by field would
+/// leave a server holding half of one configuration and half of another.
+fn merge_json_objects(base: &mut serde_json::Value, patch: serde_json::Value) {
+    let (Some(base), Some(patch)) = (base.as_object_mut(), patch.as_object()) else {
+        *base = patch;
+        return;
+    };
+    for (key, value) in patch {
+        base.insert(key.clone(), value.clone());
+    }
+}
+
+/// Apply the overrides from the configuration files to a server list.
+///
+/// A name that matches an existing server patches it; a name that does not is
+/// a new server, which needs enough fields to be usable and is otherwise
+/// reported and dropped.
+pub fn apply_config_overrides(
+    servers: &mut Vec<LspServerConfig>,
+    overrides: &HashMap<String, serde_json::Value>,
+) {
+    for (name, patch) in overrides {
+        match servers.iter_mut().find(|s| s.name == *name) {
+            Some(existing) => {
+                let Ok(mut value) = serde_json::to_value(&*existing) else {
+                    continue;
+                };
+                merge_json_objects(&mut value, patch.clone());
+                match serde_json::from_value::<LspServerConfig>(value) {
+                    Ok(updated) => *existing = updated,
+                    Err(e) => tracing::warn!("ignoring the override for '{name}': {e}"),
+                }
+            }
+            None => {
+                let mut value = patch.clone();
+                if let Some(object) = value.as_object_mut() {
+                    object
+                        .entry("name")
+                        .or_insert_with(|| serde_json::Value::String(name.clone()));
+                }
+                match serde_json::from_value::<LspServerConfig>(value) {
+                    Ok(server) => servers.push(server),
+                    Err(e) => tracing::warn!(
+                        "ignoring '{name}': a new server needs a command and file patterns ({e})"
+                    ),
+                }
+            }
+        }
+    }
+}
+
 /// The server definitions that ship with the binary.
 const BUNDLED_SERVERS: &str = include_str!("../assets/lsp-servers.json");
 
@@ -2725,6 +2899,10 @@ pub struct LspManager {
     init_failures: HashMap<ClientKey, std::time::Instant>,
     /// Directories already scanned for catalogue servers.
     detected_roots: std::collections::HashSet<std::path::PathBuf>,
+    /// Directories whose `lsp.json` / `lsp.toml` have been read.
+    configured_roots: std::collections::HashSet<std::path::PathBuf>,
+    /// The idle timeout a configuration file asked for.
+    file_idle_timeout: Option<std::time::Duration>,
     /// Shut a server down after this long without a request. `None` keeps
     /// every server until the session ends.
     idle_timeout: Option<std::time::Duration>,
@@ -2738,6 +2916,8 @@ impl LspManager {
             last_used: HashMap::new(),
             init_failures: HashMap::new(),
             detected_roots: std::collections::HashSet::new(),
+            configured_roots: std::collections::HashSet::new(),
+            file_idle_timeout: None,
             idle_timeout: None,
         }
     }
@@ -3018,12 +3198,34 @@ impl LspManager {
         }
     }
 
+    /// Read `lsp.json` / `lsp.toml` for `cwd` and apply what they say.
+    ///
+    /// Runs once per directory. Returns the idle timeout a file asked for, so
+    /// the caller can apply it alongside the one from the settings file.
+    ///
+    /// Call this **after** [`Self::seed_detected`] and **before**
+    /// [`Self::seed_from_config`]: a file overrides the catalogue, and
+    /// `settings.json` overrides the file.
+    pub fn apply_file_config(&mut self, cwd: &Path) -> Option<std::time::Duration> {
+        if !self.configured_roots.insert(cwd.to_path_buf()) {
+            return self.file_idle_timeout;
+        }
+        let file_config = load_lsp_config_files(cwd);
+        apply_config_overrides(&mut self.configs, &file_config.overrides);
+        self.file_idle_timeout = file_config
+            .idle_timeout_ms
+            .filter(|ms| *ms > 0)
+            .map(std::time::Duration::from_millis);
+        self.file_idle_timeout
+    }
+
     /// Forget which directories were scanned, so the next call re-detects.
     ///
     /// A project gains a marker or the user installs a server mid-session, and
     /// nothing else would notice.
     pub fn forget_detection(&mut self) {
         self.detected_roots.clear();
+        self.configured_roots.clear();
     }
 
     /// The server that answers navigation for `file_path`, started and ready.
@@ -4745,6 +4947,132 @@ mod tests {
         assert!(
             waited >= std::time::Duration::from_millis(80),
             "returned after {waited:?}, before the server finished indexing"
+        );
+    }
+
+    // ---- Configuration files ----------------------------------------------
+
+    #[test]
+    fn a_config_file_patches_one_field_and_keeps_the_rest() {
+        // Overriding one argument must not mean copying the whole entry.
+        let mut servers = vec![make_config("rust-analyzer")];
+        servers[0].args = vec!["--old".to_string()];
+        servers[0].root_markers = vec!["Cargo.toml".to_string()];
+
+        let mut overrides = HashMap::new();
+        overrides.insert("rust-analyzer".to_string(), json!({ "args": ["--new"] }));
+        apply_config_overrides(&mut servers, &overrides);
+
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].args, vec!["--new".to_string()]);
+        assert_eq!(servers[0].root_markers, vec!["Cargo.toml".to_string()]);
+        assert_eq!(servers[0].command, "rust-analyzer");
+    }
+
+    #[test]
+    fn a_config_file_can_switch_a_server_off() {
+        let mut servers = vec![make_config("eslint")];
+        let mut overrides = HashMap::new();
+        overrides.insert("eslint".to_string(), json!({ "disabled": true }));
+        apply_config_overrides(&mut servers, &overrides);
+        assert!(servers[0].disabled);
+    }
+
+    #[test]
+    fn a_config_file_can_add_a_server() {
+        let mut servers = vec![];
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "my-ls".to_string(),
+            json!({
+                "command": "my-ls",
+                "args": ["--stdio"],
+                "file_patterns": ["*.xyz"],
+                "root_markers": [".xyz-project"]
+            }),
+        );
+        apply_config_overrides(&mut servers, &overrides);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "my-ls");
+        assert!(servers[0].handles_file("a.xyz"));
+    }
+
+    #[test]
+    fn an_incomplete_new_server_is_dropped_rather_than_half_registered() {
+        let mut servers = vec![];
+        let mut overrides = HashMap::new();
+        overrides.insert("broken".to_string(), json!({ "args": ["--stdio"] }));
+        apply_config_overrides(&mut servers, &overrides);
+        assert!(servers.is_empty());
+    }
+
+    #[test]
+    fn both_file_formats_are_read() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("lsp.json"),
+            r#"{ "servers": { "rust-analyzer": { "args": ["--from-json"] } } }"#,
+        )
+        .expect("write");
+        let json_config = read_lsp_config_file(&dir.path().join("lsp.json")).expect("parsed");
+        assert_eq!(
+            json_config.overrides["rust-analyzer"]["args"][0],
+            "--from-json"
+        );
+
+        std::fs::write(
+            dir.path().join("lsp.toml"),
+            "[servers.rust-analyzer]\nargs = [\"--from-toml\"]\n",
+        )
+        .expect("write");
+        let toml_config = read_lsp_config_file(&dir.path().join("lsp.toml")).expect("parsed");
+        assert_eq!(
+            toml_config.overrides["rust-analyzer"]["args"][0],
+            "--from-toml"
+        );
+    }
+
+    #[test]
+    fn the_flat_form_is_read_as_servers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("lsp.json");
+        std::fs::write(
+            &path,
+            r#"{ "idle_timeout_ms": 300000, "gopls": { "args": ["serve", "-rpc.trace"] } }"#,
+        )
+        .expect("write");
+
+        let config = read_lsp_config_file(&path).expect("parsed");
+        assert_eq!(config.idle_timeout_ms, Some(300_000));
+        assert_eq!(config.overrides.len(), 1, "{:?}", config.overrides);
+        assert!(config.overrides.contains_key("gopls"));
+    }
+
+    #[test]
+    fn a_broken_config_file_is_ignored_rather_than_fatal() {
+        // Refusing to start over a stray comma in an optional file would be
+        // worse than running without it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("lsp.json");
+        std::fs::write(&path, "{ not json").expect("write");
+        assert!(read_lsp_config_file(&path).is_none());
+    }
+
+    #[test]
+    fn the_project_file_wins_over_the_home_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = lsp_config_paths(dir.path());
+        let project_index = paths
+            .iter()
+            .position(|p| p == &dir.path().join("lsp.json"))
+            .expect("the project root is searched");
+        let dot_mikmik_index = paths
+            .iter()
+            .position(|p| p == &dir.path().join(".mikmik").join("lsp.json"))
+            .expect(".mikmik is searched");
+        assert!(
+            project_index > dot_mikmik_index,
+            "the project root must be read last so it wins"
         );
     }
 

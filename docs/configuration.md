@@ -534,6 +534,51 @@ configuration.
 An `lsp_servers` entry whose `name` matches a catalogue server replaces it, so
 overriding one binary or one argument does not mean copying the whole entry.
 
+**A separate configuration file.** Language servers can also be configured
+outside `settings.json`, which keeps a long server list out of the settings
+file and lets a repository ship one. Four names are read, in this order of
+preference within a directory: `lsp.json`, `.lsp.json`, `lsp.toml`,
+`.lsp.toml`. Four directories are searched, lowest precedence first:
+
+| Precedence | Directory                                  |
+|-----------:|--------------------------------------------|
+| Lowest     | The home directory                         |
+|            | The configuration directory (`$CLAURST_HOME` or `~/.config/mikmik`) |
+|            | `<project>/.mikmik/`                       |
+| Highest    | The project root                           |
+
+The shape is a map of server name to the fields in
+[tools.md#lsp](tools.md#lsp), either under a `servers` key or at the top level:
+
+```json
+{
+  "idle_timeout_ms": 300000,
+  "servers": {
+    "rust-analyzer": { "args": ["--log-file", "/tmp/ra.log"] },
+    "eslint": { "disabled": true },
+    "my-ls": {
+      "command": "my-ls",
+      "args": ["--stdio"],
+      "file_patterns": ["*.xyz"],
+      "root_markers": [".xyz-project"]
+    }
+  }
+}
+```
+
+Merging is per field: the entry above changes rust-analyzer's arguments and
+keeps its root markers, settings and everything else. `settings` and
+`initialization_options` are replaced as a whole rather than merged key by key,
+because a server reads each as one document.
+
+A name that matches no known server is a new server, and needs `command`,
+`file_patterns` and `root_markers`. An entry that lacks them is reported in the
+log and dropped. A file that cannot be parsed is skipped the same way: refusing
+to start over a stray comma in an optional file would be worse than running
+without it.
+
+`settings.json` wins over these files, and these files win over the catalogue.
+
 `lsp_auto_detect` is taken from the user's settings alone. A project's
 settings file cannot switch it on, because detection starts a process and the
 markers that trigger it are files the repository itself carries.

@@ -278,11 +278,19 @@ impl Tool for LspTool {
             if ctx.config.effective_lsp_auto_detect() {
                 manager.seed_detected(&ctx.working_dir);
             }
+            // The precedence order: the catalogue, then `lsp.json`, then the
+            // settings file, each overriding the one before it.
+            manager.apply_file_config(&ctx.working_dir);
             manager.seed_from_config(&ctx.config.lsp_servers);
             // Read on every call rather than once, so a change to the setting
             // applies without restarting the session. The sweep runs here
-            // because nothing else wakes up to run it.
-            manager.set_idle_timeout(ctx.config.effective_lsp_idle_timeout());
+            // because nothing else wakes up to run it. The settings file wins
+            // over `lsp.json`, as it does for everything else.
+            let idle = ctx
+                .config
+                .effective_lsp_idle_timeout()
+                .or_else(|| manager.apply_file_config(&ctx.working_dir));
+            manager.set_idle_timeout(idle);
             manager.sweep_idle().await;
         }
 

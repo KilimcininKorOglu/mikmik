@@ -163,14 +163,64 @@ mod tests {
     use std::time::Duration;
     use tokio::process::Command;
 
-    /// Whether any process still has `marker` on its command line.
+    /// How long a spawned process is given to appear or to go away.
+    ///
+    /// Generous because the whole workspace's tests share one machine: under
+    /// that load `sh` can take well over a second to fork its child.
+    const DEADLINE: Duration = Duration::from_secs(10);
+    const POLL: Duration = Duration::from_millis(50);
+
+    /// Whether the marked `sleep` is still running.
+    ///
+    /// Matches the whole `sleep <marker>` command line rather than the marker
+    /// alone, so an unrelated process that merely carries those digits (a test
+    /// binary's path hash, for instance) is not mistaken for the child.
     fn still_running(marker: &str) -> bool {
         std::process::Command::new("pgrep")
             .arg("-f")
-            .arg(marker)
+            .arg(format!("sleep {marker}"))
             .output()
             .map(|out| !out.stdout.is_empty())
             .unwrap_or(false)
+    }
+
+    /// Wait until the marked process is running, or give up at the deadline.
+    ///
+    /// Polling rather than one fixed sleep: a fixed wait is a race that passes
+    /// on an idle machine and fails under the load of a full workspace run,
+    /// which is exactly when it is least informative.
+    async fn wait_until_running(marker: &str) {
+        wait_for(marker, true).await;
+    }
+
+    /// Wait until the marked process has gone, or give up at the deadline.
+    async fn wait_until_gone(marker: &str) {
+        wait_for(marker, false).await;
+    }
+
+    async fn wait_for(marker: &str, want_running: bool) {
+        let start = std::time::Instant::now();
+        while start.elapsed() < DEADLINE {
+            if still_running(marker) == want_running {
+                return;
+            }
+            tokio::time::sleep(POLL).await;
+        }
+    }
+
+    /// A sleep duration no other run and no sibling test can be using.
+    ///
+    /// A fixed marker read a leftover from an earlier run as this run's
+    /// process, and `31337x` markers shared a prefix with the ones in
+    /// `mikmik-tools`, so one crate's `pgrep` matched the other's children.
+    /// `pty_bash.rs` already numbers its markers this way for the same reason.
+    fn unique_marker() -> String {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        // Fractional seconds keep the number one `sleep` accepts.
+        format!("999336.{}", nanos % 1_000_000_000)
     }
 
     /// Spawn `sh -c` with a background child, so the wrapper and its child are
@@ -186,23 +236,19 @@ mod tests {
         cmd.spawn().expect("spawn")
     }
 
-    async fn settle() {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-    }
-
     #[tokio::test]
     async fn a_dropped_guard_takes_the_child_of_the_wrapper_too() {
         // The whole defect in one case: killing the wrapper alone leaves the
         // process the user actually started running.
-        let marker = "313373";
+        let marker = &unique_marker();
         let child = spawn_wrapper_with_child(marker);
-        settle().await;
+        wait_until_running(marker).await;
         assert!(still_running(marker), "the child never started");
 
         {
             let _guard = ProcessTreeKillGuard::new(child.id());
         }
-        settle().await;
+        wait_until_gone(marker).await;
 
         assert!(
             !still_running(marker),
@@ -212,14 +258,14 @@ mod tests {
 
     #[tokio::test]
     async fn killing_now_is_the_same_kill() {
-        let marker = "313374";
+        let marker = &unique_marker();
         let child = spawn_wrapper_with_child(marker);
-        settle().await;
-        assert!(still_running(marker));
+        wait_until_running(marker).await;
+        assert!(still_running(marker), "the child never started");
 
         let mut guard = ProcessTreeKillGuard::new(child.id());
         guard.kill_now();
-        settle().await;
+        wait_until_gone(marker).await;
 
         assert!(!still_running(marker));
     }
@@ -228,31 +274,35 @@ mod tests {
     async fn a_disarmed_guard_kills_nothing() {
         // A guard that fires after the command completed would cut short a
         // process the caller meant to keep.
-        let marker = "313375";
+        let marker = &unique_marker();
         let child = spawn_wrapper_with_child(marker);
-        settle().await;
+        wait_until_running(marker).await;
+        assert!(still_running(marker), "the child never started");
 
         {
             let mut guard = ProcessTreeKillGuard::new(child.id());
             guard.disarm();
         }
-        settle().await;
+        // A disarmed guard must leave the tree alone, so there is nothing to
+        // wait for. Give it the same window a kill would have had, and then
+        // check the process is still there.
+        tokio::time::sleep(Duration::from_millis(300)).await;
 
         assert!(still_running(marker), "a disarmed guard killed the tree");
         kill_tree(child.id().expect("pid"));
-        settle().await;
+        wait_until_gone(marker).await;
         assert!(!still_running(marker), "cleanup failed");
     }
 
     #[tokio::test]
     async fn terminating_a_group_reaches_the_child_as_well() {
-        let marker = "313376";
+        let marker = &unique_marker();
         let child = spawn_wrapper_with_child(marker);
-        settle().await;
-        assert!(still_running(marker));
+        wait_until_running(marker).await;
+        assert!(still_running(marker), "the child never started");
 
         terminate_tree(child.id().expect("pid"));
-        settle().await;
+        wait_until_gone(marker).await;
 
         assert!(!still_running(marker));
     }
@@ -266,7 +316,6 @@ mod tests {
         let mut child = cmd.spawn().expect("spawn");
         let pid = child.id().expect("pid");
         let _ = child.wait().await;
-        settle().await;
 
         kill_tree(pid);
         terminate_tree(pid);

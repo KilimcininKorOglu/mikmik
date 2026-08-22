@@ -1049,6 +1049,29 @@ the entry is switched off.
 | `swiftlint`                   | Swift (linter)                 | `swiftlint`                       |
 | `tlaplus`                     | TLA+                           | `tlapm_lsp`                       |
 
+**Protocol behaviour.** Points worth knowing when a server misbehaves:
+
+- The server's `initialize` answer is kept, so a request the server does not
+  advertise is not sent at all.
+- A request that reaches its timeout is cancelled with `$/cancelRequest`, so the
+  server stops working on an answer nobody will read.
+- Requests the server sends are answered: its configuration
+  (`workspace/configuration`), the workspace folders, capability registration,
+  progress creation, and message or document requests. Anything else is refused
+  with "method not found" rather than ignored, because an unanswered request can
+  stall a server.
+- A server-initiated `workspace/applyEdit` is applied to the files on disk. A
+  create, rename or delete inside one is reported and not performed.
+- `settings` is pushed after the handshake with
+  `workspace/didChangeConfiguration`.
+- Before a navigation request, the tool waits while the server reports work in
+  progress, because a server that is still indexing answers "nothing found"
+  rather than "not ready". The wait is bounded by `workspace_ready_timings`.
+- The handshake has its own budget, `warmup_timeout_ms`, separate from the
+  per-request `request_timeout_ms`.
+- When a server exits, every request still waiting fails with the reason and the
+  last lines the server wrote to its standard error.
+
 The tool resolves relative paths against the current working directory.
 
 ---

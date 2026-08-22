@@ -23,7 +23,7 @@ use std::sync::{
     Arc,
 };
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, Command};
 use tokio::sync::{oneshot, Mutex};
 
 // ---------------------------------------------------------------------------
@@ -536,7 +536,19 @@ impl DiagnosticSeverity {
 // JSON-RPC framing helpers
 // ---------------------------------------------------------------------------
 
-async fn send_message(writer: &mut BufWriter<ChildStdin>, body: &str) -> anyhow::Result<()> {
+/// The server's stdin, behind a trait object.
+///
+/// Boxed rather than typed as `ChildStdin` so a test can drive the client over
+/// an in-memory pipe. Without it the protocol could only be exercised by
+/// spawning a real language server, which no test can rely on being installed.
+type BoxedWriter = BufWriter<Box<dyn tokio::io::AsyncWrite + Send + Unpin>>;
+/// The server's stdout, behind a trait object, for the same reason.
+type BoxedReader = BufReader<Box<dyn tokio::io::AsyncRead + Send + Unpin>>;
+
+async fn send_message<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    body: &str,
+) -> anyhow::Result<()> {
     let header = format!("Content-Length: {}\r\n\r\n", body.len());
     writer.write_all(header.as_bytes()).await?;
     writer.write_all(body.as_bytes()).await?;
@@ -544,7 +556,9 @@ async fn send_message(writer: &mut BufWriter<ChildStdin>, body: &str) -> anyhow:
     Ok(())
 }
 
-async fn read_message(reader: &mut BufReader<ChildStdout>) -> anyhow::Result<serde_json::Value> {
+async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+) -> anyhow::Result<serde_json::Value> {
     let mut content_length: usize = 0;
     loop {
         let mut line = String::new();
@@ -572,7 +586,113 @@ async fn read_message(reader: &mut BufReader<ChildStdout>) -> anyhow::Result<ser
 // LspClient
 // ---------------------------------------------------------------------------
 
-type PendingMap = Arc<DashMap<u64, oneshot::Sender<serde_json::Value>>>;
+/// How many stderr lines to keep, so a server that dies can say why.
+const STDERR_TAIL_LINES: usize = 20;
+
+/// State the caller and the reader task both reach.
+///
+/// The reader has to answer the server, not only listen to it: a server that
+/// asks for its configuration and gets silence waits, and some refuse to
+/// finish starting. So the writer lives here rather than on the client alone.
+struct ClientShared {
+    server_name: String,
+    config: LspServerConfig,
+    /// `None` once the client has shut down and the pipe is closed.
+    writer: Mutex<Option<BoxedWriter>>,
+    pending: DashMap<u64, oneshot::Sender<serde_json::Value>>,
+    diagnostics: DashMap<String, Vec<LspDiagnostic>>,
+    /// Bumped every time the server publishes for a URI, so a caller can tell
+    /// a fresh answer from the one it already had.
+    diagnostic_versions: DashMap<String, u64>,
+    /// What the server said it supports, from the `initialize` response.
+    server_capabilities: parking_lot::RwLock<serde_json::Value>,
+    /// Work-done progress tokens the server has open.
+    active_progress: DashMap<String, ()>,
+    /// When the last progress notification arrived.
+    last_progress: parking_lot::Mutex<Option<std::time::Instant>>,
+    /// When the handshake finished.
+    initialized_at: parking_lot::Mutex<Option<std::time::Instant>>,
+    /// The workspace the server was started for.
+    root_uri: parking_lot::RwLock<String>,
+    /// The last lines the server wrote to stderr.
+    stderr_tail: parking_lot::Mutex<std::collections::VecDeque<String>>,
+    /// Open documents and the version last sent for each.
+    open_versions: DashMap<String, i64>,
+}
+
+impl ClientShared {
+    /// Send one framed message, or fail if the pipe is closed.
+    async fn send(&self, body: &str) -> anyhow::Result<()> {
+        let mut guard = self.writer.lock().await;
+        let writer = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("LSP client already shut down"))?;
+        send_message(writer, body).await
+    }
+
+    async fn notify(&self, method: &str, params: serde_json::Value) -> anyhow::Result<()> {
+        let body = serde_json::to_string(&json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        }))?;
+        self.send(&body).await
+    }
+
+    /// Answer a request the server sent us.
+    async fn respond(&self, id: &serde_json::Value, result: serde_json::Value) {
+        let body = match serde_json::to_string(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        })) {
+            Ok(body) => body,
+            Err(e) => {
+                tracing::warn!("could not encode response to {}: {e}", self.server_name);
+                return;
+            }
+        };
+        if let Err(e) = self.send(&body).await {
+            tracing::debug!("could not answer {}: {e}", self.server_name);
+        }
+    }
+
+    /// Tell the server we do not implement what it asked for.
+    ///
+    /// The specification requires an answer either way, and a server left
+    /// waiting on an unanswered id can stall.
+    async fn respond_method_not_found(&self, id: &serde_json::Value, method: &str) {
+        let body = match serde_json::to_string(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": -32601, "message": format!("{method} is not implemented") },
+        })) {
+            Ok(body) => body,
+            Err(_) => return,
+        };
+        let _ = self.send(&body).await;
+    }
+
+    /// Fail every request still waiting, naming what happened.
+    ///
+    /// Dropping the senders instead would surface as "channel closed", which
+    /// says nothing about a server that died on a missing shared library.
+    fn fail_pending(&self, reason: &str) {
+        let ids: Vec<u64> = self.pending.iter().map(|e| *e.key()).collect();
+        for id in ids {
+            if let Some((_, tx)) = self.pending.remove(&id) {
+                let _ = tx.send(json!({
+                    "error": { "code": -32000, "message": reason },
+                }));
+            }
+        }
+    }
+
+    fn stderr_tail_text(&self) -> String {
+        let tail = self.stderr_tail.lock();
+        tail.iter().cloned().collect::<Vec<_>>().join("\n")
+    }
+}
 
 /// A running LSP client connected to a single server process.
 pub struct LspClient {
@@ -581,21 +701,33 @@ pub struct LspClient {
     /// The child process handle; `None` after shutdown.
     process: Option<Child>,
     request_id: Arc<AtomicU64>,
-    pending: PendingMap,
-    /// Diagnostics indexed by URI.
-    pub diagnostics: Arc<DashMap<String, Vec<LspDiagnostic>>>,
     is_initialized: bool,
-    /// Shared writer — wrapped in a Mutex so `start_receiver_task` and the
-    /// public `send_*` methods can both hold it.
-    writer: Option<Arc<Mutex<BufWriter<ChildStdin>>>>,
+    shared: Arc<ClientShared>,
 }
 
 impl LspClient {
     /// Spawn the server process and return a connected client.  The I/O pump
     /// task is started in the background.
     pub async fn start(config: LspServerConfig) -> anyhow::Result<Self> {
-        let mut cmd = Command::new(&config.command);
+        Self::start_in(config, &std::env::current_dir()?).await
+    }
+
+    /// Spawn the server for a specific working directory.
+    ///
+    /// The directory decides both where the server runs and which copy of the
+    /// binary is used, because a project's own bin directory comes first.
+    pub async fn start_in(config: LspServerConfig, cwd: &Path) -> anyhow::Result<Self> {
+        let program = resolve_command(&config.command, cwd).ok_or_else(|| {
+            anyhow::anyhow!(
+                "language server '{}' is not installed ({} not found)",
+                config.name,
+                config.command
+            )
+        })?;
+
+        let mut cmd = Command::new(&program);
         cmd.args(&config.args)
+            .current_dir(cwd)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -628,56 +760,137 @@ impl LspClient {
             .take()
             .ok_or_else(|| anyhow::anyhow!("LSP server stdout not available"))?;
 
-        let pending: PendingMap = Arc::new(DashMap::new());
-        let diagnostics: Arc<DashMap<String, Vec<LspDiagnostic>>> = Arc::new(DashMap::new());
+        let mut client = Self::connect(config, Box::new(stdout), Box::new(stdin));
 
-        let writer = Arc::new(Mutex::new(BufWriter::new(stdin)));
-        let pending_clone = pending.clone();
-        let diagnostics_clone = diagnostics.clone();
-        let server_name = config.name.clone();
-
-        // Consume stderr in the background so the OS pipe buffer never fills up
+        // Consume stderr in the background so the OS pipe buffer never fills
+        // up, and keep the last lines: they are usually the only explanation a
+        // server that dies during startup ever gives.
         if let Some(stderr) = child.stderr.take() {
-            let name = server_name.clone();
+            let shared = client.shared.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    tracing::debug!("[LSP SERVER {}] {}", name, line);
+                    tracing::debug!("[LSP SERVER {}] {}", shared.server_name, line);
+                    let mut tail = shared.stderr_tail.lock();
+                    if tail.len() == STDERR_TAIL_LINES {
+                        tail.pop_front();
+                    }
+                    tail.push_back(line);
                 }
             });
         }
 
-        // I/O pump: reads messages from stdout and resolves pending requests
-        // or stores incoming diagnostics.
-        tokio::spawn(async move {
-            let mut reader = BufReader::new(stdout);
-            loop {
-                match read_message(&mut reader).await {
-                    Ok(msg) => {
-                        dispatch_incoming(msg, &pending_clone, &diagnostics_clone, &server_name);
-                    }
-                    Err(e) => {
-                        tracing::debug!("LSP server {} reader exited: {}", server_name, e);
-                        break;
-                    }
-                }
-            }
+        client.process = Some(child);
+        Ok(client)
+    }
+
+    /// Build a client over an already-connected pair of streams.
+    ///
+    /// The process-spawning path uses it, and so does any caller that already
+    /// has a transport, a test included.
+    pub fn connect(
+        config: LspServerConfig,
+        reader: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
+        writer: Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
+    ) -> Self {
+        let server_name = config.name.clone();
+        let shared = Arc::new(ClientShared {
+            server_name: server_name.clone(),
+            config: config.clone(),
+            writer: Mutex::new(Some(BufWriter::new(writer))),
+            pending: DashMap::new(),
+            diagnostics: DashMap::new(),
+            diagnostic_versions: DashMap::new(),
+            server_capabilities: parking_lot::RwLock::new(serde_json::Value::Null),
+            active_progress: DashMap::new(),
+            last_progress: parking_lot::Mutex::new(None),
+            initialized_at: parking_lot::Mutex::new(None),
+            root_uri: parking_lot::RwLock::new(String::new()),
+            stderr_tail: parking_lot::Mutex::new(std::collections::VecDeque::new()),
+            open_versions: DashMap::new(),
         });
 
-        Ok(Self {
-            server_name: config.name.clone(),
+        // I/O pump: reads messages from the server, resolves pending requests,
+        // stores diagnostics, and answers what the server asks.
+        {
+            let shared = shared.clone();
+            tokio::spawn(async move {
+                let mut reader: BoxedReader = BufReader::new(reader);
+                let reason = loop {
+                    match read_message(&mut reader).await {
+                        Ok(msg) => dispatch_incoming(msg, &shared).await,
+                        Err(e) => break e.to_string(),
+                    }
+                };
+                let tail = shared.stderr_tail_text();
+                let detail = if tail.is_empty() {
+                    reason.clone()
+                } else {
+                    format!("{reason}; last output:\n{tail}")
+                };
+                tracing::debug!("LSP server {} reader exited: {detail}", shared.server_name);
+                shared.fail_pending(&format!(
+                    "language server '{}' stopped: {detail}",
+                    shared.server_name
+                ));
+            });
+        }
+
+        Self {
+            server_name,
             server_config: config,
-            process: Some(child),
+            process: None,
             request_id: Arc::new(AtomicU64::new(1)),
-            pending,
-            diagnostics,
             is_initialized: false,
-            writer: Some(writer),
-        })
+            shared,
+        }
     }
 
     fn next_id(&self) -> u64 {
         self.request_id.fetch_add(1, Ordering::SeqCst)
+    }
+
+    /// Diagnostics indexed by URI.
+    pub fn diagnostics(&self) -> &DashMap<String, Vec<LspDiagnostic>> {
+        &self.shared.diagnostics
+    }
+
+    /// How many times the server has published diagnostics for `uri`.
+    ///
+    /// A caller captures this before an edit and waits for it to change, which
+    /// is the only way to tell a fresh answer from the previous one.
+    pub fn diagnostic_version(&self, uri: &str) -> u64 {
+        self.shared
+            .diagnostic_versions
+            .get(uri)
+            .map(|v| *v)
+            .unwrap_or(0)
+    }
+
+    /// What the server said it supports.
+    pub fn server_capabilities(&self) -> serde_json::Value {
+        self.shared.server_capabilities.read().clone()
+    }
+
+    /// Whether the server advertises support for `capability`.
+    ///
+    /// A dotted path walks nested objects, e.g. `"renameProvider"` or
+    /// `"workspace.fileOperations.willRename"`. A server that does not
+    /// advertise a request usually answers "method not found", and asking
+    /// anyway turns a clean "not supported" into an error.
+    pub fn supports(&self, capability: &str) -> bool {
+        let caps = self.shared.server_capabilities.read();
+        let mut node = &*caps;
+        for part in capability.split('.') {
+            match node.get(part) {
+                Some(next) => node = next,
+                None => return false,
+            }
+        }
+        !matches!(
+            node,
+            serde_json::Value::Null | serde_json::Value::Bool(false)
+        )
     }
 
     /// Send a JSON-RPC request and wait for the matching response.
@@ -686,49 +899,73 @@ impl LspClient {
         method: &str,
         params: serde_json::Value,
     ) -> anyhow::Result<serde_json::Value> {
+        self.send_request_with_timeout(method, params, self.server_config.request_timeout())
+            .await
+    }
+
+    async fn send_request_with_timeout(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
         let id = self.next_id();
-        let msg = json!({
+        let body = serde_json::to_string(&json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": method,
             "params": params,
-        });
-        let body = serde_json::to_string(&msg)?;
+        }))?;
 
         let (tx, rx) = oneshot::channel();
-        self.pending.insert(id, tx);
-
-        {
-            let writer = self
-                .writer
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("LSP client already shut down"))?;
-            let mut w = writer.lock().await;
-            send_message(&mut w, &body).await?;
+        self.shared.pending.insert(id, tx);
+        if let Err(e) = self.shared.send(&body).await {
+            self.shared.pending.remove(&id);
+            return Err(e);
         }
 
-        let response = tokio::time::timeout(std::time::Duration::from_secs(30), rx)
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "LSP request '{}' timed out (server: {})",
+        let response = match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(_)) => {
+                return Err(anyhow::anyhow!(
+                    "LSP request '{}' was dropped (server: {})",
                     method,
                     self.server_name
-                )
-            })?
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "LSP request '{}' channel closed (server: {})",
+                ))
+            }
+            Err(_) => {
+                // Tell the server to stop working on it. Without this the
+                // server keeps computing an answer nobody will read, which on
+                // a large project is the difference between one wasted request
+                // and a server that never catches up.
+                self.shared.pending.remove(&id);
+                let _ = self
+                    .shared
+                    .notify("$/cancelRequest", json!({ "id": id }))
+                    .await;
+                return Err(anyhow::anyhow!(
+                    "LSP request '{}' timed out after {}ms (server: {})",
                     method,
+                    timeout.as_millis(),
                     self.server_name
-                )
-            })?;
+                ));
+            }
+        };
 
         if let Some(err) = response.get("error") {
+            let message = err
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or_default();
             return Err(anyhow::anyhow!(
-                "LSP error from {}: {}",
+                "LSP error from {} on {}: {}",
                 self.server_name,
-                err
+                method,
+                if message.is_empty() {
+                    err.to_string()
+                } else {
+                    message.to_string()
+                }
             ));
         }
         Ok(response["result"].clone())
@@ -740,31 +977,29 @@ impl LspClient {
         method: &str,
         params: serde_json::Value,
     ) -> anyhow::Result<()> {
-        let msg = json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-        });
-        let body = serde_json::to_string(&msg)?;
-        let writer = self
-            .writer
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("LSP client already shut down"))?;
-        let mut w = writer.lock().await;
-        send_message(&mut w, &body).await
+        self.shared.notify(method, params).await
     }
 
     /// Perform the LSP `initialize` / `initialized` handshake.
     pub async fn initialize(&mut self, root_uri: &str) -> anyhow::Result<()> {
+        *self.shared.root_uri.write() = root_uri.to_string();
         let params = json!({
             "processId": std::process::id(),
-            "clientInfo": { "name": "mikmik", "version": "1.0" },
+            "clientInfo": { "name": "mikmik", "version": env!("CARGO_PKG_VERSION") },
             "rootUri": root_uri,
+            "workspaceFolders": [{
+                "uri": root_uri,
+                "name": uri_to_path(root_uri)
+                    .rsplit(std::path::MAIN_SEPARATOR)
+                    .next()
+                    .unwrap_or("workspace")
+                    .to_string(),
+            }],
             "capabilities": {
                 "textDocument": {
                     "publishDiagnostics": {
                         "relatedInformation": true,
-                        "versionSupport": false,
+                        "versionSupport": true,
                         "codeDescriptionSupport": false
                     },
                     "synchronization": {
@@ -772,25 +1007,129 @@ impl LspClient {
                         "willSave": false,
                         "willSaveWaitUntil": false,
                         "didSave": true
+                    },
+                    "definition": { "linkSupport": true },
+                    "typeDefinition": { "linkSupport": true },
+                    "implementation": { "linkSupport": true },
+                    "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
+                    "rename": { "prepareSupport": false },
+                    "codeAction": {
+                        "codeActionLiteralSupport": {
+                            "codeActionKind": { "valueSet": [] }
+                        },
+                        "resolveSupport": { "properties": ["edit"] }
                     }
                 },
                 "workspace": {
-                    "configuration": false,
-                    "didChangeConfiguration": { "dynamicRegistration": false }
-                }
+                    // Answered by the reader task. Claiming it while ignoring
+                    // the request would leave the server waiting.
+                    "configuration": true,
+                    "workspaceFolders": true,
+                    "applyEdit": true,
+                    "didChangeConfiguration": { "dynamicRegistration": false },
+                    "didChangeWatchedFiles": { "dynamicRegistration": true },
+                    "symbol": { "dynamicRegistration": false },
+                    "workspaceEdit": {
+                        "documentChanges": true,
+                        "resourceOperations": ["create", "rename", "delete"]
+                    },
+                    "fileOperations": {
+                        "willRename": true,
+                        "didRename": true
+                    }
+                },
+                "window": { "workDoneProgress": true }
             },
             "initializationOptions": self.server_config.initialization_options,
         });
 
-        self.send_request_inner("initialize", params).await?;
+        // The handshake gets its own budget: a server that never answers it is
+        // broken, and waiting a full request timeout to learn that delays every
+        // caller behind it.
+        let result = self
+            .send_request_with_timeout("initialize", params, self.server_config.warmup_timeout())
+            .await?;
+        *self.shared.server_capabilities.write() = result
+            .get("capabilities")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
 
         // Send the `initialized` notification to complete the handshake
         self.send_notification_inner("initialized", json!({}))
             .await?;
+        *self.shared.initialized_at.lock() = Some(std::time::Instant::now());
+
+        // Settings, unlike `initializationOptions`, can be pushed again later.
+        self.push_settings().await;
 
         self.is_initialized = true;
         tracing::debug!("LSP server '{}' initialized", self.server_name);
         Ok(())
+    }
+
+    /// Send the configured settings with `workspace/didChangeConfiguration`.
+    ///
+    /// A failure is logged rather than returned: the server is usable without
+    /// its settings, and refusing to start over a rejected setting would be
+    /// worse than running with the defaults.
+    pub async fn push_settings(&self) {
+        let Some(settings) = self.server_config.settings.clone() else {
+            return;
+        };
+        if let Err(e) = self
+            .send_notification_inner(
+                "workspace/didChangeConfiguration",
+                json!({ "settings": settings }),
+            )
+            .await
+        {
+            tracing::debug!("could not push settings to {}: {e}", self.server_name);
+        }
+    }
+
+    /// Wait until the server has finished loading the project.
+    ///
+    /// A project-aware server answers navigation with an empty result while it
+    /// is still indexing, which reads as "no definition" rather than "not
+    /// ready". Waiting is bounded, and a server that reports no progress at all
+    /// is not waited for beyond the settle window after its handshake.
+    pub async fn wait_for_project_loaded(&self) {
+        let timings = self.server_config.ready_timings();
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(timings.timeout_ms);
+        let settle = std::time::Duration::from_millis(timings.settle_ms);
+        let poll = std::time::Duration::from_millis(timings.poll_ms.max(10));
+
+        while std::time::Instant::now() < deadline {
+            let busy = !self.shared.active_progress.is_empty();
+            if !busy {
+                // Quiet now, but the server may not have started reporting
+                // yet. The reference point is the last thing that happened:
+                // a progress notification if there was one, the handshake
+                // otherwise.
+                let since = {
+                    let last = *self.shared.last_progress.lock();
+                    let started = *self.shared.initialized_at.lock();
+                    last.or(started)
+                };
+                match since {
+                    Some(at) if at.elapsed() >= settle => return,
+                    None => return,
+                    _ => {}
+                }
+            }
+            tokio::time::sleep(poll).await;
+        }
+        tracing::debug!(
+            "{} did not report the project loaded within {}ms",
+            self.server_name,
+            timings.timeout_ms
+        );
+    }
+
+    /// Whether the server is loading the project right now.
+    pub fn is_loading_project(&self) -> bool {
+        !self.shared.active_progress.is_empty()
     }
 
     /// Notify the server that a document has been opened.
@@ -800,6 +1139,7 @@ impl LspClient {
         language_id: &str,
         content: &str,
     ) -> anyhow::Result<()> {
+        self.shared.open_versions.insert(uri.to_string(), 1);
         self.send_notification_inner(
             "textDocument/didOpen",
             json!({
@@ -814,6 +1154,11 @@ impl LspClient {
         .await
     }
 
+    /// Whether this client has the document open.
+    pub fn has_open(&self, uri: &str) -> bool {
+        self.shared.open_versions.contains_key(uri)
+    }
+
     /// Notify the server that a document has been changed.
     pub async fn change_document(
         &mut self,
@@ -821,6 +1166,7 @@ impl LspClient {
         content: &str,
         version: i64,
     ) -> anyhow::Result<()> {
+        self.shared.open_versions.insert(uri.to_string(), version);
         self.send_notification_inner(
             "textDocument/didChange",
             json!({
@@ -831,11 +1177,47 @@ impl LspClient {
         .await
     }
 
+    /// Send the current content of a document, opening it if needed.
+    ///
+    /// The server answers against the copy it holds, so a document opened once
+    /// and edited afterwards would be answered from the text as it was at
+    /// open time.
+    pub async fn sync_document(
+        &mut self,
+        uri: &str,
+        language_id: &str,
+        content: &str,
+    ) -> anyhow::Result<()> {
+        match self.shared.open_versions.get(uri).map(|v| *v) {
+            Some(version) => self.change_document(uri, content, version + 1).await,
+            None => self.open_document(uri, language_id, content).await,
+        }
+    }
+
     /// Notify the server that a document has been saved.
     pub async fn save_document(&mut self, uri: &str) -> anyhow::Result<()> {
         self.send_notification_inner(
             "textDocument/didSave",
             json!({ "textDocument": { "uri": uri } }),
+        )
+        .await
+    }
+
+    /// Tell the server that files changed on disk outside the editor.
+    ///
+    /// `changes` pairs a URI with an LSP `FileChangeType`: 1 created,
+    /// 2 changed, 3 deleted.
+    pub async fn notify_watched_files(&self, changes: &[(String, u8)]) -> anyhow::Result<()> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+        let changes: Vec<serde_json::Value> = changes
+            .iter()
+            .map(|(uri, kind)| json!({ "uri": uri, "type": kind }))
+            .collect();
+        self.send_notification_inner(
+            "workspace/didChangeWatchedFiles",
+            json!({ "changes": changes }),
         )
         .await
     }
@@ -972,7 +1354,8 @@ impl LspClient {
     /// Get cached diagnostics for `file_path`.
     pub fn get_diagnostics(&self, file_path: &str) -> Vec<LspDiagnostic> {
         let uri = path_to_uri(file_path);
-        self.diagnostics
+        self.shared
+            .diagnostics
             .get(&uri)
             .map(|v| v.clone())
             .unwrap_or_default()
@@ -980,7 +1363,8 @@ impl LspClient {
 
     /// Get all cached diagnostics across every file.
     pub fn all_diagnostics(&self) -> Vec<LspDiagnostic> {
-        self.diagnostics
+        self.shared
+            .diagnostics
             .iter()
             .flat_map(|entry| entry.value().clone())
             .collect()
@@ -996,12 +1380,20 @@ impl LspClient {
         if !self.is_initialized {
             return Ok(());
         }
-        // Attempt graceful shutdown; ignore errors since we kill anyway.
-        let _ = self.send_request_inner("shutdown", json!(null)).await;
+        // Attempt graceful shutdown; ignore errors since we kill anyway. Its
+        // own short budget: a server that ignores `shutdown` must not hold the
+        // session open for a full request timeout.
+        let _ = self
+            .send_request_with_timeout(
+                "shutdown",
+                json!(null),
+                std::time::Duration::from_millis(2_000),
+            )
+            .await;
         let _ = self.send_notification_inner("exit", json!(null)).await;
 
         // Drop the writer so the pipe closes cleanly before we wait.
-        self.writer.take();
+        self.shared.writer.lock().await.take();
 
         if let Some(mut child) = self.process.take() {
             let pid = child.id();
@@ -1024,46 +1416,201 @@ impl LspClient {
 // Incoming message dispatch
 // ---------------------------------------------------------------------------
 
-fn dispatch_incoming(
-    msg: serde_json::Value,
-    pending: &PendingMap,
-    diagnostics: &Arc<DashMap<String, Vec<LspDiagnostic>>>,
-    server_name: &str,
-) {
-    // Response to a request we sent
-    if let Some(id) = msg.get("id").and_then(|v| v.as_u64()) {
-        if let Some((_, tx)) = pending.remove(&id) {
-            let _ = tx.send(msg);
-        }
-        return;
-    }
+async fn dispatch_incoming(msg: serde_json::Value, shared: &Arc<ClientShared>) {
+    let method = msg
+        .get("method")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
-    // Notification or request from the server
-    if let Some(method) = msg.get("method").and_then(|v| v.as_str()) {
-        match method {
-            "textDocument/publishDiagnostics" => {
-                handle_publish_diagnostics(&msg["params"], diagnostics, server_name);
+    // A message carrying an id and no method is a response to us. One carrying
+    // both is a request from the server, which the specification says we must
+    // answer even when the answer is "not implemented".
+    match (msg.get("id"), method.as_deref()) {
+        (Some(id), None) => {
+            if let Some(id) = id.as_u64() {
+                if let Some((_, tx)) = shared.pending.remove(&id) {
+                    let _ = tx.send(msg);
+                }
             }
-            _ => {
-                tracing::trace!(
-                    "LSP server {}: unhandled notification '{}'",
-                    server_name,
-                    method
-                );
+        }
+        (Some(id), Some(method)) => {
+            let id = id.clone();
+            handle_server_request(shared, &id, method, &msg["params"]).await;
+        }
+        (None, Some(method)) => handle_notification(shared, method, &msg["params"]),
+        (None, None) => {}
+    }
+}
+
+/// Answer a request the server sent us.
+async fn handle_server_request(
+    shared: &Arc<ClientShared>,
+    id: &serde_json::Value,
+    method: &str,
+    params: &serde_json::Value,
+) {
+    match method {
+        "workspace/configuration" => {
+            // One entry per requested section, in the order asked. A server
+            // that gets a shorter array than it asked for reads the wrong
+            // section for the rest.
+            let items = params.get("items").and_then(|i| i.as_array());
+            let settings = shared.config.settings.clone();
+            let answer: Vec<serde_json::Value> = items
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|item| {
+                            let section = item.get("section").and_then(|s| s.as_str());
+                            settings_section(settings.as_ref(), section)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            shared.respond(id, serde_json::Value::Array(answer)).await;
+        }
+        "workspace/workspaceFolders" => {
+            let uri = shared.root_uri.read().clone();
+            let answer = if uri.is_empty() {
+                serde_json::Value::Null
+            } else {
+                let name = uri_to_path(&uri)
+                    .rsplit(std::path::MAIN_SEPARATOR)
+                    .next()
+                    .unwrap_or("workspace")
+                    .to_string();
+                json!([{ "uri": uri, "name": name }])
+            };
+            shared.respond(id, answer).await;
+        }
+        "window/workDoneProgress/create" => {
+            if let Some(token) = progress_token(params) {
+                shared.active_progress.insert(token, ());
             }
+            shared.respond(id, serde_json::Value::Null).await;
+        }
+        "client/registerCapability" | "client/unregisterCapability" => {
+            // Accepted without acting on it: everything this client sends is
+            // decided by its own configuration, not by what the server
+            // registers at runtime. The answer still has to arrive.
+            shared.respond(id, serde_json::Value::Null).await;
+        }
+        "window/showMessageRequest" => {
+            // No user is watching this server's messages, so no action is
+            // picked. Null is the specified answer for "dismissed".
+            if let Some(message) = params.get("message").and_then(|m| m.as_str()) {
+                tracing::debug!("[LSP {}] {message}", shared.server_name);
+            }
+            shared.respond(id, serde_json::Value::Null).await;
+        }
+        "window/showDocument" => {
+            // Nothing here can bring a document to the front.
+            shared.respond(id, json!({ "success": false })).await;
+        }
+        "workspace/applyEdit" => {
+            match apply_workspace_edit(params.get("edit").unwrap_or(&serde_json::Value::Null)) {
+                Ok(summary) => {
+                    tracing::debug!(
+                        "applied a server-initiated edit from {}: {} file(s)",
+                        shared.server_name,
+                        summary.len()
+                    );
+                    shared.respond(id, json!({ "applied": true })).await;
+                }
+                Err(e) => {
+                    shared
+                        .respond(
+                            id,
+                            json!({ "applied": false, "failureReason": e.to_string() }),
+                        )
+                        .await;
+                }
+            }
+        }
+        other => {
+            tracing::debug!("[LSP {}] unhandled request '{other}'", shared.server_name);
+            shared.respond_method_not_found(id, other).await;
         }
     }
 }
 
-fn handle_publish_diagnostics(
-    params: &serde_json::Value,
-    diagnostics: &Arc<DashMap<String, Vec<LspDiagnostic>>>,
-    server_name: &str,
-) {
+/// The settings a server asked for, by dotted section name.
+///
+/// A server asks for `rust-analyzer` and expects the object stored under that
+/// key, not the whole settings blob.
+fn settings_section(
+    settings: Option<&serde_json::Value>,
+    section: Option<&str>,
+) -> serde_json::Value {
+    let Some(settings) = settings else {
+        return serde_json::Value::Null;
+    };
+    let Some(section) = section.filter(|s| !s.is_empty()) else {
+        return settings.clone();
+    };
+    let mut node = settings;
+    for part in section.split('.') {
+        match node.get(part) {
+            Some(next) => node = next,
+            None => return serde_json::Value::Null,
+        }
+    }
+    node.clone()
+}
+
+fn progress_token(params: &serde_json::Value) -> Option<String> {
+    params.get("token").map(|t| match t {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    })
+}
+
+fn handle_notification(shared: &Arc<ClientShared>, method: &str, params: &serde_json::Value) {
+    match method {
+        "textDocument/publishDiagnostics" => {
+            handle_publish_diagnostics(params, shared);
+        }
+        "$/progress" => {
+            *shared.last_progress.lock() = Some(std::time::Instant::now());
+            let Some(token) = progress_token(params) else {
+                return;
+            };
+            match params.pointer("/value/kind").and_then(|k| k.as_str()) {
+                Some("begin") => {
+                    shared.active_progress.insert(token, ());
+                }
+                Some("end") => {
+                    shared.active_progress.remove(&token);
+                }
+                _ => {}
+            }
+        }
+        "window/logMessage" | "window/showMessage" => {
+            if let Some(message) = params.get("message").and_then(|m| m.as_str()) {
+                tracing::debug!("[LSP {}] {message}", shared.server_name);
+            }
+        }
+        "telemetry/event" => {}
+        other => {
+            tracing::trace!(
+                "LSP server {}: unhandled notification '{other}'",
+                shared.server_name
+            );
+        }
+    }
+}
+
+fn handle_publish_diagnostics(params: &serde_json::Value, shared: &Arc<ClientShared>) {
+    let server_name = shared.server_name.as_str();
+    let diagnostics = &shared.diagnostics;
     let uri = match params.get("uri").and_then(|v| v.as_str()) {
         Some(u) => u.to_string(),
         None => return,
     };
+
+    // Bumped whether or not the list is empty. "The file is clean now" is an
+    // answer, and a caller waiting for a fresh publish has to see it.
+    *shared.diagnostic_versions.entry(uri.clone()).or_insert(0) += 1;
 
     let raw_diags = match params.get("diagnostics").and_then(|v| v.as_array()) {
         Some(d) => d,
@@ -1132,11 +1679,241 @@ fn parse_diagnostic(
 }
 
 // ---------------------------------------------------------------------------
+// Applying edits
+// ---------------------------------------------------------------------------
+
+/// One text replacement, in LSP coordinates (0-based line and character).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextEdit {
+    pub start_line: u32,
+    pub start_character: u32,
+    pub end_line: u32,
+    pub end_character: u32,
+    pub new_text: String,
+}
+
+impl TextEdit {
+    fn from_json(value: &serde_json::Value) -> Option<Self> {
+        let range = value.get("range")?;
+        Some(Self {
+            start_line: range.pointer("/start/line")?.as_u64()? as u32,
+            start_character: range.pointer("/start/character")?.as_u64()? as u32,
+            end_line: range.pointer("/end/line")?.as_u64()? as u32,
+            end_character: range.pointer("/end/character")?.as_u64()? as u32,
+            new_text: value.get("newText")?.as_str()?.to_string(),
+        })
+    }
+
+    fn starts_before(&self, other: &Self) -> std::cmp::Ordering {
+        (self.start_line, self.start_character).cmp(&(other.start_line, other.start_character))
+    }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        let self_end = (self.end_line, self.end_character);
+        let other_start = (other.start_line, other.start_character);
+        let other_end = (other.end_line, other.end_character);
+        let self_start = (self.start_line, self.start_character);
+        self_start < other_end && other_start < self_end
+    }
+}
+
+/// Apply `edits` to `content` and return the result.
+///
+/// Edits arrive in an unspecified order and all address the original text, so
+/// they are applied from the end backwards: an earlier edit would otherwise
+/// move every later position. Two edits that overlap describe two different
+/// results for the same characters, which is a server bug rather than
+/// something to resolve silently.
+pub fn apply_text_edits(content: &str, edits: &[TextEdit]) -> anyhow::Result<String> {
+    let mut sorted: Vec<&TextEdit> = edits.iter().collect();
+    sorted.sort_by(|a, b| a.starts_before(b));
+    for pair in sorted.windows(2) {
+        if pair[0].overlaps(pair[1]) {
+            return Err(anyhow::anyhow!(
+                "the server returned two edits that overlap at line {}",
+                pair[0].start_line + 1
+            ));
+        }
+    }
+
+    // Byte offset of the first character of each line, plus the end of the
+    // text, so an edit that ends at the last line has somewhere to point.
+    let mut line_starts: Vec<usize> = vec![0];
+    for (index, byte) in content.bytes().enumerate() {
+        if byte == b'\n' {
+            line_starts.push(index + 1);
+        }
+    }
+
+    // A character offset in LSP is a UTF-16 code unit offset.
+    let offset_of = |line: u32, character: u32| -> anyhow::Result<usize> {
+        let start = *line_starts.get(line as usize).ok_or_else(|| {
+            anyhow::anyhow!(
+                "the server named line {}, past the end of the file",
+                line + 1
+            )
+        })?;
+        let rest = &content[start..];
+        let line_text = rest.split('\n').next().unwrap_or("");
+        let mut utf16 = 0u32;
+        for (byte_index, ch) in line_text.char_indices() {
+            if utf16 >= character {
+                return Ok(start + byte_index);
+            }
+            utf16 += ch.len_utf16() as u32;
+        }
+        Ok(start + line_text.len())
+    };
+
+    let mut result = content.to_string();
+    for edit in sorted.into_iter().rev() {
+        let from = offset_of(edit.start_line, edit.start_character)?;
+        let to = offset_of(edit.end_line, edit.end_character)?;
+        if from > to || to > result.len() {
+            return Err(anyhow::anyhow!(
+                "the server returned an edit that runs backwards"
+            ));
+        }
+        result.replace_range(from..to, &edit.new_text);
+    }
+    Ok(result)
+}
+
+/// Every file a `WorkspaceEdit` touches, and the edits for each.
+///
+/// Reads both shapes the specification allows: the `changes` map and the
+/// `documentChanges` array. A server picks one, and which one it picks depends
+/// on what the client said it supports.
+pub fn workspace_edit_files(edit: &serde_json::Value) -> Vec<(String, Vec<TextEdit>)> {
+    let mut out: Vec<(String, Vec<TextEdit>)> = Vec::new();
+    let mut push = |uri: String, edits: Vec<TextEdit>| {
+        if edits.is_empty() {
+            return;
+        }
+        match out.iter_mut().find(|(existing, _)| *existing == uri) {
+            Some((_, existing)) => existing.extend(edits),
+            None => out.push((uri, edits)),
+        }
+    };
+
+    if let Some(changes) = edit.get("changes").and_then(|c| c.as_object()) {
+        for (uri, edits) in changes {
+            let parsed = edits
+                .as_array()
+                .map(|a| a.iter().filter_map(TextEdit::from_json).collect())
+                .unwrap_or_default();
+            push(uri.clone(), parsed);
+        }
+    }
+
+    if let Some(document_changes) = edit.get("documentChanges").and_then(|c| c.as_array()) {
+        for change in document_changes {
+            // A resource operation (create, rename, delete) carries `kind`
+            // instead of `edits`. Applying one silently would delete or move a
+            // file the caller never heard about.
+            if change.get("kind").is_some() {
+                continue;
+            }
+            let Some(uri) = change.pointer("/textDocument/uri").and_then(|u| u.as_str()) else {
+                continue;
+            };
+            let parsed = change
+                .get("edits")
+                .and_then(|e| e.as_array())
+                .map(|a| a.iter().filter_map(TextEdit::from_json).collect())
+                .unwrap_or_default();
+            push(uri.to_string(), parsed);
+        }
+    }
+
+    out
+}
+
+/// The resource operations a `WorkspaceEdit` asks for, as human-readable text.
+///
+/// They are reported rather than performed: creating, renaming or deleting a
+/// file is not something a hover or a rename request should do behind the
+/// caller's back.
+pub fn workspace_edit_resource_operations(edit: &serde_json::Value) -> Vec<String> {
+    edit.get("documentChanges")
+        .and_then(|c| c.as_array())
+        .map(|changes| {
+            changes
+                .iter()
+                .filter_map(|change| {
+                    let kind = change.get("kind")?.as_str()?;
+                    let target = change
+                        .get("uri")
+                        .or_else(|| change.get("newUri"))
+                        .and_then(|u| u.as_str())
+                        .map(uri_to_path)
+                        .unwrap_or_default();
+                    Some(format!("{kind} {target}"))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Apply a `WorkspaceEdit` to the files on disk.
+///
+/// Returns one line per file, naming how many edits landed. Every file is read
+/// and written once, so a file edited in several places is not rewritten per
+/// edit.
+pub fn apply_workspace_edit(edit: &serde_json::Value) -> anyhow::Result<Vec<String>> {
+    let files = workspace_edit_files(edit);
+    if files.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Everything is computed before anything is written, so a failure on the
+    // third file does not leave the first two changed.
+    let mut planned: Vec<(std::path::PathBuf, String, usize)> = Vec::new();
+    for (uri, edits) in &files {
+        let path = std::path::PathBuf::from(uri_to_path(uri));
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
+        let updated = apply_text_edits(&content, edits)?;
+        planned.push((path, updated, edits.len()));
+    }
+
+    let mut applied = Vec::new();
+    for (path, content, count) in planned {
+        std::fs::write(&path, content)
+            .map_err(|e| anyhow::anyhow!("cannot write {}: {e}", path.display()))?;
+        applied.push(format!("{}: {count} edit(s)", path.display()));
+    }
+    Ok(applied)
+}
+
+// ---------------------------------------------------------------------------
 // Location / symbol helpers
 // ---------------------------------------------------------------------------
 
-/// Extract a list of `"path:line"` strings from an LSP `Location | Location[]` result.
-fn extract_locations(result: &serde_json::Value) -> Vec<String> {
+/// A place in a file, as a server reported it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspLocation {
+    pub file: String,
+    /// 1-based line number.
+    pub line: u32,
+    /// 1-based column number.
+    pub column: u32,
+}
+
+impl std::fmt::Display for LspLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}:{}", self.file, self.line, self.column)
+    }
+}
+
+/// Read the locations out of a navigation result.
+///
+/// The specification allows four shapes: one `Location`, an array of them, one
+/// `LocationLink`, or an array of those. A `LocationLink` names the file in
+/// `targetUri` and the position in `targetSelectionRange`, so a reader that
+/// only knows `uri` returns nothing at all for a server that sends links, and
+/// this client asks for link support in its handshake.
+pub fn parse_locations(result: &serde_json::Value) -> Vec<LspLocation> {
     let items: Vec<&serde_json::Value> = if let Some(arr) = result.as_array() {
         arr.iter().collect()
     } else if result.is_object() {
@@ -1148,20 +1925,39 @@ fn extract_locations(result: &serde_json::Value) -> Vec<String> {
     items
         .into_iter()
         .filter_map(|loc| {
-            let uri = loc.get("uri")?.as_str()?;
-            let line = loc
-                .pointer("/range/start/line")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0)
-                + 1; // convert to 1-based
-            let col = loc
-                .pointer("/range/start/character")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0)
-                + 1;
-            let path = uri_to_path(uri);
-            Some(format!("{}:{}:{}", path, line, col))
+            let (uri, range) = match loc.get("targetUri").and_then(|u| u.as_str()) {
+                Some(uri) => {
+                    // The selection range points at the name itself; the target
+                    // range covers the whole declaration.
+                    let range = loc
+                        .get("targetSelectionRange")
+                        .or_else(|| loc.get("targetRange"))?;
+                    (uri, range)
+                }
+                None => (loc.get("uri")?.as_str()?, loc.get("range")?),
+            };
+            Some(LspLocation {
+                file: uri_to_path(uri),
+                line: range
+                    .pointer("/start/line")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32
+                    + 1,
+                column: range
+                    .pointer("/start/character")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32
+                    + 1,
+            })
         })
+        .collect()
+}
+
+/// The same locations, formatted as `path:line:column`.
+fn extract_locations(result: &serde_json::Value) -> Vec<String> {
+    parse_locations(result)
+        .into_iter()
+        .map(|loc| loc.to_string())
         .collect()
 }
 
@@ -1220,30 +2016,99 @@ fn symbol_kind_name(kind: u64) -> &'static str {
 // URI helpers
 // ---------------------------------------------------------------------------
 
-fn path_to_uri(path: &str) -> String {
-    // Simple heuristic; for full correctness callers should pass pre-formed URIs
+/// Characters a path may hold that a URI may not carry unescaped.
+///
+/// Only the ones that actually appear in file names are escaped. Escaping more
+/// would be harmless for a compliant server, but several answer with the URI
+/// spelled the way the client sent it, and an over-escaped URI then fails to
+/// match the one the client remembers.
+fn percent_encode_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for ch in path.chars() {
+        match ch {
+            ' ' => out.push_str("%20"),
+            '#' => out.push_str("%23"),
+            '?' => out.push_str("%3F"),
+            '%' => out.push_str("%25"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or_default();
+            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                out.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The `file:` URI for a path.
+///
+/// A path that is already a URI is returned unchanged, because a caller that
+/// read a URI out of a server response must be able to pass it straight back.
+pub fn path_to_uri(path: &str) -> String {
     if path.starts_with("file://") {
         return path.to_string();
     }
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path));
-    let s = canonical.to_string_lossy();
-    if cfg!(target_os = "windows") {
-        // Drive letters need a leading slash: file:///C:/...
-        format!("file:///{}", s.replace('\\', "/"))
+    let text = canonical.to_string_lossy();
+    // Windows hands back `\\?\C:\...` for a canonical path, which no server
+    // understands.
+    let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
+    let slashed = text.replace('\\', "/");
+    let encoded = percent_encode_path(&slashed);
+    if encoded.starts_with('/') {
+        // Unix: the path already carries the root slash, and the authority is
+        // empty, so `file://` plus `/home/...` is the right three slashes.
+        format!("file://{encoded}")
     } else {
-        format!("file://{}", s)
+        // Windows: a drive letter needs the slash the path does not have.
+        format!("file:///{encoded}")
     }
 }
 
-fn uri_to_path(uri: &str) -> String {
-    let stripped = uri
-        .strip_prefix("file:///")
-        .or_else(|| uri.strip_prefix("file://"))
-        .unwrap_or(uri);
-    if cfg!(target_os = "windows") {
-        stripped.replace('/', "\\")
-    } else {
-        stripped.to_string()
+/// The filesystem path a `file:` URI names.
+pub fn uri_to_path(uri: &str) -> String {
+    let Some(rest) = uri.strip_prefix("file://") else {
+        return uri.to_string();
+    };
+    // Skip the authority, which is empty for a local file.
+    let rest = match rest.find('/') {
+        Some(0) => rest,
+        Some(index) => &rest[index..],
+        None => rest,
+    };
+    let decoded = percent_decode(rest);
+
+    #[cfg(windows)]
+    {
+        // `/C:/src` is the drive-letter form; the leading slash is not part of
+        // the path.
+        let trimmed = decoded
+            .strip_prefix('/')
+            .filter(|rest| {
+                let bytes = rest.as_bytes();
+                bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+            })
+            .unwrap_or(&decoded);
+        trimmed.replace('/', "\\")
+    }
+    #[cfg(not(windows))]
+    {
+        decoded
     }
 }
 
@@ -1953,15 +2818,83 @@ mod tests {
 
     #[test]
     fn test_path_to_uri_roundtrip() {
-        // On the current platform, converting a relative path to URI and back
-        // should not panic.
-        let uri = path_to_uri("src/main.rs");
+        // The round trip used to lose the leading slash: `file:///a/b` was
+        // stripped of `file:///`, which left the relative path `a/b`, so every
+        // diagnostic and every location named a file that does not exist.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("main.rs");
+        std::fs::write(&file, "").expect("write");
+
+        let uri = path_to_uri(&file.to_string_lossy());
         assert!(
             uri.starts_with("file://"),
-            "expected file:// URI, got {}",
-            uri
+            "expected file:// URI, got {uri}"
         );
-        let _back = uri_to_path(&uri);
+        let back = uri_to_path(&uri);
+        assert_eq!(
+            std::fs::canonicalize(&back).expect("the path must exist"),
+            std::fs::canonicalize(&file).expect("canonical"),
+        );
+    }
+
+    #[test]
+    fn a_uri_carries_a_space_in_a_file_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("my notes.md");
+        std::fs::write(&file, "").expect("write");
+
+        let uri = path_to_uri(&file.to_string_lossy());
+        assert!(uri.contains("%20"), "the space was not escaped: {uri}");
+        assert_eq!(
+            std::fs::canonicalize(uri_to_path(&uri)).expect("the path must exist"),
+            std::fs::canonicalize(&file).expect("canonical"),
+        );
+    }
+
+    #[test]
+    fn a_location_link_is_read_too() {
+        // The client asks for link support in its handshake, so a server may
+        // answer with links. A reader that only knows `uri` returns nothing,
+        // which reads as "no definition found".
+        let link = json!([{
+            "targetUri": "file:///tmp/a.rs",
+            "targetRange": {
+                "start": { "line": 9, "character": 0 },
+                "end": { "line": 12, "character": 1 }
+            },
+            "targetSelectionRange": {
+                "start": { "line": 9, "character": 3 },
+                "end": { "line": 9, "character": 7 }
+            }
+        }]);
+        let locations = parse_locations(&link);
+        assert_eq!(locations.len(), 1);
+        // The selection range wins: it points at the name, not at the whole
+        // declaration.
+        assert_eq!(locations[0].line, 10);
+        assert_eq!(locations[0].column, 4);
+        assert_eq!(locations[0].file, "/tmp/a.rs");
+    }
+
+    #[test]
+    fn a_plain_location_still_works() {
+        let plain = json!({
+            "uri": "file:///tmp/a.rs",
+            "range": {
+                "start": { "line": 0, "character": 0 },
+                "end": { "line": 0, "character": 4 }
+            }
+        });
+        let locations = parse_locations(&plain);
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].to_string(), "/tmp/a.rs:1:1");
+    }
+
+    #[test]
+    fn a_uri_is_passed_back_unchanged() {
+        // A caller reading a URI out of a server response has to be able to
+        // hand it straight back.
+        assert_eq!(path_to_uri("file:///tmp/a.rs"), "file:///tmp/a.rs");
     }
 
     #[test]
@@ -2220,6 +3153,477 @@ mod tests {
 
         assert_eq!(mgr.servers().len(), 1);
         assert_eq!(mgr.servers()[0].command, "/opt/ra/rust-analyzer");
+    }
+
+    // ---- Applying edits ---------------------------------------------------
+
+    fn edit(
+        start_line: u32,
+        start_character: u32,
+        end_line: u32,
+        end_character: u32,
+        new_text: &str,
+    ) -> TextEdit {
+        TextEdit {
+            start_line,
+            start_character,
+            end_line,
+            end_character,
+            new_text: new_text.to_string(),
+        }
+    }
+
+    #[test]
+    fn edits_are_applied_from_the_end_backwards() {
+        // Applying the first edit first would move every later position, so
+        // the second edit would land in the wrong place.
+        let content = "one two\nthree four\n";
+        let edits = vec![
+            edit(0, 0, 0, 3, "ONE"),
+            edit(1, 6, 1, 10, "FOUR"),
+            edit(0, 4, 0, 7, "TWO"),
+        ];
+        let result = apply_text_edits(content, &edits).expect("applied");
+        assert_eq!(result, "ONE TWO\nthree FOUR\n");
+    }
+
+    #[test]
+    fn an_edit_counts_characters_the_way_the_protocol_does() {
+        // A character offset is a UTF-16 code unit offset, so a non-ASCII
+        // line would be cut mid-character by a byte offset.
+        let content = "let café = 1;\n";
+        let result = apply_text_edits(content, &[edit(0, 4, 0, 8, "tea")]).expect("applied");
+        assert_eq!(result, "let tea = 1;\n");
+    }
+
+    #[test]
+    fn two_overlapping_edits_are_refused() {
+        // They describe two different results for the same characters. Picking
+        // one silently would corrupt the file in a way nothing reports.
+        let content = "hello world\n";
+        let edits = vec![edit(0, 0, 0, 5, "a"), edit(0, 3, 0, 8, "b")];
+        let error = apply_text_edits(content, &edits).expect_err("should refuse");
+        assert!(error.to_string().contains("overlap"), "error = {error}");
+    }
+
+    #[test]
+    fn an_edit_past_the_end_is_refused() {
+        let error = apply_text_edits("one\n", &[edit(9, 0, 9, 1, "x")]).expect_err("should refuse");
+        assert!(
+            error.to_string().contains("past the end"),
+            "error = {error}"
+        );
+    }
+
+    #[test]
+    fn both_workspace_edit_shapes_are_read() {
+        let by_changes = json!({
+            "changes": {
+                "file:///tmp/a.rs": [{
+                    "range": {
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 0, "character": 1 }
+                    },
+                    "newText": "X"
+                }]
+            }
+        });
+        let by_document_changes = json!({
+            "documentChanges": [{
+                "textDocument": { "uri": "file:///tmp/a.rs", "version": 1 },
+                "edits": [{
+                    "range": {
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 0, "character": 1 }
+                    },
+                    "newText": "X"
+                }]
+            }]
+        });
+        assert_eq!(workspace_edit_files(&by_changes).len(), 1);
+        assert_eq!(workspace_edit_files(&by_document_changes).len(), 1);
+    }
+
+    #[test]
+    fn a_resource_operation_is_reported_rather_than_performed() {
+        // Creating, renaming or deleting a file is not something a rename
+        // request should do behind the caller's back.
+        let edit = json!({
+            "documentChanges": [
+                { "kind": "delete", "uri": "file:///tmp/gone.rs" },
+                { "kind": "rename", "oldUri": "file:///tmp/a.rs", "newUri": "file:///tmp/b.rs" }
+            ]
+        });
+        assert!(workspace_edit_files(&edit).is_empty());
+        let operations = workspace_edit_resource_operations(&edit);
+        assert_eq!(operations.len(), 2);
+        assert!(operations[0].starts_with("delete "), "{operations:?}");
+    }
+
+    #[test]
+    fn a_workspace_edit_writes_every_file_once() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, "one two\n").expect("write");
+        let uri = path_to_uri(&file.to_string_lossy());
+
+        let edit = json!({
+            "changes": {
+                uri: [
+                    {
+                        "range": {
+                            "start": { "line": 0, "character": 0 },
+                            "end": { "line": 0, "character": 3 }
+                        },
+                        "newText": "ONE"
+                    },
+                    {
+                        "range": {
+                            "start": { "line": 0, "character": 4 },
+                            "end": { "line": 0, "character": 7 }
+                        },
+                        "newText": "TWO"
+                    }
+                ]
+            }
+        });
+
+        let applied = apply_workspace_edit(&edit).expect("applied");
+        assert_eq!(applied.len(), 1);
+        assert!(applied[0].contains("2 edit(s)"), "{applied:?}");
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), "ONE TWO\n");
+    }
+
+    #[test]
+    fn a_failing_workspace_edit_writes_nothing() {
+        // Everything is computed before anything is written, so a bad edit on
+        // the second file does not leave the first one changed.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let good = dir.path().join("good.txt");
+        std::fs::write(&good, "keep\n").expect("write");
+        let missing = dir.path().join("missing.txt");
+
+        let edit = json!({
+            "changes": {
+                path_to_uri(&good.to_string_lossy()): [{
+                    "range": {
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 0, "character": 4 }
+                    },
+                    "newText": "changed"
+                }],
+                path_to_uri(&missing.to_string_lossy()): [{
+                    "range": {
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 0, "character": 1 }
+                    },
+                    "newText": "x"
+                }]
+            }
+        });
+
+        assert!(apply_workspace_edit(&edit).is_err());
+        assert_eq!(std::fs::read_to_string(&good).expect("read"), "keep\n");
+    }
+
+    // ---- A fake server, so the protocol itself can be tested -------------
+
+    /// One side of an in-memory connection to a scripted server.
+    struct FakeServer {
+        reader: BufReader<Box<dyn tokio::io::AsyncRead + Send + Unpin>>,
+        writer: Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
+    }
+
+    impl FakeServer {
+        /// Read one message the client sent.
+        async fn next(&mut self) -> serde_json::Value {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                read_message(&mut self.reader),
+            )
+            .await
+            .expect("the client sent nothing")
+            .expect("unreadable message")
+        }
+
+        async fn send(&mut self, message: serde_json::Value) {
+            let body = serde_json::to_string(&message).expect("encode");
+            send_message(&mut self.writer, &body).await.expect("send");
+        }
+
+        async fn respond(&mut self, id: &serde_json::Value, result: serde_json::Value) {
+            self.send(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+                .await;
+        }
+
+        /// Answer the handshake and return the `initialized` notification.
+        async fn accept_handshake(&mut self, capabilities: serde_json::Value) {
+            let request = self.next().await;
+            assert_eq!(request["method"], "initialize");
+            let id = request["id"].clone();
+            self.respond(&id, json!({ "capabilities": capabilities }))
+                .await;
+            let notification = self.next().await;
+            assert_eq!(notification["method"], "initialized");
+        }
+    }
+
+    /// A client and the scripted server on the other end of its pipes.
+    fn connected(config: LspServerConfig) -> (LspClient, FakeServer) {
+        let (client_side, server_side) = tokio::io::duplex(64 * 1024);
+        let (client_read, client_write) = tokio::io::split(client_side);
+        let (server_read, server_write) = tokio::io::split(server_side);
+        let client = LspClient::connect(config, Box::new(client_read), Box::new(client_write));
+        let server = FakeServer {
+            reader: BufReader::new(Box::new(server_read)),
+            writer: Box::new(server_write),
+        };
+        (client, server)
+    }
+
+    #[tokio::test]
+    async fn the_handshake_records_what_the_server_supports() {
+        // The initialize response used to be thrown away, so nothing could
+        // tell whether a request was worth sending.
+        let (mut client, mut server) = connected(make_config("ls"));
+        let handshake = tokio::spawn(async move {
+            server
+                .accept_handshake(json!({
+                    "renameProvider": true,
+                    "codeActionProvider": false,
+                    "workspace": { "fileOperations": { "willRename": { "filters": [] } } }
+                }))
+                .await;
+            server
+        });
+        client
+            .initialize("file:///tmp/project")
+            .await
+            .expect("handshake");
+        let _server = handshake.await.expect("server task");
+
+        assert!(client.supports("renameProvider"));
+        assert!(!client.supports("codeActionProvider"));
+        assert!(client.supports("workspace.fileOperations.willRename"));
+        assert!(!client.supports("implementationProvider"));
+    }
+
+    #[tokio::test]
+    async fn a_configuration_request_is_answered_by_section() {
+        // A server that asks for its settings and is ignored waits, and some
+        // refuse to finish starting.
+        let mut config = make_config("ls");
+        config.settings = Some(json!({ "ls": { "lint": true }, "other": 1 }));
+        let (mut client, mut server) = connected(config);
+
+        let task = tokio::spawn(async move {
+            server.accept_handshake(json!({})).await;
+            // `push_settings` fires right after the handshake.
+            let pushed = server.next().await;
+            assert_eq!(pushed["method"], "workspace/didChangeConfiguration");
+
+            server
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "id": 900,
+                    "method": "workspace/configuration",
+                    "params": { "items": [{ "section": "ls" }, { "section": "missing" }] }
+                }))
+                .await;
+            server.next().await
+        });
+
+        client
+            .initialize("file:///tmp/project")
+            .await
+            .expect("handshake");
+        let answer = task.await.expect("server task");
+
+        assert_eq!(answer["id"], 900);
+        assert_eq!(answer["result"][0]["lint"], true);
+        assert!(answer["result"][1].is_null(), "answer = {answer}");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_request_is_refused_rather_than_ignored() {
+        let (mut client, mut server) = connected(make_config("ls"));
+        let task = tokio::spawn(async move {
+            server.accept_handshake(json!({})).await;
+            server
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "window/somethingNobodyImplements",
+                    "params": {}
+                }))
+                .await;
+            server.next().await
+        });
+
+        client
+            .initialize("file:///tmp/project")
+            .await
+            .expect("handshake");
+        let answer = task.await.expect("server task");
+
+        assert_eq!(answer["id"], 7);
+        assert_eq!(answer["error"]["code"], -32601);
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_request_is_cancelled() {
+        // Without the cancel the server keeps computing an answer nobody will
+        // read, which on a large project is how a server falls behind.
+        let mut config = make_config("ls");
+        config.request_timeout_ms = Some(150);
+        let (mut client, mut server) = connected(config);
+
+        let task = tokio::spawn(async move {
+            server.accept_handshake(json!({})).await;
+            let request = server.next().await;
+            assert_eq!(request["method"], "textDocument/hover");
+            // Deliberately no answer.
+            server.next().await
+        });
+
+        client
+            .initialize("file:///tmp/project")
+            .await
+            .expect("handshake");
+        let result = client.hover("file:///tmp/a.rs", 1, 1).await;
+        let cancel = task.await.expect("server task");
+
+        let error = result.expect_err("the request should have timed out");
+        assert!(error.to_string().contains("timed out"), "error = {error}");
+        assert_eq!(cancel["method"], "$/cancelRequest");
+    }
+
+    #[tokio::test]
+    async fn a_server_that_stops_fails_the_waiting_request() {
+        // A dropped channel used to surface as "channel closed", which says
+        // nothing about a server that died on a missing library.
+        let (mut client, mut server) = connected(make_config("ls"));
+        let task = tokio::spawn(async move {
+            server.accept_handshake(json!({})).await;
+            let _request = server.next().await;
+            // Drop the server side, closing the pipe.
+        });
+
+        client
+            .initialize("file:///tmp/project")
+            .await
+            .expect("handshake");
+        let result = client.hover("file:///tmp/a.rs", 1, 1).await;
+        task.await.expect("server task");
+
+        let error = result.expect_err("the request should have failed");
+        assert!(error.to_string().contains("stopped"), "error = {error}");
+    }
+
+    #[tokio::test]
+    async fn diagnostics_carry_a_version_that_moves() {
+        let (mut client, mut server) = connected(make_config("ls"));
+        let task = tokio::spawn(async move {
+            server.accept_handshake(json!({})).await;
+            server
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "method": "textDocument/publishDiagnostics",
+                    "params": {
+                        "uri": "file:///tmp/a.rs",
+                        "diagnostics": [{
+                            "range": {
+                                "start": { "line": 0, "character": 0 },
+                                "end": { "line": 0, "character": 1 }
+                            },
+                            "severity": 1,
+                            "message": "boom"
+                        }]
+                    }
+                }))
+                .await;
+            // A second publish saying the file is clean. The version has to
+            // move for that too, or a caller waiting for a fresh answer never
+            // learns the problem went away.
+            server
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "method": "textDocument/publishDiagnostics",
+                    "params": { "uri": "file:///tmp/a.rs", "diagnostics": [] }
+                }))
+                .await;
+            server
+        });
+
+        client
+            .initialize("file:///tmp/project")
+            .await
+            .expect("handshake");
+        let _server = task.await.expect("server task");
+
+        // The reader task runs concurrently; wait for the second publish.
+        for _ in 0..100 {
+            if client.diagnostic_version("file:///tmp/a.rs") >= 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(client.diagnostic_version("file:///tmp/a.rs"), 2);
+        assert!(
+            client.all_diagnostics().is_empty(),
+            "the clean publish did not land"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_project_load_wait_ends_when_progress_ends() {
+        let mut config = make_config("ls");
+        config.workspace_ready_timings = Some(WorkspaceReadyTimings {
+            timeout_ms: 5_000,
+            poll_ms: 10,
+            settle_ms: 20,
+            status_request_timeout_ms: 1_000,
+        });
+        let (mut client, mut server) = connected(config);
+
+        let task = tokio::spawn(async move {
+            server.accept_handshake(json!({})).await;
+            server
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "method": "$/progress",
+                    "params": { "token": "indexing", "value": { "kind": "begin" } }
+                }))
+                .await;
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+            server
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "method": "$/progress",
+                    "params": { "token": "indexing", "value": { "kind": "end" } }
+                }))
+                .await;
+            server
+        });
+
+        client
+            .initialize("file:///tmp/project")
+            .await
+            .expect("handshake");
+        // Let the begin arrive before the wait starts.
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert!(client.is_loading_project(), "the begin never landed");
+
+        let started = std::time::Instant::now();
+        client.wait_for_project_loaded().await;
+        let waited = started.elapsed();
+
+        let _server = task.await.expect("server task");
+        assert!(!client.is_loading_project());
+        assert!(
+            waited >= std::time::Duration::from_millis(80),
+            "returned after {waited:?}, before the server finished indexing"
+        );
     }
 
     #[test]

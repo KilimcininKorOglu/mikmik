@@ -2667,6 +2667,7 @@ fn tool_icon(normalized: &str) -> &'static str {
         "websearch" => "?",
         "todowrite" | "todo_write" | "todo" => ":",
         "task" | "agent" => "+",
+        "lsp" => "^",
         _ => "~",
     }
 }
@@ -2714,6 +2715,7 @@ pub(crate) fn tool_running_label(normalized: &str, fallback: &str) -> String {
         "webfetch" => "Fetching page",
         "websearch" => "Searching web",
         "todowrite" | "todo_write" | "todo" => "Updating todos",
+        "lsp" => "Asking the language server",
         _ => fallback,
     }
     .to_string()

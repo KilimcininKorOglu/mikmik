@@ -1111,6 +1111,31 @@ pub fn extract_tool_summary(tool_name: &str, input: &serde_json::Value) -> Strin
         "grep" => truncate(str_field(input, "pattern"), 60),
         "webfetch" => truncate(str_field(input, "url"), 60),
         "websearch" => truncate(str_field(input, "query"), 60),
+        // Without an arm of its own an LSP call falls through to "the first
+        // string in the object", which is whichever field the model happened
+        // to write first: the file for one call, the symbol for the next.
+        "lsp" => {
+            let action = str_field(input, "action");
+            let symbol = [str_field(input, "symbol"), str_field(input, "query")]
+                .into_iter()
+                .find(|value| !value.is_empty())
+                .unwrap_or("");
+            // The file's own name, not its path: the path is long, the header
+            // is one line, and the directory is rarely the point.
+            let file = str_field(input, "file");
+            let file = file.rsplit(['/', '\\']).next().unwrap_or(file);
+            let place = match input.get("line").and_then(|v| v.as_u64()) {
+                Some(line) if !file.is_empty() && file != "*" => format!(" ({file}:{line})"),
+                _ if !file.is_empty() && file != "*" => format!(" ({file})"),
+                _ => String::new(),
+            };
+            let summary = if symbol.is_empty() {
+                format!("{action}{place}")
+            } else {
+                format!("{action} {symbol}{place}")
+            };
+            truncate(&summary, 60)
+        }
         "task" | "agent" => {
             let task = str_field(input, "task");
             let task = if task.is_empty() {
@@ -2292,6 +2317,28 @@ mod tests {
             .iter()
             .map(|s| s.content.to_string())
             .collect::<String>()
+    }
+
+    #[test]
+    fn an_lsp_call_is_summarised_by_its_action() {
+        // The generic arm takes the first string in the object, which is
+        // whichever field the model wrote first.
+        let input = serde_json::json!({
+            "file": "/home/me/project/src/parser.rs",
+            "action": "definition",
+            "symbol": "parse_config",
+            "line": 42
+        });
+        assert_eq!(
+            extract_tool_summary("LSP", &input),
+            "definition parse_config (parser.rs:42)"
+        );
+    }
+
+    #[test]
+    fn an_lsp_call_without_a_file_names_only_what_it_asks() {
+        let input = serde_json::json!({ "action": "symbols", "file": "*", "query": "Parser" });
+        assert_eq!(extract_tool_summary("LSP", &input), "symbols Parser");
     }
 
     #[test]

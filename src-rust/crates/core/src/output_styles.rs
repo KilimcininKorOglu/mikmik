@@ -98,12 +98,15 @@ impl OutputStyleDef {
                 "- Use simple tenses.\n",
                 "- Use the same word for the same thing every time.\n",
                 "- Keep technical terms in the language they belong to. Never translate an ",
-                "identifier, a command, a file name or a term of art into the reply's language.\n",
+                "identifier, a command, a file name or a term of art into the reply's language. ",
+                "Writing `pipeline` as Turkish `boru hattı` is wrong.\n",
                 "- Name a fact directly. Never invent a metaphor for it, and never present an ",
-                "invented phrase as an established term.\n",
+                "invented phrase as an established term. A test that does not catch the bug it ",
+                "guards `hatayı yakalamıyor`; it is not `dişsiz`.\n",
                 "- Write the reply's language with its own characters, accents and diacritics ",
-                "included.\n",
-                "- State facts. No flattery, no compliments, no agreement as an opener.\n",
+                "included. Turkish needs ı, ş, ğ, ç, ö and ü.\n",
+                "- State facts. No flattery, no compliments, no agreement as an opener. ",
+                "`You're right`, `haklısınız` and `good point` are all forbidden openers.\n",
                 "- Do not frame a reply around the conversation itself: no turn counts, no ",
                 "elapsed time, no talk of how long something took."
             )
@@ -574,6 +577,30 @@ mod tests {
         // is selected.
         assert!(!style.prompt.contains("file_path::line_number"));
         assert!(!style.prompt.to_lowercase().contains("readme"));
+    }
+
+    /// Four of the rules are about what NOT to write, and a model reads a
+    /// prohibition better with the thing it forbids spelled out. Each of these
+    /// examples is a mistake the style exists to stop.
+    #[test]
+    fn the_writing_style_shows_what_each_prohibition_forbids() {
+        let styles = builtin_styles();
+        let prompt = find_style(&styles, "asd-ste100")
+            .expect("asd-ste100 must be built in")
+            .prompt
+            .clone();
+
+        for example in [
+            "boru hattı", // a translated technical term
+            "dişsiz",     // an invented metaphor
+            "ı, ş, ğ",    // the diacritics a reply must keep
+            "haklısınız", // flattery as an opener
+        ] {
+            assert!(
+                prompt.contains(example),
+                "the style forbids something without showing it: {example}\n{prompt}"
+            );
+        }
     }
 
     #[test]

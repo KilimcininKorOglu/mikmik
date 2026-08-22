@@ -3498,6 +3498,14 @@ impl LspManager {
             .ok_or_else(|| anyhow::anyhow!("language server '{server_name}' is not running"))
     }
 
+    /// Put an already connected client in, so a test can drive the manager
+    /// against a scripted server instead of a real process.
+    #[cfg(test)]
+    fn adopt_client(&mut self, root_dir: &Path, client: LspClient) {
+        let key = (client.server_config.name.clone(), root_dir.to_path_buf());
+        self.clients.insert(key, client);
+    }
+
     /// Forget that `server_name` failed to start, so the next call retries.
     pub fn clear_failure(&mut self, server_name: &str, root_dir: &Path) {
         self.init_failures
@@ -4139,76 +4147,108 @@ impl LspManager {
         root_dir: &Path,
         wait: std::time::Duration,
     ) -> Vec<LspDiagnostic> {
-        let uri = path_to_uri(file_path);
-        // A command-line linter is not a server and is run rather than asked.
-        let cli_linters: Vec<LspServerConfig> = self
-            .servers_for_file(file_path)
-            .iter()
-            .filter(|c| c.lint_output.is_some())
-            .map(|c| (*c).clone())
-            .collect();
-        let names: Vec<String> = self
-            .servers_for_file(file_path)
-            .iter()
-            .filter(|c| c.lint_output.is_none())
-            .map(|c| c.name.clone())
-            .collect();
+        self.fresh_diagnostics_for_files(&[file_path.to_string()], root_dir, wait)
+            .await
+    }
 
+    /// Diagnostics for several files, on one shared wait.
+    ///
+    /// A batch of files sent one at a time pays the wait once per file, and
+    /// the wait is the whole cost: the servers are the same and they publish
+    /// for all of the files in parallel. So every file is sent first and the
+    /// budget is spent once, on all of them together.
+    pub async fn fresh_diagnostics_for_files(
+        &mut self,
+        file_paths: &[String],
+        root_dir: &Path,
+        wait: std::time::Duration,
+    ) -> Vec<LspDiagnostic> {
         let mut from_linters: Vec<LspDiagnostic> = Vec::new();
-        for linter in &cli_linters {
-            match run_cli_linter(linter, file_path, root_dir).await {
-                Ok(diagnostics) => from_linters.extend(diagnostics),
-                Err(e) => tracing::debug!("{}: {e}", linter.name),
+        // Which server was on which version for which file, before the files
+        // were sent. A server publishes per file, so the pair is the unit.
+        let mut before: Vec<(String, String, u64)> = Vec::new();
+        let mut served: Vec<&String> = Vec::new();
+
+        for file_path in file_paths {
+            let uri = path_to_uri(file_path);
+            // A command-line linter is not a server: it is run, not asked.
+            let cli_linters: Vec<LspServerConfig> = self
+                .servers_for_file(file_path)
+                .iter()
+                .filter(|c| c.lint_output.is_some())
+                .map(|c| (*c).clone())
+                .collect();
+            for linter in &cli_linters {
+                match run_cli_linter(linter, file_path, root_dir).await {
+                    Ok(diagnostics) => from_linters.extend(diagnostics),
+                    Err(e) => tracing::debug!("{}: {e}", linter.name),
+                }
+            }
+
+            let names: Vec<String> = self
+                .servers_for_file(file_path)
+                .iter()
+                .filter(|c| c.lint_output.is_none())
+                .map(|c| c.name.clone())
+                .collect();
+            let mut any = false;
+            for name in &names {
+                match self.ensure_client(name, root_dir).await {
+                    Ok(client) => {
+                        before.push((name.clone(), uri.clone(), client.diagnostic_version(&uri)));
+                        any = true;
+                    }
+                    Err(e) => tracing::debug!("{e}"),
+                }
+            }
+            if any {
+                served.push(file_path);
             }
         }
 
-        // The version each server was on before the file was sent.
-        let mut before: Vec<(String, u64)> = Vec::new();
-        for name in &names {
-            match self.ensure_client(name, root_dir).await {
-                Ok(client) => before.push((name.clone(), client.diagnostic_version(&uri))),
-                Err(e) => tracing::debug!("{e}"),
-            }
-        }
         if before.is_empty() {
             dedupe_and_sort(&mut from_linters);
             return from_linters;
         }
 
-        if let Err(e) = self.sync_file(file_path, root_dir).await {
-            tracing::debug!("{e}");
+        for file_path in &served {
+            if let Err(e) = self.sync_file(file_path, root_dir).await {
+                tracing::debug!("{e}");
+            }
         }
 
         // A server that answers on request may never publish, so waiting for a
         // notification from one of those would wait for the whole budget and
         // then report nothing.
         let mut pulled: Vec<LspDiagnostic> = Vec::new();
-        let pulling: Vec<String> = before
-            .iter()
-            .filter(|(name, _)| {
-                self.clients
-                    .get(&(name.clone(), root_dir.to_path_buf()))
-                    .map(|client| client.supports_pull_diagnostics())
-                    .unwrap_or(false)
-            })
-            .map(|(name, _)| name.clone())
-            .collect();
-        for name in &pulling {
+        let mut pulling: Vec<(String, String)> = Vec::new();
+        for (name, uri, _) in &before {
+            let pulls = self
+                .clients
+                .get(&(name.clone(), root_dir.to_path_buf()))
+                .map(|client| client.supports_pull_diagnostics())
+                .unwrap_or(false);
+            if pulls {
+                pulling.push((name.clone(), uri.clone()));
+            }
+        }
+        for (name, uri) in &pulling {
+            let path = uri_to_path(uri);
             if let Some(client) = self.clients.get(&(name.clone(), root_dir.to_path_buf())) {
-                match client.pull_diagnostics(&uri, file_path).await {
+                match client.pull_diagnostics(uri, &path).await {
                     Ok(diagnostics) => pulled.extend(diagnostics),
                     Err(e) => tracing::debug!("{name} could not answer a diagnostic request: {e}"),
                 }
             }
         }
-        before.retain(|(name, _)| !pulling.contains(name));
+        before.retain(|(name, uri, _)| !pulling.contains(&(name.clone(), uri.clone())));
 
         let deadline = std::time::Instant::now() + wait;
         while !before.is_empty() && std::time::Instant::now() < deadline {
-            let all_fresh = before.iter().all(|(name, version)| {
+            let all_fresh = before.iter().all(|(name, uri, version)| {
                 self.clients
                     .get(&(name.clone(), root_dir.to_path_buf()))
-                    .map(|client| client.diagnostic_version(&uri) > *version)
+                    .map(|client| client.diagnostic_version(uri) > *version)
                     .unwrap_or(true)
             });
             if all_fresh {
@@ -4217,11 +4257,12 @@ impl LspManager {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
 
-        let mut collected: Vec<LspDiagnostic> = before
-            .iter()
-            .filter_map(|(name, _)| self.clients.get(&(name.clone(), root_dir.to_path_buf())))
-            .flat_map(|client| client.get_diagnostics(file_path))
-            .collect();
+        let mut collected: Vec<LspDiagnostic> = Vec::new();
+        for (name, uri, _) in &before {
+            if let Some(client) = self.clients.get(&(name.clone(), root_dir.to_path_buf())) {
+                collected.extend(client.get_diagnostics(&uri_to_path(uri)));
+            }
+        }
         collected.extend(pulled);
         collected.extend(from_linters);
         dedupe_and_sort(&mut collected);
@@ -5506,6 +5547,50 @@ mod tests {
     }
 
     // ---- Whole-project checks ---------------------------------------------
+
+    #[tokio::test]
+    async fn a_batch_of_files_spends_the_wait_once() {
+        // A server that never publishes is the worst case: asked file by file,
+        // every file burns the whole budget.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let a = dir.path().join("a.rs");
+        let b = dir.path().join("b.rs");
+        let c = dir.path().join("c.rs");
+        for path in [&a, &b, &c] {
+            std::fs::write(path, "fn f() {}\n").expect("write");
+        }
+
+        let (mut client, mut server) = connected(make_config("ls"));
+        let handshake = tokio::spawn(async move {
+            server.accept_handshake(json!({})).await;
+            server
+        });
+        let root_uri = path_to_uri(&dir.path().to_string_lossy());
+        client.initialize(&root_uri).await.expect("initialize");
+        // The server is kept alive so the pipe stays open. It stays silent.
+        let _server = handshake.await.expect("handshake");
+
+        let mut mgr = LspManager::new();
+        mgr.register_server(make_config("ls"));
+        mgr.adopt_client(dir.path(), client);
+
+        let wait = std::time::Duration::from_millis(300);
+        let files: Vec<String> = [&a, &b, &c]
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        let started = std::time::Instant::now();
+        let diagnostics = mgr
+            .fresh_diagnostics_for_files(&files, dir.path(), wait)
+            .await;
+        let elapsed = started.elapsed();
+
+        assert!(diagnostics.is_empty());
+        assert!(
+            elapsed < wait * 2,
+            "three files took {elapsed:?}, which is more than one wait of {wait:?}"
+        );
+    }
 
     // ---- Command-line linters --------------------------------------------
 

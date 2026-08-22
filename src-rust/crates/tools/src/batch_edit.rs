@@ -266,13 +266,23 @@ impl Tool for BatchEditTool {
         // Build success response
         // ----------------------------------------------------------------
 
-        let summary = format!(
+        let mut summary = format!(
             "BatchEdit applied {} edit{} across {} file{}.",
             edit_count,
             if edit_count != 1 { "s" } else { "" },
             file_count,
             if file_count != 1 { "s" } else { "" },
         );
+
+        // One report for the whole batch, on one shared wait.
+        let written: Vec<String> = unique_writings
+            .iter()
+            .map(|(path, _, _)| path.clone())
+            .collect();
+        if let Some(note) = crate::lsp_after_write::report_after_batch(&written, ctx).await {
+            summary.push_str("\n\n");
+            summary.push_str(&note);
+        }
 
         ToolResult::success(summary).with_metadata(json!({
             "edits_applied": edit_count,

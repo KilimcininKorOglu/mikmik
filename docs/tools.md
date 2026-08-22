@@ -168,6 +168,11 @@ Apply multiple `Edit`-style edits in a single tool call. More efficient than cal
 
 Edits within the same file are applied in order. If any individual edit fails (string not found, not unique), the batch is aborted and no changes are written.
 
+Like `Write` and `Edit`, the result carries the language server's verdict when
+`lsp_diagnostics_on_write` is on. The whole batch is reported at once: the files
+are sent together and the wait is spent once on all of them, rather than once
+per file.
+
 ---
 
 ### ApplyPatch

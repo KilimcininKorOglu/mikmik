@@ -41,14 +41,23 @@ pub async fn forget_session(session_id: &str) {
 /// nothing to say. Never returns an error: a language server that is missing
 /// or slow must not turn a successful write into a failed one.
 pub async fn report_after_write(file_path: &str, ctx: &ToolContext) -> Option<String> {
+    report_after_batch(&[file_path.to_string()], ctx).await
+}
+
+/// The same report for a batch of files, on one shared wait.
+///
+/// A batch that reported per file would pay the wait once per file, and the
+/// wait is the whole cost. The files are sent together and the budget is spent
+/// once, on all of them.
+pub async fn report_after_batch(file_paths: &[String], ctx: &ToolContext) -> Option<String> {
     let format = ctx.config.effective_lsp_format_on_write();
     let diagnose = ctx.config.effective_lsp_diagnostics_on_write();
-    if !format && !diagnose {
+    if !format && !diagnose || file_paths.is_empty() {
         return None;
     }
 
     let manager_arc = lsp::global_lsp_manager();
-    {
+    let served: Vec<String> = {
         let mut manager = manager_arc.lock().await;
         if ctx.config.effective_lsp_auto_detect() {
             manager.seed_detected(&ctx.working_dir);
@@ -57,33 +66,47 @@ pub async fn report_after_write(file_path: &str, ctx: &ToolContext) -> Option<St
         // settings file, each overriding the one before it.
         manager.apply_file_config(&ctx.working_dir);
         manager.seed_from_config(&ctx.config.lsp_servers);
-        if manager.servers_for_file(file_path).is_empty() {
-            // No server for this file type. Nothing to start, nothing to say.
-            return None;
-        }
+        file_paths
+            .iter()
+            .filter(|path| !manager.servers_for_file(path).is_empty())
+            .cloned()
+            .collect()
+    };
+    if served.is_empty() {
+        // No server for any of these file types. Nothing to start, nothing to
+        // say.
+        return None;
     }
 
-    // Every server hears about the change, not only the ones that serve this
-    // file type: a server watches files that affect it without serving them,
+    // Every server hears about the change, not only the ones that serve these
+    // file types: a server watches files that affect it without serving them,
     // a lock file or a schema for instance.
     {
         let manager = manager_arc.lock().await;
-        manager
-            .notify_files_changed(&[file_path.to_string()], FILE_CHANGED)
-            .await;
+        manager.notify_files_changed(file_paths, FILE_CHANGED).await;
     }
 
     let mut notes: Vec<String> = Vec::new();
 
     if format {
-        let formatted = {
-            let mut manager = manager_arc.lock().await;
-            manager.format_file(file_path, &ctx.working_dir).await
-        };
-        match formatted {
-            Ok(true) => notes.push("Formatted by the language server.".to_string()),
-            Ok(false) => {}
-            Err(e) => tracing::debug!("could not format '{file_path}': {e}"),
+        let mut formatted_count = 0usize;
+        for file_path in &served {
+            let formatted = {
+                let mut manager = manager_arc.lock().await;
+                manager.format_file(file_path, &ctx.working_dir).await
+            };
+            match formatted {
+                Ok(true) => formatted_count += 1,
+                Ok(false) => {}
+                Err(e) => tracing::debug!("could not format '{file_path}': {e}"),
+            }
+        }
+        if formatted_count == 1 && served.len() == 1 {
+            notes.push("Formatted by the language server.".to_string());
+        } else if formatted_count > 0 {
+            notes.push(format!(
+                "Formatted {formatted_count} file(s) by the language server."
+            ));
         }
     }
 
@@ -91,16 +114,28 @@ pub async fn report_after_write(file_path: &str, ctx: &ToolContext) -> Option<St
         let diagnostics = {
             let mut manager = manager_arc.lock().await;
             manager
-                .fresh_diagnostics(file_path, &ctx.working_dir, WRITE_DIAGNOSTICS_WAIT)
+                .fresh_diagnostics_for_files(&served, &ctx.working_dir, WRITE_DIAGNOSTICS_WAIT)
                 .await
         };
 
         let fresh = {
             let mut ledgers = LEDGERS.lock().await;
-            ledgers
-                .entry(ctx.session_id.clone())
-                .or_default()
-                .only_new(file_path, diagnostics)
+            let ledger = ledgers.entry(ctx.session_id.clone()).or_default();
+            let mut fresh = Vec::new();
+            // The ledger remembers per file, so the batch is split back apart.
+            // A server may answer with a different spelling of the path, so
+            // both sides are resolved through the filesystem before they are
+            // compared.
+            for file_path in &served {
+                let uri = lsp::path_to_uri(file_path);
+                let mine: Vec<lsp::LspDiagnostic> = diagnostics
+                    .iter()
+                    .filter(|d| lsp::path_to_uri(&d.file) == uri)
+                    .cloned()
+                    .collect();
+                fresh.extend(ledger.only_new(file_path, mine));
+            }
+            fresh
         };
 
         if !fresh.is_empty() {
@@ -137,6 +172,13 @@ mod tests {
         assert!(report_after_write(&file.to_string_lossy(), &ctx)
             .await
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn an_empty_batch_reports_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ctx = allow_all_context(dir.path().to_path_buf());
+        assert!(report_after_batch(&[], &ctx).await.is_none());
     }
 
     #[tokio::test]

@@ -603,13 +603,14 @@ An entry that carries `lint_output` is a command-line linter rather than a
 server. It has no lifetime: it is run over one file, its report is read, and it
 exits. See [tools.md#lsp](tools.md#lsp).
 
-**After a write.** With `lsp_diagnostics_on_write` on, a `Write` or `Edit`
-carries the language server's verdict on the file back with it, so the model
-learns that its edit does not compile without running a build. Only problems
-that were not reported for that file before are shown, and a problem whose line
-number moved is not treated as new. The write waits at most 700 ms for the
-answer, and a missing or slow server never turns a successful write into a
-failed one.
+**After a write.** With `lsp_diagnostics_on_write` on, a `Write`, `Edit` or
+`BatchEdit` carries the language server's verdict on the file back with it, so
+the model learns that its edit does not compile without running a build. Only
+problems that were not reported for that file before are shown, and a problem
+whose line number moved is not treated as new. The write waits at most 700 ms
+for the answer, and a missing or slow server never turns a successful write into
+a failed one. A `BatchEdit` spends that wait once for the whole batch, not once
+per file.
 
 `lsp_format_on_write` is off by default because it rewrites the file: a server
 configured differently from the project's own formatter would reformat every

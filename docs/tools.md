@@ -1022,6 +1022,7 @@ indexing answers "nothing found" rather than "not ready".
 | `root_markers`            | string[]        | no       | Files or directories that mark a project this server serves.                                             |
 | `disabled`                | boolean         | no       | Switch the server off without deleting the entry. Default `false`.                                       |
 | `is_linter`               | boolean         | no       | The server only reports problems. It answers diagnostics and never navigation. Default `false`.          |
+| `lint_output`             | string          | no       | The entry is a command-line linter, not a server. Its report format: `swiftlint` or `biome`.             |
 | `language_id`             | string          | no       | One language id for every file. Overrides `extension_to_language` and the built-in table.                |
 | `extension_to_language`   | object          | no       | Per-extension language id, e.g. `{".rs": "rust"}`.                                                       |
 | `initialization_options`  | object          | no       | Sent once in the `initialize` handshake.                                                                 |
@@ -1040,6 +1041,20 @@ that serves one language needs no extension map.
 **Routing.** Every enabled server whose `file_patterns` match the file answers
 `diagnostics`. Navigation actions go to the first matching server that is not a
 linter.
+
+**Command-line linters.** Some tools report problems but speak no LSP. An entry
+with `lint_output` is one of those. It is run over the file and its report is
+read, rather than started and asked. It is never started as a server, never
+sent a file change, and never reaches a navigation request: such a tool prints
+its report and exits, so a client waiting for a handshake would wait forever. A
+linter that takes longer than 20 seconds on one file is killed with its
+children, and a linter that is not installed is reported and skipped. Its
+findings join the ones the servers report. Two formats are read:
+
+| `lint_output` | Command it expects                         |
+|---------------|--------------------------------------------|
+| `swiftlint`   | `swiftlint lint --quiet --reporter json`   |
+| `biome`       | `biome lint --reporter=json`               |
 
 **Precedence.** A project's `settings.json` entry replaces the user's entry of
 the same name rather than joining it, because two entries of one name would
@@ -1115,7 +1130,7 @@ the entry is switched off.
 | `vimls`                       | Vim script                     | `vim-language-server`             |
 | `emmet-language-server`       | HTML, CSS, JSX, Vue, Svelte    | `emmet-language-server`           |
 | `sourcekit-lsp`               | Swift                          | `sourcekit-lsp`                   |
-| `swiftlint`                   | Swift (linter)                 | `swiftlint`                       |
+| `swiftlint`                   | Swift (command-line linter)    | `swiftlint`                       |
 | `tlaplus`                     | TLA+                           | `tlapm_lsp`                       |
 
 **Protocol behaviour.** Points worth knowing when a server misbehaves:

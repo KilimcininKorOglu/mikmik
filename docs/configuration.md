@@ -599,6 +599,10 @@ the whole session slow.
 One server runs per working directory, not per name, because a server is
 initialized for one workspace root and answers against it.
 
+An entry that carries `lint_output` is a command-line linter rather than a
+server. It has no lifetime: it is run over one file, its report is read, and it
+exits. See [tools.md#lsp](tools.md#lsp).
+
 **After a write.** With `lsp_diagnostics_on_write` on, a `Write` or `Edit`
 carries the language server's verdict on the file back with it, so the model
 learns that its edit does not compile without running a build. Only problems

@@ -516,7 +516,8 @@
     "file_patterns": ["*.swift"],
     "root_markers": [".swiftlint.yml", ".swiftlint.yaml"],
     "language_id": "swift",
-    "is_linter": true
+    "is_linter": true,
+    "lint_output": "swiftlint"
   },
   {
     "name": "tlaplus",

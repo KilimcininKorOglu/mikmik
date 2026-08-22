@@ -148,6 +148,25 @@ pub struct LspServerConfig {
     /// them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_ready_timings: Option<WorkspaceReadyTimings>,
+    /// This entry is a command-line linter rather than a language server, and
+    /// this is the shape of the report it prints.
+    ///
+    /// Several useful linters speak no LSP at all. Starting one as a language
+    /// server hangs: it prints its report and waits for nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lint_output: Option<LintOutputFormat>,
+}
+
+/// The report format a command-line linter prints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LintOutputFormat {
+    /// SwiftLint's `--reporter json`: an array of objects with `file`, `line`,
+    /// `character`, `severity`, `reason` and `rule_id`.
+    Swiftlint,
+    /// Biome's `--reporter=json`: a `diagnostics` array whose entries carry a
+    /// `location` with a `path` and a `span` of byte offsets.
+    Biome,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -2305,6 +2324,145 @@ pub fn apply_workspace_edit(edit: &serde_json::Value) -> anyhow::Result<Vec<Stri
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// Command-line linters
+// ---------------------------------------------------------------------------
+
+/// How long a linter may take on one file.
+const LINTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Run a command-line linter over one file and read its report.
+///
+/// A linter that speaks no LSP cannot be started as a server: it prints its
+/// report and exits, so a client waiting for a handshake waits forever. It is
+/// run per file instead, which is what its command line expects anyway.
+pub async fn run_cli_linter(
+    config: &LspServerConfig,
+    file_path: &str,
+    cwd: &Path,
+) -> anyhow::Result<Vec<LspDiagnostic>> {
+    let format = config
+        .lint_output
+        .ok_or_else(|| anyhow::anyhow!("'{}' is not a command-line linter", config.name))?;
+    let program = resolve_command(&config.command, cwd)
+        .ok_or_else(|| anyhow::anyhow!("`{}` is not installed", config.command))?;
+
+    let mut cmd = Command::new(&program);
+    cmd.args(&config.args)
+        .arg(file_path)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    for (key, value) in &config.env {
+        cmd.env(key, value);
+    }
+    crate::process_tree::spawn_in_own_group(&mut cmd);
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("cannot run `{}`: {e}", config.command))?;
+    let pid = child.id();
+    let output = match tokio::time::timeout(LINTER_TIMEOUT, child.wait_with_output()).await {
+        Ok(result) => result?,
+        Err(_) => {
+            if let Some(pid) = pid {
+                crate::process_tree::kill_tree(pid);
+            }
+            return Err(anyhow::anyhow!(
+                "`{}` did not finish within {}s",
+                config.command,
+                LINTER_TIMEOUT.as_secs()
+            ));
+        }
+    };
+
+    // A linter exits non-zero when it finds something, which is the ordinary
+    // case rather than a failure.
+    let text = String::from_utf8_lossy(&output.stdout);
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let json: serde_json::Value = serde_json::from_str(trimmed)
+        .map_err(|e| anyhow::anyhow!("`{}` printed something unreadable: {e}", config.command))?;
+
+    Ok(match format {
+        LintOutputFormat::Swiftlint => parse_swiftlint(&json, &config.name),
+        LintOutputFormat::Biome => parse_biome(&json, &config.name),
+    })
+}
+
+fn parse_swiftlint(json: &serde_json::Value, source: &str) -> Vec<LspDiagnostic> {
+    json.as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    Some(LspDiagnostic {
+                        file: item.get("file")?.as_str()?.to_string(),
+                        line: item.get("line").and_then(|l| l.as_u64()).unwrap_or(1) as u32,
+                        column: item.get("character").and_then(|c| c.as_u64()).unwrap_or(1) as u32,
+                        severity: match item.get("severity").and_then(|s| s.as_str()) {
+                            Some("Error") | Some("error") => DiagnosticSeverity::Error,
+                            _ => DiagnosticSeverity::Warning,
+                        },
+                        message: item.get("reason")?.as_str()?.to_string(),
+                        source: Some(source.to_string()),
+                        code: item
+                            .get("rule_id")
+                            .and_then(|r| r.as_str())
+                            .map(|r| r.to_string()),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_biome(json: &serde_json::Value, source: &str) -> Vec<LspDiagnostic> {
+    json.get("diagnostics")
+        .and_then(|d| d.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let location = item.get("location")?;
+                    Some(LspDiagnostic {
+                        file: location.get("path")?.get("file")?.as_str()?.to_string(),
+                        // Biome reports a byte span rather than a line, and
+                        // turning one into the other needs the file. The span
+                        // start is reported as the column of line 1 so nothing
+                        // is invented.
+                        line: 1,
+                        column: location
+                            .pointer("/span/0")
+                            .and_then(|s| s.as_u64())
+                            .unwrap_or(0) as u32
+                            + 1,
+                        severity: match item.get("severity").and_then(|s| s.as_str()) {
+                            Some("error") | Some("fatal") => DiagnosticSeverity::Error,
+                            Some("information") | Some("hint") => DiagnosticSeverity::Information,
+                            _ => DiagnosticSeverity::Warning,
+                        },
+                        message: item
+                            .get("description")
+                            .and_then(|d| d.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        source: Some(source.to_string()),
+                        code: item
+                            .get("category")
+                            .and_then(|c| c.as_str())
+                            .map(|c| c.to_string()),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
 // Whole-project diagnostics
 // ---------------------------------------------------------------------------
 
@@ -3252,7 +3410,7 @@ impl LspManager {
     pub fn primary_server_for_file(&self, file_path: &str) -> Option<&LspServerConfig> {
         self.servers_for_file(file_path)
             .into_iter()
-            .find(|c| !c.is_linter)
+            .find(|c| !c.is_linter && c.lint_output.is_none())
     }
 
     /// Find the first server name that handles `file_path`.
@@ -3300,6 +3458,13 @@ impl LspManager {
                     "language server '{server_name}' is switched off"
                 ));
             }
+            if config.lint_output.is_some() {
+                // Starting one as a server would hang: it prints its report
+                // and exits without ever answering a handshake.
+                return Err(anyhow::anyhow!(
+                    "'{server_name}' is a command-line linter, not a language server"
+                ));
+            }
 
             let started = match LspClient::start_in(config, root_dir).await {
                 Ok(mut client) => {
@@ -3344,7 +3509,7 @@ impl LspManager {
         let names: Vec<String> = self
             .configs
             .iter()
-            .filter(|c| !c.disabled)
+            .filter(|c| !c.disabled && c.lint_output.is_none())
             .map(|c| c.name.clone())
             .collect();
         for name in names {
@@ -3364,6 +3529,7 @@ impl LspManager {
         let names: Vec<String> = self
             .servers_for_file(file_path)
             .iter()
+            .filter(|c| c.lint_output.is_none())
             .map(|c| c.name.clone())
             .collect();
         if names.is_empty() {
@@ -3974,11 +4140,27 @@ impl LspManager {
         wait: std::time::Duration,
     ) -> Vec<LspDiagnostic> {
         let uri = path_to_uri(file_path);
+        // A command-line linter is not a server and is run rather than asked.
+        let cli_linters: Vec<LspServerConfig> = self
+            .servers_for_file(file_path)
+            .iter()
+            .filter(|c| c.lint_output.is_some())
+            .map(|c| (*c).clone())
+            .collect();
         let names: Vec<String> = self
             .servers_for_file(file_path)
             .iter()
+            .filter(|c| c.lint_output.is_none())
             .map(|c| c.name.clone())
             .collect();
+
+        let mut from_linters: Vec<LspDiagnostic> = Vec::new();
+        for linter in &cli_linters {
+            match run_cli_linter(linter, file_path, root_dir).await {
+                Ok(diagnostics) => from_linters.extend(diagnostics),
+                Err(e) => tracing::debug!("{}: {e}", linter.name),
+            }
+        }
 
         // The version each server was on before the file was sent.
         let mut before: Vec<(String, u64)> = Vec::new();
@@ -3989,7 +4171,8 @@ impl LspManager {
             }
         }
         if before.is_empty() {
-            return Vec::new();
+            dedupe_and_sort(&mut from_linters);
+            return from_linters;
         }
 
         if let Err(e) = self.sync_file(file_path, root_dir).await {
@@ -4040,6 +4223,7 @@ impl LspManager {
             .flat_map(|client| client.get_diagnostics(file_path))
             .collect();
         collected.extend(pulled);
+        collected.extend(from_linters);
         dedupe_and_sort(&mut collected);
         collected
     }
@@ -4182,6 +4366,7 @@ mod tests {
             request_timeout_ms: None,
             capabilities: LspServerCapabilities::default(),
             workspace_ready_timings: None,
+            lint_output: None,
         }
     }
 
@@ -5321,6 +5506,73 @@ mod tests {
     }
 
     // ---- Whole-project checks ---------------------------------------------
+
+    // ---- Command-line linters --------------------------------------------
+
+    #[test]
+    fn a_command_line_linter_is_never_started_as_a_server() {
+        // Starting one would hang: it prints its report and exits without
+        // answering a handshake.
+        // `is_linter` is deliberately left false: the report format alone has
+        // to keep it out of the navigation path.
+        let mut linter = make_config("swiftlint");
+        linter.lint_output = Some(LintOutputFormat::Swiftlint);
+        let mut mgr = LspManager::new();
+        mgr.register_server(linter);
+        mgr.register_server(make_config("rust-analyzer"));
+
+        // It still answers for the file, because diagnostics run it.
+        assert_eq!(mgr.servers_for_file("a.rs").len(), 2);
+        // But it is never the server a navigation request reaches.
+        assert_eq!(
+            mgr.primary_server_for_file("a.rs").map(|c| c.name.as_str()),
+            Some("rust-analyzer")
+        );
+    }
+
+    #[test]
+    fn a_swiftlint_report_is_read() {
+        let report = json!([{
+            "file": "/tmp/A.swift",
+            "line": 12,
+            "character": 5,
+            "severity": "Warning",
+            "reason": "Line should be 120 characters or less",
+            "rule_id": "line_length"
+        }]);
+        let diagnostics = parse_swiftlint(&report, "swiftlint");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].line, 12);
+        assert_eq!(diagnostics[0].column, 5);
+        assert_eq!(diagnostics[0].severity, DiagnosticSeverity::Warning);
+        assert_eq!(diagnostics[0].code.as_deref(), Some("line_length"));
+    }
+
+    #[test]
+    fn a_biome_report_is_read() {
+        let report = json!({
+            "diagnostics": [{
+                "location": { "path": { "file": "/tmp/a.ts" }, "span": [42, 50] },
+                "severity": "error",
+                "description": "unused variable",
+                "category": "lint/correctness/noUnusedVariables"
+            }]
+        });
+        let diagnostics = parse_biome(&report, "biome");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].severity, DiagnosticSeverity::Error);
+        assert_eq!(diagnostics[0].message, "unused variable");
+    }
+
+    #[tokio::test]
+    async fn a_linter_that_is_not_installed_says_so() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut linter = make_config("nowhere-lint");
+        linter.command = "no-such-linter-anywhere".to_string();
+        linter.lint_output = Some(LintOutputFormat::Swiftlint);
+        let error = error_of(run_cli_linter(&linter, "a.swift", dir.path()).await);
+        assert!(error.contains("not installed"), "{error}");
+    }
 
     #[test]
     fn a_project_is_recognised_by_its_marker() {

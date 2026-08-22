@@ -162,11 +162,19 @@ impl Tool for FileEditTool {
 
         // Build a diff snippet for the response
         let replacements = if params.replace_all { count } else { 1 };
+        // What the language server makes of the edit, appended to the result:
+        // the model otherwise learns that its edit does not compile only if it
+        // asks, and it usually does not.
+        let lsp_note = crate::lsp_after_write::report_after_write(&path.to_string_lossy(), ctx)
+            .await
+            .map(|note| format!("\n{note}"))
+            .unwrap_or_default();
         let msg = format!(
-            "Successfully edited {} ({} replacement{}).",
+            "Successfully edited {} ({} replacement{}).{}",
             path.display(),
             replacements,
-            if replacements != 1 { "s" } else { "" }
+            if replacements != 1 { "s" } else { "" },
+            lsp_note
         );
 
         mikmik_plugins::run_global_hook(

@@ -40,6 +40,7 @@ pub mod glob_tool;
 pub mod goal_complete;
 pub mod grep_tool;
 pub mod line_endings;
+pub mod lsp_after_write;
 pub mod lsp_tool;
 pub mod mcp_auth_tool;
 pub mod mcp_resources;

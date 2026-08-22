@@ -1412,6 +1412,24 @@ pub mod config {
         /// is a choice rather than a default.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub lsp_idle_timeout_ms: Option<u64>,
+        /// Report new language-server problems after a file is written.
+        /// Defaults to on.
+        ///
+        /// The model otherwise learns that its edit does not compile only if
+        /// it runs a build or asks for diagnostics itself, which it usually
+        /// does not. Only problems that were not reported for that file before
+        /// are shown.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub lsp_diagnostics_on_write: Option<bool>,
+        /// Format a file with its language server after writing it. Defaults
+        /// to off.
+        ///
+        /// Off because it rewrites the file: a server configured differently
+        /// from the project's own formatter would reformat every file the
+        /// session touches. The `formatter` setting runs the project's own
+        /// tool and is the safer choice.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub lsp_format_on_write: Option<bool>,
         pub allowed_tools: Vec<String>,
         pub disallowed_tools: Vec<String>,
         pub env: HashMap<String, String>,
@@ -2400,6 +2418,18 @@ pub mod config {
                 .map(std::time::Duration::from_millis)
         }
 
+        /// Whether a write reports the new problems it introduced. Unset means
+        /// yes: an edit that does not compile is worth knowing about at once.
+        pub fn effective_lsp_diagnostics_on_write(&self) -> bool {
+            self.lsp_diagnostics_on_write.unwrap_or(true)
+        }
+
+        /// Whether a write is formatted by the language server. Unset means
+        /// no, because it rewrites the file.
+        pub fn effective_lsp_format_on_write(&self) -> bool {
+            self.lsp_format_on_write.unwrap_or(false)
+        }
+
         /// Whether `CLAUDE.md` files are read. Unset means no, so an update
         /// does not start injecting a file the session never read before.
         pub fn effective_claude_md_enabled(&self) -> bool {
@@ -3273,6 +3303,16 @@ pub mod config {
                 // How long a process on the user's machine lives is theirs to
                 // decide, like the switch above.
                 lsp_idle_timeout_ms: base.config.lsp_idle_timeout_ms,
+                // These two only change what a tool reports and whether a
+                // formatter runs, so a project may set them.
+                lsp_diagnostics_on_write: over
+                    .config
+                    .lsp_diagnostics_on_write
+                    .or(base.config.lsp_diagnostics_on_write),
+                lsp_format_on_write: over
+                    .config
+                    .lsp_format_on_write
+                    .or(base.config.lsp_format_on_write),
                 lsp_servers: {
                     let mut v = base.config.lsp_servers;
                     if allow_runnables {

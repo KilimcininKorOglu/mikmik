@@ -517,6 +517,8 @@ under `<project>/.mikmik/plugins/`) needs approval before it launches; see
 | `lsp_servers`          | array of `LspServerConfig` | []      | Language servers the LSP tool may use. Field list in [tools.md#lsp](tools.md#lsp). |
 | `lsp_auto_detect`      | boolean                    | true    | Consult the bundled catalogue of language servers.                             |
 | `lsp_idle_timeout_ms`  | number                     | unset   | Stop a language server after this long without a request.                      |
+| `lsp_diagnostics_on_write` | boolean                | true    | Append the language server's new problems to the result of a write.            |
+| `lsp_format_on_write`  | boolean                    | false   | Format a file with its language server after writing it.                       |
 
 With `lsp_auto_detect` on, a catalogue server is used only when both are true:
 the working directory carries one of the server's root markers, and the
@@ -551,6 +553,24 @@ the whole session slow.
 
 One server runs per working directory, not per name, because a server is
 initialized for one workspace root and answers against it.
+
+**After a write.** With `lsp_diagnostics_on_write` on, a `Write` or `Edit`
+carries the language server's verdict on the file back with it, so the model
+learns that its edit does not compile without running a build. Only problems
+that were not reported for that file before are shown, and a problem whose line
+number moved is not treated as new. The write waits at most 700 ms for the
+answer, and a missing or slow server never turns a successful write into a
+failed one.
+
+`lsp_format_on_write` is off by default because it rewrites the file: a server
+configured differently from the project's own formatter would reformat every
+file the session touches. The [`formatter`](#tool-behaviour) setting runs the
+project's own tool and is the safer choice. When on, the indent width and
+whether tabs or spaces are used are read from the file itself, not from a
+setting, so formatting one file does not re-indent it.
+
+Both rows appear in the settings screen, as **Report problems after a write**
+and **Format with the language server**.
 
 ### Environment variables injected into tools
 

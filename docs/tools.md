@@ -129,6 +129,10 @@ Write content to a file. Creates the file and any missing parent directories. Ov
 
 The previous content is stored, so `/undo` can put it back.
 
+When a language server serves the file, the result also carries the problems the
+write introduced, and the file can be formatted by that server first. Both are
+settings; see [configuration.md#language-servers](configuration.md#language-servers).
+
 ---
 
 ### Edit
@@ -145,6 +149,10 @@ Perform an exact string replacement within an existing file. Fails if `old_strin
 | `replace_all` | boolean | no       | Replace all occurrences (default: false) |
 
 Whitespace and indentation must match exactly.
+
+When a language server serves the file, the result also carries the problems the
+write introduced, and the file can be formatted by that server first. Both are
+settings; see [configuration.md#language-servers](configuration.md#language-servers).
 
 ---
 

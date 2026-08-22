@@ -89,6 +89,8 @@ pub struct SettingsScreen {
     pub agents_md: bool,
     pub claude_md: bool,
     pub lsp_auto_detect: bool,
+    pub lsp_diagnostics_on_write: bool,
+    pub lsp_format_on_write: bool,
     pub notifications: bool,
     pub notify_on_question: bool,
     pub notify_on_plan_ready: bool,
@@ -146,6 +148,8 @@ impl SettingsScreen {
             agents_md: true,
             claude_md: false,
             lsp_auto_detect: true,
+            lsp_diagnostics_on_write: true,
+            lsp_format_on_write: false,
             notifications: true,
             notify_on_question: true,
             notify_on_plan_ready: true,
@@ -556,6 +560,21 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
                     .into(),
             kind: SettingKind::Bool,
             value: if screen.lsp_auto_detect { "true" } else { "false" }.to_string(),
+        },
+        SettingsEntry {
+            key: "lsp_diagnostics_on_write".into(),
+            label: "Report problems after a write".into(),
+            description: "Append the language server's new problems to the result of a write."
+                .into(),
+            kind: SettingKind::Bool,
+            value: if screen.lsp_diagnostics_on_write { "true" } else { "false" }.to_string(),
+        },
+        SettingsEntry {
+            key: "lsp_format_on_write".into(),
+            label: "Format with the language server".into(),
+            description: "Format a file with its language server after writing it.".into(),
+            kind: SettingKind::Bool,
+            value: if screen.lsp_format_on_write { "true" } else { "false" }.to_string(),
         },
         SettingsEntry {
             key: "auto_memory".into(),
@@ -1323,6 +1342,14 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                         // Config-level only: the tool reads the nested key and
                         // there is no flat twin to keep in step.
                         screen.settings_snapshot.config.lsp_auto_detect = Some(new_value);
+                    }
+                    "lsp_diagnostics_on_write" => {
+                        screen.lsp_diagnostics_on_write = new_value;
+                        screen.settings_snapshot.config.lsp_diagnostics_on_write = Some(new_value);
+                    }
+                    "lsp_format_on_write" => {
+                        screen.lsp_format_on_write = new_value;
+                        screen.settings_snapshot.config.lsp_format_on_write = Some(new_value);
                     }
                     "auto_memory" => {
                         screen.auto_memory = new_value;

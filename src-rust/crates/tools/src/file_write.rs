@@ -131,12 +131,21 @@ impl Tool for FileWriteTool {
         )
         .await;
 
+        // What the language server makes of the file, appended to the result:
+        // the model otherwise learns that its write does not compile only if
+        // it asks, and it usually does not.
+        let lsp_note = crate::lsp_after_write::report_after_write(&path.to_string_lossy(), ctx)
+            .await
+            .map(|note| format!("\n{note}"))
+            .unwrap_or_default();
+
         ToolResult::success(format!(
-            "{} {} ({} lines, {} bytes)",
+            "{} {} ({} lines, {} bytes){}",
             action,
             path.display(),
             line_count,
-            byte_count
+            byte_count,
+            lsp_note
         ))
         .with_metadata(json!({
             "file_path": path.display().to_string(),

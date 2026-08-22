@@ -2271,6 +2271,8 @@ async fn run_headless(
         .await
         .shutdown_all()
         .await;
+    // Which problems this session already reported is session state too.
+    mikmik_tools::lsp_after_write::forget_session(&tool_ctx.session_id).await;
     // The auto-compact circuit breaker is keyed by session, so it has to be
     // dropped here or a long-lived process keeps one entry per session it ran.
     mikmik_query::compact::forget_compact_state(&tool_ctx.session_id);
@@ -6756,6 +6758,8 @@ async fn run_interactive(
         .await
         .shutdown_all()
         .await;
+    // Which problems this session already reported is session state too.
+    mikmik_tools::lsp_after_write::forget_session(&tool_ctx.session_id).await;
     // The auto-compact circuit breaker is keyed by session, so it has to be
     // dropped here or a long-lived process keeps one entry per session it ran.
     mikmik_query::compact::forget_compact_state(&tool_ctx.session_id);

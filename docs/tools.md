@@ -978,7 +978,78 @@ both match and the winner would depend on their order. A project-supplied
 server names a binary to run, so it is only taken after you approve the
 project's settings.
 
-If no LSP server is configured for a file, the tool says so. The tool resolves relative paths against the current working directory.
+**Detection.** Nothing has to be configured for a common project. The binary
+ships with a catalogue of language servers, and a catalogue server is used when
+the working directory carries one of its root markers and its binary resolves.
+Switch the catalogue off with `"lsp_auto_detect": false`, or from the
+**Detect language servers** row in the settings screen. See
+[configuration.md#language-servers](configuration.md#language-servers) for where
+the binary is looked for.
+
+When no server answers, the tool names the reason for each server that could
+have served the file: the marker is missing, the binary is not installed, or
+the entry is switched off.
+
+**The catalogue.**
+
+| Server                        | Files                          | Binary                            |
+|-------------------------------|--------------------------------|-----------------------------------|
+| `rust-analyzer`               | Rust                           | `rust-analyzer`                   |
+| `clangd`                      | C, C++, Objective-C            | `clangd`                          |
+| `zls`                         | Zig                            | `zls`                             |
+| `gopls`                       | Go                             | `gopls`                           |
+| `typescript-language-server`  | TypeScript, JavaScript         | `typescript-language-server`      |
+| `denols`                      | TypeScript, JavaScript (Deno)  | `deno`                            |
+| `biome`                       | TS/JS/JSON/CSS (linter)        | `biome`                           |
+| `eslint`                      | TS/JS/Vue/Svelte (linter)      | `vscode-eslint-language-server`   |
+| `vscode-html-language-server` | HTML                           | `vscode-html-language-server`     |
+| `vscode-css-language-server`  | CSS, SCSS, Sass, Less          | `vscode-css-language-server`      |
+| `vscode-json-language-server` | JSON                           | `vscode-json-language-server`     |
+| `tailwindcss`                 | HTML, CSS, TS/JS, Vue, Svelte  | `tailwindcss-language-server`     |
+| `svelte`                      | Svelte                         | `svelteserver`                    |
+| `vue-language-server`         | Vue                            | `vue-language-server`             |
+| `astro`                       | Astro                          | `astro-ls`                        |
+| `pyright`                     | Python                         | `pyright-langserver`              |
+| `basedpyright`                | Python                         | `basedpyright-langserver`         |
+| `pylsp`                       | Python                         | `pylsp`                           |
+| `ty`                          | Python                         | `ty`                              |
+| `ruff`                        | Python (linter)                | `ruff`                            |
+| `jdtls`                       | Java                           | `jdtls`                           |
+| `kotlin-lsp`                  | Kotlin                         | `kotlin-lsp`                      |
+| `metals`                      | Scala                          | `metals`                          |
+| `hls`                         | Haskell                        | `haskell-language-server-wrapper` |
+| `ocamllsp`                    | OCaml                          | `ocamllsp`                        |
+| `elixirls`                    | Elixir                         | `elixir-ls`                       |
+| `expert`                      | Elixir                         | `expert`                          |
+| `erlangls`                    | Erlang                         | `erlang_ls`                       |
+| `gleam`                       | Gleam                          | `gleam`                           |
+| `solargraph`                  | Ruby                           | `solargraph`                      |
+| `ruby-lsp`                    | Ruby                           | `ruby-lsp`                        |
+| `rubocop`                     | Ruby (linter)                  | `rubocop`                         |
+| `bashls`                      | Bash, Zsh                      | `bash-language-server`            |
+| `lua-language-server`         | Lua                            | `lua-language-server`             |
+| `intelephense`                | PHP                            | `intelephense`                    |
+| `phpactor`                    | PHP                            | `phpactor`                        |
+| `omnisharp`                   | C#                             | `omnisharp`                       |
+| `yamlls`                      | YAML                           | `yaml-language-server`            |
+| `terraformls`                 | Terraform                      | `terraform-ls`                    |
+| `dockerls`                    | Dockerfile                     | `docker-langserver`               |
+| `helm-ls`                     | Helm templates                 | `helm_ls`                         |
+| `nixd`                        | Nix                            | `nixd`                            |
+| `nil`                         | Nix                            | `nil`                             |
+| `ols`                         | Odin                           | `ols`                             |
+| `dartls`                      | Dart                           | `dart`                            |
+| `marksman`                    | Markdown                       | `marksman`                        |
+| `texlab`                      | LaTeX, BibTeX                  | `texlab`                          |
+| `graphql`                     | GraphQL                        | `graphql-lsp`                     |
+| `prismals`                    | Prisma                         | `prisma-language-server`          |
+| `vimls`                       | Vim script                     | `vim-language-server`             |
+| `emmet-language-server`       | HTML, CSS, JSX, Vue, Svelte    | `emmet-language-server`           |
+| `sourcekit-lsp`               | Swift                          | `sourcekit-lsp`                   |
+| `swiftlint`                   | Swift (linter)                 | `swiftlint`                       |
+| `tlaplus`                     | TLA+                           | `tlapm_lsp`                       |
+
+The tool resolves relative paths against the current working directory.
 
 ---
 

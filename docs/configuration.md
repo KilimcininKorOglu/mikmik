@@ -510,6 +510,33 @@ that came with the project (from `<project>/.mikmik/settings.json` or a plugin
 under `<project>/.mikmik/plugins/`) needs approval before it launches; see
 [Plugins](plugins.md#mcp_servers).
 
+### Language servers
+
+| Key               | Type                       | Default | Description                                                                    |
+|-------------------|----------------------------|---------|--------------------------------------------------------------------------------|
+| `lsp_servers`     | array of `LspServerConfig` | []      | Language servers the LSP tool may use. Field list in [tools.md#lsp](tools.md#lsp). |
+| `lsp_auto_detect` | boolean                    | true    | Consult the bundled catalogue of language servers.                             |
+
+With `lsp_auto_detect` on, a catalogue server is used only when both are true:
+the working directory carries one of the server's root markers, and the
+server's binary resolves. So a machine with no language server installed starts
+nothing, and a directory that is not a Rust project never starts a Rust server.
+
+The binary is looked for in the project's own bin directories first
+(`node_modules/.bin`, `.venv/bin`, `.venv/Scripts`, `venv/bin`, Ruby binstubs
+in `bin` and `vendor/bundle/bin`, Go's `bin`), then on `PATH`. A project pins
+its tooling, and the pinned copy is the one that matches the project's
+configuration.
+
+An `lsp_servers` entry whose `name` matches a catalogue server replaces it, so
+overriding one binary or one argument does not mean copying the whole entry.
+
+`lsp_auto_detect` is taken from the user's settings alone. A project's
+settings file cannot switch it on, because detection starts a process and the
+markers that trigger it are files the repository itself carries.
+
+The settings screen has a **Detect language servers** row for the same key.
+
 ### Environment variables injected into tools
 
 | Key   | Type                     | Default | Description                                                                                                                                                                                                         |

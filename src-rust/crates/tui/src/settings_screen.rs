@@ -88,6 +88,7 @@ pub struct SettingsScreen {
     pub auto_memory: bool,
     pub agents_md: bool,
     pub claude_md: bool,
+    pub lsp_auto_detect: bool,
     pub notifications: bool,
     pub notify_on_question: bool,
     pub notify_on_plan_ready: bool,
@@ -144,6 +145,7 @@ impl SettingsScreen {
             auto_memory: false,
             agents_md: true,
             claude_md: false,
+            lsp_auto_detect: true,
             notifications: true,
             notify_on_question: true,
             notify_on_plan_ready: true,
@@ -193,6 +195,7 @@ impl SettingsScreen {
         );
         self.agents_md = filenames.agents_md;
         self.claude_md = filenames.claude_md;
+        self.lsp_auto_detect = self.settings_snapshot.config.effective_lsp_auto_detect();
         self.notifications = self.settings_snapshot.notifications;
         self.notify_on_question = self.settings_snapshot.notify_on_question;
         self.notify_on_plan_ready = self.settings_snapshot.notify_on_plan_ready;
@@ -544,6 +547,15 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             description: "Automatically compact turns at threshold.".into(),
             kind: SettingKind::Bool,
             value: if screen.auto_compact { "true" } else { "false" }.to_string(),
+        },
+        SettingsEntry {
+            key: "lsp_auto_detect".into(),
+            label: "Detect language servers".into(),
+            description:
+                "Start a bundled language server when the project has its marker and its binary."
+                    .into(),
+            kind: SettingKind::Bool,
+            value: if screen.lsp_auto_detect { "true" } else { "false" }.to_string(),
         },
         SettingsEntry {
             key: "auto_memory".into(),
@@ -1305,6 +1317,12 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                         // The query loop reads the nested key, so write both or
                         // the toggle saves somewhere the session never looks.
                         screen.settings_snapshot.config.auto_compact = Some(new_value);
+                    }
+                    "lsp_auto_detect" => {
+                        screen.lsp_auto_detect = new_value;
+                        // Config-level only: the tool reads the nested key and
+                        // there is no flat twin to keep in step.
+                        screen.settings_snapshot.config.lsp_auto_detect = Some(new_value);
                     }
                     "auto_memory" => {
                         screen.auto_memory = new_value;

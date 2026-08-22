@@ -318,6 +318,171 @@ impl LspServerConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Discovery: finding the binary and recognising the project
+// ---------------------------------------------------------------------------
+
+/// A project-local directory that holds installed executables, and the files
+/// that say the project uses it.
+struct LocalBinDir {
+    markers: &'static [&'static str],
+    bin_dir: &'static str,
+}
+
+/// Where a language server is installed by the project's own package manager.
+///
+/// A project pins its tooling, and the pinned copy is the one that matches the
+/// project's configuration. Searching `PATH` first would run a different
+/// version, or none at all when nothing is installed globally.
+const LOCAL_BIN_DIRS: &[LocalBinDir] = &[
+    LocalBinDir {
+        markers: &[
+            "package.json",
+            "package-lock.json",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+            "bun.lockb",
+        ],
+        bin_dir: "node_modules/.bin",
+    },
+    LocalBinDir {
+        markers: PYTHON_ROOT_MARKERS,
+        bin_dir: ".venv/bin",
+    },
+    LocalBinDir {
+        markers: PYTHON_ROOT_MARKERS,
+        bin_dir: ".venv/Scripts",
+    },
+    LocalBinDir {
+        markers: PYTHON_ROOT_MARKERS,
+        bin_dir: "venv/bin",
+    },
+    LocalBinDir {
+        markers: &["Gemfile", "Gemfile.lock"],
+        bin_dir: "bin",
+    },
+    LocalBinDir {
+        markers: &["Gemfile", "Gemfile.lock"],
+        bin_dir: "vendor/bundle/bin",
+    },
+    LocalBinDir {
+        markers: &["go.mod", "go.work"],
+        bin_dir: "bin",
+    },
+];
+
+const PYTHON_ROOT_MARKERS: &[&str] = &[
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "requirements.txt",
+    "Pipfile",
+];
+
+/// Executable suffixes to try on Windows, where a package manager writes a
+/// launcher rather than the program itself.
+#[cfg(windows)]
+const EXECUTABLE_SUFFIXES: &[&str] = &["", ".exe", ".cmd", ".bat", ".ps1"];
+#[cfg(not(windows))]
+const EXECUTABLE_SUFFIXES: &[&str] = &[""];
+
+/// Resolve `command` to an executable, project-local copies first.
+///
+/// An absolute or relative path is taken as given. A bare name is looked for in
+/// the project's own bin directories, then on `PATH`. `None` means the server
+/// is not installed, which is the ordinary case for a catalogue entry that does
+/// not apply to this machine.
+pub fn resolve_command(command: &str, cwd: &Path) -> Option<std::path::PathBuf> {
+    if command.contains('/') || command.contains('\\') {
+        let path = if Path::new(command).is_absolute() {
+            std::path::PathBuf::from(command)
+        } else {
+            cwd.join(command)
+        };
+        return path.is_file().then_some(path);
+    }
+
+    for local in LOCAL_BIN_DIRS {
+        if !local.markers.iter().any(|m| cwd.join(m).exists()) {
+            continue;
+        }
+        let dir = cwd.join(local.bin_dir);
+        for suffix in EXECUTABLE_SUFFIXES {
+            let candidate = dir.join(format!("{command}{suffix}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    which::which(command).ok()
+}
+
+/// The server definitions that ship with the binary.
+const BUNDLED_SERVERS: &str = include_str!("../assets/lsp-servers.json");
+
+/// Every server the catalogue knows.
+///
+/// A malformed catalogue is a build-time mistake rather than a user's, and a
+/// session must still start, so a parse failure yields an empty list and says
+/// so in the log.
+pub fn builtin_servers() -> &'static [LspServerConfig] {
+    static SERVERS: once_cell::sync::Lazy<Vec<LspServerConfig>> =
+        once_cell::sync::Lazy::new(|| match serde_json::from_str(BUNDLED_SERVERS) {
+            Ok(servers) => servers,
+            Err(e) => {
+                tracing::error!("bundled LSP server catalogue is malformed: {e}");
+                Vec::new()
+            }
+        });
+    &SERVERS
+}
+
+/// The catalogue servers that suit the project in `cwd`.
+///
+/// A server is detected when the directory carries one of its root markers and
+/// its binary resolves. Both conditions matter: the marker says the project
+/// uses the language, and the binary says the machine can serve it. Detecting
+/// on the marker alone would fill the list with servers that fail to start.
+///
+/// The search is the working directory only. A marker in a parent says the
+/// parent is a project, not this directory.
+pub fn detect_servers(cwd: &Path) -> Vec<LspServerConfig> {
+    builtin_servers()
+        .iter()
+        .filter(|server| !server.root_markers.is_empty())
+        .filter(|server| has_root_markers(cwd, &server.root_markers))
+        .filter(|server| resolve_command(&server.command, cwd).is_some())
+        .cloned()
+        .collect()
+}
+
+/// Whether `dir` holds at least one of `markers`.
+///
+/// A marker may carry a one-level wildcard, `*.cabal`, which matches an entry
+/// directly inside `dir`. The search never walks into a subdirectory: a marker
+/// found three levels down says nothing about the directory the session opened.
+pub fn has_root_markers(dir: &Path, markers: &[String]) -> bool {
+    markers.iter().any(|marker| {
+        if let Some(suffix) = marker.strip_prefix("*.") {
+            let suffix = format!(".{}", suffix.to_lowercase());
+            std::fs::read_dir(dir)
+                .map(|entries| {
+                    entries.flatten().any(|entry| {
+                        entry
+                            .file_name()
+                            .to_string_lossy()
+                            .to_lowercase()
+                            .ends_with(&suffix)
+                    })
+                })
+                .unwrap_or(false)
+        } else {
+            dir.join(marker).exists()
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Diagnostics
 // ---------------------------------------------------------------------------
 
@@ -1131,6 +1296,8 @@ pub struct LspManager {
     clients: HashMap<String, LspClient>,
     /// Set of file URIs that have been opened on a specific server (URI → server name)
     opened_files: HashMap<String, String>,
+    /// Directories already scanned for catalogue servers.
+    detected_roots: std::collections::HashSet<std::path::PathBuf>,
 }
 
 impl LspManager {
@@ -1139,6 +1306,7 @@ impl LspManager {
             configs: Vec::new(),
             clients: HashMap::new(),
             opened_files: HashMap::new(),
+            detected_roots: std::collections::HashSet::new(),
         }
     }
 
@@ -1307,6 +1475,35 @@ impl LspManager {
         for cfg in configs {
             self.register_server(cfg.clone());
         }
+    }
+
+    /// Register the catalogue servers that suit `cwd`.
+    ///
+    /// Scans a directory once, because the scan reads the directory and looks
+    /// for a binary, and neither answer changes inside a session.
+    ///
+    /// Call this **before** [`Self::seed_from_config`]: a user entry of the
+    /// same name has to replace the catalogue's, not the other way round.
+    pub fn seed_detected(&mut self, cwd: &Path) {
+        if !self.detected_roots.insert(cwd.to_path_buf()) {
+            return;
+        }
+        for server in detect_servers(cwd) {
+            tracing::debug!(
+                "detected language server '{}' for {}",
+                server.name,
+                cwd.display()
+            );
+            self.register_server(server);
+        }
+    }
+
+    /// Forget which directories were scanned, so the next call re-detects.
+    ///
+    /// A project gains a marker or the user installs a server mid-session, and
+    /// nothing else would notice.
+    pub fn forget_detection(&mut self) {
+        self.detected_roots.clear();
     }
 
     /// Get hover information for `file_path` at the given 1-based position.
@@ -1832,5 +2029,221 @@ mod tests {
     fn test_parse_diagnostic_missing_range_returns_none() {
         let raw = serde_json::json!({ "message": "oops" });
         assert!(parse_diagnostic(&raw, "f.rs", "lsp").is_none());
+    }
+
+    // ---- Discovery -------------------------------------------------------
+
+    fn touch(path: &Path) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create dir");
+        }
+        std::fs::write(path, "").expect("write");
+    }
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).expect("chmod");
+    }
+
+    #[test]
+    fn a_project_local_binary_wins_over_the_path() {
+        // A project pins its tooling. Reaching for the global copy would run a
+        // different version, or nothing at all.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        touch(&root.join("package.json"));
+        let local = root.join("node_modules/.bin/typescript-language-server");
+        touch(&local);
+        #[cfg(unix)]
+        make_executable(&local);
+
+        let found = resolve_command("typescript-language-server", root).expect("resolved");
+        assert_eq!(found, local);
+    }
+
+    #[test]
+    fn a_local_directory_without_its_marker_is_not_searched() {
+        // `node_modules/.bin` inside a directory that is not a Node project is
+        // a leftover, not this project's tooling.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let local = root.join("node_modules/.bin/some-unlikely-server-name");
+        touch(&local);
+
+        assert!(resolve_command("some-unlikely-server-name", root).is_none());
+    }
+
+    #[test]
+    fn a_path_is_taken_as_given() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let server = root.join("tools/my-ls");
+        touch(&server);
+
+        assert_eq!(
+            resolve_command("tools/my-ls", root).expect("resolved"),
+            server
+        );
+        assert!(resolve_command("tools/missing-ls", root).is_none());
+    }
+
+    #[test]
+    fn a_missing_binary_is_reported_rather_than_guessed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(resolve_command("a-server-nobody-installed", dir.path()).is_none());
+    }
+
+    #[test]
+    fn a_root_marker_is_matched_in_the_directory_itself() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        touch(&root.join("Cargo.toml"));
+
+        assert!(has_root_markers(root, &["Cargo.toml".to_string()]));
+        assert!(!has_root_markers(root, &["go.mod".to_string()]));
+    }
+
+    #[test]
+    fn a_wildcard_marker_matches_one_level_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        touch(&root.join("project.cabal"));
+        touch(&root.join("nested/deep.cabal"));
+
+        assert!(has_root_markers(root, &["*.cabal".to_string()]));
+        // The nested copy alone must not count, or every parent of a project
+        // would look like a project.
+        assert!(!has_root_markers(
+            &root.join("other"),
+            &["*.cabal".to_string()]
+        ));
+    }
+
+    #[test]
+    fn no_marker_means_no_match() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(!has_root_markers(dir.path(), &[]));
+    }
+
+    // ---- The bundled catalogue -------------------------------------------
+
+    #[test]
+    fn the_catalogue_parses() {
+        // A malformed catalogue would silently leave every project without a
+        // server, because the parse failure is swallowed to keep sessions
+        // starting.
+        let servers = builtin_servers();
+        assert!(servers.len() > 40, "only {} servers parsed", servers.len());
+        assert!(servers.iter().any(|s| s.name == "rust-analyzer"));
+    }
+
+    #[test]
+    fn every_catalogue_entry_can_be_routed() {
+        for server in builtin_servers() {
+            assert!(!server.command.is_empty(), "{} has no command", server.name);
+            assert!(
+                !server.file_patterns.is_empty(),
+                "{} matches no file",
+                server.name
+            );
+            assert!(
+                !server.root_markers.is_empty(),
+                "{} would never be detected",
+                server.name
+            );
+            assert!(!server.disabled, "{} ships switched off", server.name);
+        }
+    }
+
+    #[test]
+    fn the_catalogue_names_each_server_once() {
+        let mut names: Vec<&str> = builtin_servers().iter().map(|s| s.name.as_str()).collect();
+        names.sort_unstable();
+        let count = names.len();
+        names.dedup();
+        assert_eq!(count, names.len(), "the catalogue repeats a name");
+    }
+
+    #[test]
+    fn detection_needs_the_marker_and_the_binary() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+
+        // Neither: nothing is detected.
+        assert!(detect_servers(root).is_empty());
+
+        // The marker alone is not enough, because the server would fail to
+        // start and the failure would surface as a broken tool rather than a
+        // missing one.
+        touch(&root.join("Cargo.toml"));
+        let detected = detect_servers(root);
+        let has_rust_analyzer = detected.iter().any(|s| s.name == "rust-analyzer");
+        assert_eq!(
+            has_rust_analyzer,
+            resolve_command("rust-analyzer", root).is_some(),
+            "detection disagreed with whether the binary resolves"
+        );
+    }
+
+    #[test]
+    fn a_local_binary_makes_a_catalogue_server_detectable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        touch(&root.join("package.json"));
+        let local = root.join("node_modules/.bin/typescript-language-server");
+        touch(&local);
+        #[cfg(unix)]
+        make_executable(&local);
+
+        let detected = detect_servers(root);
+        let server = detected
+            .iter()
+            .find(|s| s.name == "typescript-language-server")
+            .expect("detected");
+        assert!(server.handles_file("src/app.ts"));
+    }
+
+    #[test]
+    fn a_user_entry_replaces_the_catalogue_entry() {
+        // Both carry the name `rust-analyzer`, and the user's has to win.
+        let mut mgr = LspManager::new();
+        let mut catalogue = make_config("rust-analyzer");
+        catalogue.command = "rust-analyzer".to_string();
+        mgr.register_server(catalogue);
+
+        let mut mine = make_config("rust-analyzer");
+        mine.command = "/opt/ra/rust-analyzer".to_string();
+        mgr.seed_from_config(&[mine]);
+
+        assert_eq!(mgr.servers().len(), 1);
+        assert_eq!(mgr.servers()[0].command, "/opt/ra/rust-analyzer");
+    }
+
+    #[test]
+    fn a_directory_is_scanned_once() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        touch(&root.join("package.json"));
+        let local = root.join("node_modules/.bin/typescript-language-server");
+        touch(&local);
+        #[cfg(unix)]
+        make_executable(&local);
+
+        let mut mgr = LspManager::new();
+        mgr.seed_detected(root);
+        let after_first = mgr.servers().len();
+        assert!(after_first > 0, "nothing was detected");
+
+        // A second scan must not add the same servers again. Registration
+        // replaces by name, so the count is the observable part.
+        mgr.seed_detected(root);
+        assert_eq!(mgr.servers().len(), after_first);
+
+        mgr.forget_detection();
+        mgr.seed_detected(root);
+        assert_eq!(mgr.servers().len(), after_first);
     }
 }

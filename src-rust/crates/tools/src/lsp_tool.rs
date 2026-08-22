@@ -9,6 +9,60 @@ use serde_json::Value;
 
 pub struct LspTool;
 
+/// Explain why no server answered for `file_path`.
+///
+/// "No server configured" alone left the caller guessing between three very
+/// different situations: the language has no catalogue entry, the project does
+/// not look like one this server serves, or the binary is not installed. Each
+/// needs a different fix, so each is named.
+fn no_server_message(file_path: &str, cwd: &std::path::Path) -> String {
+    let candidates: Vec<&mikmik_core::lsp::LspServerConfig> = mikmik_core::lsp::builtin_servers()
+        .iter()
+        .filter(|server| server.handles_file(file_path))
+        .collect();
+
+    if candidates.is_empty() {
+        return format!(
+            "No language server handles '{file_path}'. \
+             The bundled catalogue has no entry for this file type. \
+             Add one to `lsp_servers` in your settings to serve it."
+        );
+    }
+
+    let mut reasons: Vec<String> = Vec::new();
+    for server in &candidates {
+        let has_marker = mikmik_core::lsp::has_root_markers(cwd, &server.root_markers);
+        let has_binary = mikmik_core::lsp::resolve_command(&server.command, cwd).is_some();
+        let reason = match (has_marker, has_binary) {
+            (false, false) => format!(
+                "{}: no {} in this directory, and `{}` is not installed",
+                server.name,
+                server.root_markers.join(" or "),
+                server.command
+            ),
+            (false, true) => format!(
+                "{}: no {} in this directory",
+                server.name,
+                server.root_markers.join(" or ")
+            ),
+            (true, false) => format!("{}: `{}` is not installed", server.name, server.command),
+            // Detected, so it would have answered. Reached only when the user
+            // switched detection off or disabled this entry.
+            (true, true) => format!("{}: switched off", server.name),
+        };
+        reasons.push(reason);
+    }
+
+    format!(
+        "No language server is running for '{file_path}'. The servers that could serve it:\n{}",
+        reasons
+            .iter()
+            .map(|r| format!("  - {r}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
+}
+
 #[async_trait]
 impl Tool for LspTool {
     // Gates itself: calls `ctx.check_permission_for_path` in `execute()` (#210).
@@ -95,6 +149,12 @@ impl Tool for LspTool {
         let lsp_manager_arc = mikmik_core::lsp::global_lsp_manager();
         {
             let mut manager = lsp_manager_arc.lock().await;
+            // The catalogue first, the user's entries second, so an entry
+            // naming a catalogue server replaces it rather than competing
+            // with it.
+            if ctx.config.effective_lsp_auto_detect() {
+                manager.seed_detected(&ctx.working_dir);
+            }
             manager.seed_from_config(&ctx.config.lsp_servers);
         }
 
@@ -103,12 +163,7 @@ impl Tool for LspTool {
         {
             let manager = lsp_manager_arc.lock().await;
             if manager.server_name_for_file_pub(&file_path).is_none() {
-                return ToolResult::success(format!(
-                    "No LSP server configured for '{}'. \
-                     Add a server entry to lsp_servers in your settings to enable \
-                     code intelligence for this file type.",
-                    file_path
-                ));
+                return ToolResult::success(no_server_message(&file_path, &ctx.working_dir));
             }
         }
 

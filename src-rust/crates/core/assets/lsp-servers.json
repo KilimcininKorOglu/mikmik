@@ -1,0 +1,529 @@
+[
+  {
+    "name": "rust-analyzer",
+    "command": "rust-analyzer",
+    "args": [],
+    "file_patterns": ["*.rs"],
+    "root_markers": ["Cargo.toml", "rust-analyzer.toml"],
+    "language_id": "rust",
+    "settings": { "rust-analyzer": { "checkOnSave": false } },
+    "capabilities": {
+      "flycheck": true,
+      "ssr": true,
+      "expand_macro": true,
+      "runnables": true,
+      "related_tests": true
+    }
+  },
+  {
+    "name": "clangd",
+    "command": "clangd",
+    "args": ["--background-index", "--clang-tidy", "--header-insertion=iwyu"],
+    "file_patterns": ["*.c", "*.cpp", "*.cc", "*.cxx", "*.h", "*.hpp", "*.hxx", "*.m", "*.mm"],
+    "root_markers": ["compile_commands.json", "CMakeLists.txt", ".clangd", ".clang-format"]
+  },
+  {
+    "name": "zls",
+    "command": "zls",
+    "args": [],
+    "file_patterns": ["*.zig"],
+    "root_markers": ["build.zig", "build.zig.zon", "zls.json"],
+    "language_id": "zig"
+  },
+  {
+    "name": "gopls",
+    "command": "gopls",
+    "args": ["serve"],
+    "file_patterns": ["*.go", "*.mod", "*.sum"],
+    "root_markers": ["go.mod", "go.work", "go.sum"],
+    "extension_to_language": { ".go": "go", ".mod": "go.mod", ".sum": "go.sum" },
+    "settings": {
+      "gopls": {
+        "analyses": { "unusedparams": true, "shadow": true },
+        "staticcheck": true,
+        "gofumpt": true
+      }
+    }
+  },
+  {
+    "name": "typescript-language-server",
+    "command": "typescript-language-server",
+    "args": ["--stdio"],
+    "file_patterns": ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs"],
+    "root_markers": ["package.json", "tsconfig.json", "jsconfig.json"],
+    "initialization_options": {
+      "hostInfo": "mikmik",
+      "preferences": {
+        "includeInlayParameterNameHints": "all",
+        "includeInlayVariableTypeHints": true,
+        "includeInlayFunctionParameterTypeHints": true
+      }
+    }
+  },
+  {
+    "name": "denols",
+    "command": "deno",
+    "args": ["lsp"],
+    "file_patterns": ["*.ts", "*.tsx", "*.js", "*.jsx"],
+    "root_markers": ["deno.json", "deno.jsonc", "deno.lock"],
+    "initialization_options": { "enable": true, "lint": true, "unstable": true }
+  },
+  {
+    "name": "biome",
+    "command": "biome",
+    "args": ["lsp-proxy"],
+    "file_patterns": ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs", "*.json", "*.jsonc", "*.css"],
+    "root_markers": ["biome.json", "biome.jsonc"],
+    "is_linter": true
+  },
+  {
+    "name": "eslint",
+    "command": "vscode-eslint-language-server",
+    "args": ["--stdio"],
+    "file_patterns": ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs", "*.vue", "*.svelte"],
+    "root_markers": [
+      ".eslintrc",
+      ".eslintrc.js",
+      ".eslintrc.json",
+      ".eslintrc.yml",
+      "eslint.config.js",
+      "eslint.config.mjs"
+    ],
+    "is_linter": true,
+    "settings": { "validate": "on", "run": "onType" }
+  },
+  {
+    "name": "vscode-html-language-server",
+    "command": "vscode-html-language-server",
+    "args": ["--stdio"],
+    "file_patterns": ["*.html", "*.htm"],
+    "root_markers": ["package.json"],
+    "initialization_options": { "provideFormatter": true }
+  },
+  {
+    "name": "vscode-css-language-server",
+    "command": "vscode-css-language-server",
+    "args": ["--stdio"],
+    "file_patterns": ["*.css", "*.scss", "*.sass", "*.less"],
+    "root_markers": ["package.json"],
+    "initialization_options": { "provideFormatter": true }
+  },
+  {
+    "name": "vscode-json-language-server",
+    "command": "vscode-json-language-server",
+    "args": ["--stdio"],
+    "file_patterns": ["*.json", "*.jsonc"],
+    "root_markers": ["package.json"],
+    "initialization_options": { "provideFormatter": true }
+  },
+  {
+    "name": "tailwindcss",
+    "command": "tailwindcss-language-server",
+    "args": ["--stdio"],
+    "file_patterns": ["*.html", "*.css", "*.scss", "*.js", "*.jsx", "*.ts", "*.tsx", "*.vue", "*.svelte"],
+    "root_markers": [
+      "tailwind.config.js",
+      "tailwind.config.ts",
+      "tailwind.config.mjs",
+      "tailwind.config.cjs"
+    ]
+  },
+  {
+    "name": "svelte",
+    "command": "svelteserver",
+    "args": ["--stdio"],
+    "file_patterns": ["*.svelte"],
+    "root_markers": ["svelte.config.js", "svelte.config.mjs"],
+    "language_id": "svelte"
+  },
+  {
+    "name": "vue-language-server",
+    "command": "vue-language-server",
+    "args": ["--stdio"],
+    "file_patterns": ["*.vue"],
+    "root_markers": ["vue.config.js", "nuxt.config.js", "nuxt.config.ts"],
+    "language_id": "vue"
+  },
+  {
+    "name": "astro",
+    "command": "astro-ls",
+    "args": ["--stdio"],
+    "file_patterns": ["*.astro"],
+    "root_markers": ["astro.config.mjs", "astro.config.js", "astro.config.ts"],
+    "language_id": "astro"
+  },
+  {
+    "name": "pyright",
+    "command": "pyright-langserver",
+    "args": ["--stdio"],
+    "file_patterns": ["*.py", "*.pyi"],
+    "root_markers": [
+      "pyproject.toml",
+      "pyrightconfig.json",
+      "setup.py",
+      "setup.cfg",
+      "requirements.txt",
+      "Pipfile"
+    ],
+    "language_id": "python",
+    "settings": {
+      "python": {
+        "analysis": {
+          "autoSearchPaths": true,
+          "diagnosticMode": "openFilesOnly",
+          "useLibraryCodeForTypes": true
+        }
+      }
+    }
+  },
+  {
+    "name": "basedpyright",
+    "command": "basedpyright-langserver",
+    "args": ["--stdio"],
+    "file_patterns": ["*.py", "*.pyi"],
+    "root_markers": ["pyproject.toml", "pyrightconfig.json", "setup.py", "requirements.txt"],
+    "language_id": "python",
+    "settings": {
+      "basedpyright": {
+        "analysis": {
+          "autoSearchPaths": true,
+          "diagnosticMode": "openFilesOnly",
+          "useLibraryCodeForTypes": true
+        }
+      }
+    }
+  },
+  {
+    "name": "pylsp",
+    "command": "pylsp",
+    "args": [],
+    "file_patterns": ["*.py"],
+    "root_markers": ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile"],
+    "language_id": "python"
+  },
+  {
+    "name": "ty",
+    "command": "ty",
+    "args": ["server"],
+    "file_patterns": ["*.py", "*.pyi"],
+    "root_markers": ["ty.toml", "pyproject.toml"],
+    "language_id": "python"
+  },
+  {
+    "name": "ruff",
+    "command": "ruff",
+    "args": ["server"],
+    "file_patterns": ["*.py", "*.pyi"],
+    "root_markers": ["ruff.toml", ".ruff.toml", "pyproject.toml"],
+    "language_id": "python",
+    "is_linter": true
+  },
+  {
+    "name": "jdtls",
+    "command": "jdtls",
+    "args": [],
+    "file_patterns": ["*.java"],
+    "root_markers": ["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", ".project"],
+    "language_id": "java"
+  },
+  {
+    "name": "kotlin-lsp",
+    "command": "kotlin-lsp",
+    "args": ["--stdio"],
+    "file_patterns": ["*.kt", "*.kts"],
+    "root_markers": [
+      "build.gradle",
+      "build.gradle.kts",
+      "pom.xml",
+      "settings.gradle",
+      "settings.gradle.kts"
+    ],
+    "language_id": "kotlin"
+  },
+  {
+    "name": "metals",
+    "command": "metals",
+    "args": [],
+    "file_patterns": ["*.scala", "*.sbt", "*.sc"],
+    "root_markers": ["build.sbt", "build.sc"],
+    "language_id": "scala",
+    "initialization_options": { "statusBarProvider": "show-message", "isHttpEnabled": true }
+  },
+  {
+    "name": "hls",
+    "command": "haskell-language-server-wrapper",
+    "args": ["--lsp"],
+    "file_patterns": ["*.hs", "*.lhs"],
+    "root_markers": ["stack.yaml", "cabal.project", "hie.yaml", "package.yaml", "*.cabal"],
+    "language_id": "haskell",
+    "settings": { "haskell": { "formattingProvider": "ormolu", "checkProject": true } }
+  },
+  {
+    "name": "ocamllsp",
+    "command": "ocamllsp",
+    "args": [],
+    "file_patterns": ["*.ml", "*.mli", "*.mll", "*.mly"],
+    "root_markers": ["dune-project", "dune-workspace", "*.opam", ".ocamlformat"],
+    "language_id": "ocaml"
+  },
+  {
+    "name": "elixirls",
+    "command": "elixir-ls",
+    "args": [],
+    "file_patterns": ["*.ex", "*.exs", "*.heex", "*.eex"],
+    "root_markers": ["mix.exs", "mix.lock"],
+    "language_id": "elixir",
+    "settings": { "elixirLS": { "dialyzerEnabled": true, "fetchDeps": false } }
+  },
+  {
+    "name": "expert",
+    "command": "expert",
+    "args": ["--stdio"],
+    "file_patterns": ["*.ex", "*.exs", "*.heex", "*.eex"],
+    "root_markers": ["mix.exs", "mix.lock"],
+    "language_id": "elixir"
+  },
+  {
+    "name": "erlangls",
+    "command": "erlang_ls",
+    "args": [],
+    "file_patterns": ["*.erl", "*.hrl"],
+    "root_markers": ["rebar.config", "erlang.mk", "rebar.lock"],
+    "language_id": "erlang"
+  },
+  {
+    "name": "gleam",
+    "command": "gleam",
+    "args": ["lsp"],
+    "file_patterns": ["*.gleam"],
+    "root_markers": ["gleam.toml"],
+    "language_id": "gleam"
+  },
+  {
+    "name": "solargraph",
+    "command": "solargraph",
+    "args": ["stdio"],
+    "file_patterns": ["*.rb", "*.rake", "*.gemspec"],
+    "root_markers": [".solargraph.yml", "Gemfile", "Rakefile"],
+    "language_id": "ruby",
+    "initialization_options": { "formatting": true }
+  },
+  {
+    "name": "ruby-lsp",
+    "command": "ruby-lsp",
+    "args": [],
+    "file_patterns": ["*.rb", "*.rake", "*.gemspec", "*.erb"],
+    "root_markers": ["Gemfile", ".ruby-version", ".ruby-gemset"],
+    "language_id": "ruby",
+    "initialization_options": { "formatter": "auto" }
+  },
+  {
+    "name": "rubocop",
+    "command": "rubocop",
+    "args": ["--lsp"],
+    "file_patterns": ["*.rb", "*.rake"],
+    "root_markers": [".rubocop.yml"],
+    "language_id": "ruby",
+    "is_linter": true
+  },
+  {
+    "name": "bashls",
+    "command": "bash-language-server",
+    "args": ["start"],
+    "file_patterns": ["*.sh", "*.bash", "*.zsh"],
+    "root_markers": [".git"],
+    "settings": { "bashIde": { "globPattern": "*@(.sh|.inc|.bash|.command)" } }
+  },
+  {
+    "name": "lua-language-server",
+    "command": "lua-language-server",
+    "args": [],
+    "file_patterns": ["*.lua"],
+    "root_markers": [".luarc.json", ".luarc.jsonc", ".luacheckrc", ".stylua.toml", "stylua.toml"],
+    "language_id": "lua",
+    "settings": {
+      "Lua": {
+        "workspace": { "checkThirdParty": false },
+        "telemetry": { "enable": false }
+      }
+    }
+  },
+  {
+    "name": "intelephense",
+    "command": "intelephense",
+    "args": ["--stdio"],
+    "file_patterns": ["*.php", "*.phtml"],
+    "root_markers": ["composer.json", "composer.lock"],
+    "language_id": "php"
+  },
+  {
+    "name": "phpactor",
+    "command": "phpactor",
+    "args": ["language-server"],
+    "file_patterns": ["*.php"],
+    "root_markers": ["composer.json", ".phpactor.json", ".phpactor.yml"],
+    "language_id": "php"
+  },
+  {
+    "name": "omnisharp",
+    "command": "omnisharp",
+    "args": ["-z", "--encoding", "utf-8", "--languageserver"],
+    "file_patterns": ["*.cs", "*.csx"],
+    "root_markers": ["*.sln", "*.csproj", "omnisharp.json"],
+    "language_id": "csharp",
+    "settings": {
+      "FormattingOptions": { "EnableEditorConfigSupport": true },
+      "RoslynExtensionsOptions": { "EnableAnalyzersSupport": true }
+    }
+  },
+  {
+    "name": "yamlls",
+    "command": "yaml-language-server",
+    "args": ["--stdio"],
+    "file_patterns": ["*.yaml", "*.yml"],
+    "root_markers": [".git"],
+    "language_id": "yaml",
+    "settings": {
+      "yaml": { "validate": true, "format": { "enable": true }, "hover": true, "completion": true },
+      "redhat": { "telemetry": { "enabled": false } }
+    }
+  },
+  {
+    "name": "terraformls",
+    "command": "terraform-ls",
+    "args": ["serve"],
+    "file_patterns": ["*.tf", "*.tfvars"],
+    "root_markers": [".terraform", "terraform.tfstate", "*.tf"],
+    "language_id": "terraform"
+  },
+  {
+    "name": "dockerls",
+    "command": "docker-langserver",
+    "args": ["--stdio"],
+    "file_patterns": ["*.dockerfile", "Dockerfile"],
+    "root_markers": ["Dockerfile", "docker-compose.yml", "docker-compose.yaml", ".dockerignore"],
+    "language_id": "dockerfile"
+  },
+  {
+    "name": "helm-ls",
+    "command": "helm_ls",
+    "args": ["serve"],
+    "file_patterns": ["*.tpl"],
+    "root_markers": ["Chart.yaml", "Chart.yml"],
+    "language_id": "helm"
+  },
+  {
+    "name": "nixd",
+    "command": "nixd",
+    "args": [],
+    "file_patterns": ["*.nix"],
+    "root_markers": ["flake.nix", "default.nix", "shell.nix"],
+    "language_id": "nix"
+  },
+  {
+    "name": "nil",
+    "command": "nil",
+    "args": [],
+    "file_patterns": ["*.nix"],
+    "root_markers": ["flake.nix", "default.nix", "shell.nix"],
+    "language_id": "nix"
+  },
+  {
+    "name": "ols",
+    "command": "ols",
+    "args": [],
+    "file_patterns": ["*.odin"],
+    "root_markers": ["ols.json"],
+    "language_id": "odin"
+  },
+  {
+    "name": "dartls",
+    "command": "dart",
+    "args": ["language-server", "--protocol=lsp"],
+    "file_patterns": ["*.dart"],
+    "root_markers": ["pubspec.yaml", "pubspec.lock"],
+    "language_id": "dart",
+    "initialization_options": { "closingLabels": true, "flutterOutline": true, "outline": true }
+  },
+  {
+    "name": "marksman",
+    "command": "marksman",
+    "args": ["server"],
+    "file_patterns": ["*.md", "*.markdown"],
+    "root_markers": [".marksman.toml"],
+    "language_id": "markdown",
+    "warmup_timeout_ms": 2000
+  },
+  {
+    "name": "texlab",
+    "command": "texlab",
+    "args": [],
+    "file_patterns": ["*.tex", "*.bib", "*.sty", "*.cls"],
+    "root_markers": [".latexmkrc", "latexmkrc", ".texlabroot", "texlabroot", "Tectonic.toml"],
+    "language_id": "latex",
+    "settings": { "texlab": { "chktex": { "onOpenAndSave": true } } }
+  },
+  {
+    "name": "graphql",
+    "command": "graphql-lsp",
+    "args": ["server", "-m", "stream"],
+    "file_patterns": ["*.graphql", "*.gql"],
+    "root_markers": [
+      ".graphqlrc",
+      ".graphqlrc.json",
+      ".graphqlrc.yml",
+      ".graphqlrc.yaml",
+      "graphql.config.js"
+    ],
+    "language_id": "graphql"
+  },
+  {
+    "name": "prismals",
+    "command": "prisma-language-server",
+    "args": ["--stdio"],
+    "file_patterns": ["*.prisma"],
+    "root_markers": ["schema.prisma"],
+    "language_id": "prisma"
+  },
+  {
+    "name": "vimls",
+    "command": "vim-language-server",
+    "args": ["--stdio"],
+    "file_patterns": ["*.vim", "*.vimrc"],
+    "root_markers": [".vimrc", "init.vim"],
+    "language_id": "vim",
+    "initialization_options": { "diagnostic": { "enable": true } }
+  },
+  {
+    "name": "emmet-language-server",
+    "command": "emmet-language-server",
+    "args": ["--stdio"],
+    "file_patterns": ["*.html", "*.css", "*.scss", "*.less", "*.jsx", "*.tsx", "*.vue", "*.svelte"],
+    "root_markers": ["package.json"]
+  },
+  {
+    "name": "sourcekit-lsp",
+    "command": "sourcekit-lsp",
+    "args": [],
+    "file_patterns": ["*.swift"],
+    "root_markers": ["Package.swift", "*.xcodeproj", "*.xcworkspace", "project.yml", ".swiftpm"],
+    "language_id": "swift"
+  },
+  {
+    "name": "swiftlint",
+    "command": "swiftlint",
+    "args": ["lint", "--quiet", "--reporter", "json"],
+    "file_patterns": ["*.swift"],
+    "root_markers": [".swiftlint.yml", ".swiftlint.yaml"],
+    "language_id": "swift",
+    "is_linter": true
+  },
+  {
+    "name": "tlaplus",
+    "command": "tlapm_lsp",
+    "args": ["--stdio"],
+    "file_patterns": ["*.tla", "*.tlaplus"],
+    "root_markers": ["*.tla"],
+    "language_id": "tlaplus"
+  }
+]

@@ -1390,6 +1390,18 @@ pub mod config {
         pub mcp_servers: Vec<McpServerConfig>,
         #[serde(default)]
         pub lsp_servers: Vec<crate::lsp::LspServerConfig>,
+        /// Whether the bundled server catalogue is consulted. Defaults to on.
+        ///
+        /// A catalogue server only starts when the working directory carries
+        /// one of its root markers and its binary is installed, so the default
+        /// costs nothing on a machine that has no language server. Switch it
+        /// off to run only the servers `lsp_servers` names.
+        ///
+        /// `Option` because `Config` derives `Default`, where a `bool` would
+        /// start out false; read it through
+        /// [`Config::effective_lsp_auto_detect`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub lsp_auto_detect: Option<bool>,
         pub allowed_tools: Vec<String>,
         pub disallowed_tools: Vec<String>,
         pub env: HashMap<String, String>,
@@ -2361,6 +2373,13 @@ pub mod config {
             self.agents_md_enabled.unwrap_or(true)
         }
 
+        /// Whether the bundled language-server catalogue is consulted. Unset
+        /// means yes, because detection needs both a root marker and an
+        /// installed binary, so it starts nothing a project does not use.
+        pub fn effective_lsp_auto_detect(&self) -> bool {
+            self.lsp_auto_detect.unwrap_or(true)
+        }
+
         /// Whether `CLAUDE.md` files are read. Unset means no, so an update
         /// does not start injecting a file the session never read before.
         pub fn effective_claude_md_enabled(&self) -> bool {
@@ -3226,6 +3245,11 @@ pub mod config {
                     v.extend(over.config.mcp_servers);
                     v
                 },
+                // SECURITY: taken from `base` alone. Detection starts a binary
+                // from the machine, chosen by the markers the repository's own
+                // files carry, so a repository that could switch it on would
+                // decide that a process runs.
+                lsp_auto_detect: base.config.lsp_auto_detect,
                 lsp_servers: {
                     let mut v = base.config.lsp_servers;
                     if allow_runnables {

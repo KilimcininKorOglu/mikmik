@@ -6428,6 +6428,15 @@ pub mod cost {
         pub model: String,
         pub tokens: u64,
         pub cost_usd: f64,
+        /// The rates `cost_usd` was computed from.
+        ///
+        /// Carried rather than looked up again, so a caller printing a rate
+        /// card beside the figure prints the rates that produced it. `/cost`
+        /// used to re-derive them from `ModelPricing::for_model`, which reads
+        /// a model name for `opus`, `haiku` or `free` and answers Sonnet for
+        /// everything else, so a Gemini row showed Anthropic's rates above a
+        /// Gemini-priced total.
+        pub pricing: ModelPricing,
     }
 
     /// A session's cost split by token category, priced per model.
@@ -6558,6 +6567,7 @@ pub mod cost {
                         totals.cache_creation,
                         totals.cache_read,
                     ),
+                    pricing: totals.pricing,
                 })
                 .collect();
             // Ties broken by name so the order is stable across reads; a

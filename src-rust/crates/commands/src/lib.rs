@@ -727,12 +727,20 @@ impl SlashCommand for CostCommand {
         let spenders = tracker.by_model();
 
         // One set of rates only explains the rows when one model spent them.
+        //
+        // The rates come off the spend row, which carries what the tokens were
+        // actually billed at. Re-deriving them from `ModelPricing::for_model`
+        // printed a name-based guess above a registry-priced total, so a
+        // Gemini row advertised Anthropic's rates.
         let pricing_line = match spenders.as_slice() {
-            [only] => rates_line(
-                &only.model,
-                mikmik_core::cost::ModelPricing::for_model(&only.model),
+            [only] => rates_line(&only.model, only.pricing),
+            // Nothing has been spent yet, so there is no billed rate to show.
+            // The heuristic is the only answer available, and it is named as
+            // an estimate rather than presented as this model's rate card.
+            [] => format!(
+                "{}  (estimated; nothing billed yet)",
+                rates_line(model, mikmik_core::cost::ModelPricing::for_model(model))
             ),
-            [] => rates_line(model, mikmik_core::cost::ModelPricing::for_model(model)),
             _ => "  Rates ($/MTok): vary by model — see the breakdown below".to_string(),
         };
 
@@ -1920,6 +1928,48 @@ mod tests {
         assert!(
             text.contains("20000 tokens (10.0%)"),
             "the report should show the last turn's 20k, not the tracker's total:\n{text}"
+        );
+    }
+
+    /// The rate card `/cost` prints must be the rates the total was billed at.
+    ///
+    /// It used to call `ModelPricing::for_model`, which reads a model name for
+    /// `opus`, `haiku` or `free` and prices everything else as Claude Sonnet.
+    /// A Gemini turn is billed from the registry, so `/cost` printed Sonnet's
+    /// $3/$15 above a total computed at Gemini's rates.
+    #[tokio::test]
+    async fn the_cost_rate_card_shows_the_rates_that_were_billed() {
+        let billed = mikmik_core::cost::ModelPricing {
+            input_per_mtk: 0.3,
+            output_per_mtk: 2.5,
+            cache_creation_per_mtk: 0.375,
+            cache_read_per_mtk: 0.03,
+        };
+        assert_ne!(
+            billed,
+            mikmik_core::cost::ModelPricing::for_model("gemini-2.5-flash"),
+            "the test needs a rate the name heuristic would not guess"
+        );
+
+        let mut ctx = make_ctx();
+        ctx.cost_tracker
+            .add_usage("gemini-2.5-flash", billed, 1_000_000, 0, 0, 0);
+
+        let CommandResult::Message(text) = CostCommand.execute("", &mut ctx).await else {
+            panic!("/cost should print a report");
+        };
+        let rates = text
+            .lines()
+            .find(|line| line.contains("Rates ($/MTok)"))
+            .expect("the report carries a rate card");
+
+        assert!(
+            rates.contains("input $0.30"),
+            "the rate card should show the billed $0.30, not a guess: {rates}"
+        );
+        assert!(
+            !rates.contains("input $3.00"),
+            "the rate card fell back to Claude Sonnet's rate: {rates}"
         );
     }
 

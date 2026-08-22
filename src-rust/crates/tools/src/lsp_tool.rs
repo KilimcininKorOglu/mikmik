@@ -49,6 +49,45 @@ const READ_ONLY_ACTIONS: &[&str] = &[
 /// The value that means "the whole workspace" rather than one file.
 const WORKSPACE: &str = "*";
 
+/// How many files one glob may report on.
+///
+/// A pattern that matches a whole tree would otherwise start every server the
+/// project has and wait for each file in turn.
+const MAX_GLOB_TARGETS: usize = 20;
+
+/// How long each file of a glob waits for its answer.
+///
+/// Much shorter than a single file's budget: the wait is paid per file, and
+/// the servers are already warm after the first one.
+const BATCH_DIAGNOSTICS_WAIT: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// The files a `diagnostics` target names.
+///
+/// A plain path is one file. A pattern is expanded, capped, and sorted so the
+/// answer does not change order between runs.
+fn resolve_diagnostic_targets(target: &str, cwd: &Path) -> (Vec<String>, bool) {
+    if !target.contains('*') && !target.contains('?') && !target.contains('[') {
+        return (vec![target.to_string()], false);
+    }
+    let pattern = if Path::new(target).is_absolute() {
+        target.to_string()
+    } else {
+        cwd.join(target).to_string_lossy().into_owned()
+    };
+    let Ok(paths) = glob::glob(&pattern) else {
+        return (vec![target.to_string()], false);
+    };
+    let mut files: Vec<String> = paths
+        .flatten()
+        .filter(|p| p.is_file())
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    files.sort();
+    let truncated = files.len() > MAX_GLOB_TARGETS;
+    files.truncate(MAX_GLOB_TARGETS);
+    (files, truncated)
+}
+
 /// Explain why no server answered for `file_path`.
 ///
 /// "No server configured" alone left the caller guessing between three very
@@ -249,7 +288,10 @@ impl Tool for LspTool {
                 .into_owned()
         };
 
-        let read_only = READ_ONLY_ACTIONS.contains(&action.as_str());
+        // Workspace diagnostics is the one read-only-looking action that runs
+        // a build, so it asks for the permission a build needs.
+        let runs_a_build = action == "diagnostics" && workspace_scope;
+        let read_only = READ_ONLY_ACTIONS.contains(&action.as_str()) && !runs_a_build;
         if let Err(e) = ctx.check_permission_for_path(
             self.name(),
             &format!("LSP {action} {file_path}"),
@@ -503,6 +545,31 @@ impl Tool for LspTool {
                 };
             }
 
+            "diagnostics" if workspace_scope => {
+                // The servers report the files they have been shown. A change
+                // that breaks a different file is invisible until something
+                // opens it, which is what a project-wide check is for.
+                let checks = lsp::detect_project_checks(&ctx.working_dir);
+                if checks.is_empty() {
+                    return ToolResult::success(
+                        "No project-wide check applies here. The markers looked for are \
+                         Cargo.toml, tsconfig.json, go.mod, go.work, pyproject.toml and \
+                         pyrightconfig.json. Pass a file or a glob to ask the language \
+                         servers instead."
+                            .to_string(),
+                    );
+                }
+                let mut sections = Vec::new();
+                for check in &checks {
+                    let output = match lsp::run_project_check(check, &ctx.working_dir).await {
+                        Ok(output) => output,
+                        Err(e) => e.to_string(),
+                    };
+                    sections.push(format!("{}:\n{output}", check.description));
+                }
+                return ToolResult::success(sections.join("\n\n"));
+            }
+
             "rename_file" => {
                 if file_raw.is_empty() || workspace_scope {
                     return ToolResult::error("`rename_file` needs the path to move in `file`");
@@ -551,7 +618,11 @@ impl Tool for LspTool {
             return ToolResult::error(format!("`{action}` needs a `file`"));
         }
 
-        {
+        // A pattern names many files of possibly different types, so the
+        // question "which server handles this path" has no single answer; each
+        // file answers it for itself below.
+        let is_pattern = file_raw.contains('*') || file_raw.contains('?') || file_raw.contains('[');
+        if !is_pattern {
             let manager = manager_arc.lock().await;
             if manager.servers_for_file(&file_path).is_empty() {
                 return ToolResult::success(no_server_message(&file_path, &ctx.working_dir));
@@ -807,26 +878,60 @@ impl Tool for LspTool {
                 // and reading whatever the cache happens to hold: a cold
                 // server had not replied by then, so a broken file reported
                 // "no diagnostics".
-                let diagnostics = {
-                    let mut manager = manager_arc.lock().await;
-                    manager
-                        .fresh_diagnostics(&file_path, &ctx.working_dir, SINGLE_DIAGNOSTICS_WAIT)
-                        .await
+                let (targets, truncated) = resolve_diagnostic_targets(&file_raw, &ctx.working_dir);
+                let one_file = targets.len() == 1 && !truncated;
+                let wait = if one_file {
+                    SINGLE_DIAGNOSTICS_WAIT
+                } else {
+                    BATCH_DIAGNOSTICS_WAIT
                 };
 
-                if diagnostics.is_empty() {
-                    return ToolResult::success(format!("No diagnostics for '{file_path}'."));
-                }
-
-                let shown = diagnostics.len().min(DIAGNOSTIC_MESSAGE_LIMIT);
-                let output = lsp::LspManager::format_diagnostics(&diagnostics[..shown]);
-                if diagnostics.len() > shown {
-                    return ToolResult::success(format!(
-                        "{output}\n... and {} more, hidden to keep the output readable",
-                        diagnostics.len() - shown
+                let mut sections: Vec<String> = Vec::new();
+                if truncated {
+                    sections.push(format!(
+                        "The pattern matched more than {MAX_GLOB_TARGETS} files; \
+                         reporting the first {MAX_GLOB_TARGETS}."
                     ));
                 }
-                ToolResult::success(output)
+
+                for target in &targets {
+                    let absolute = if Path::new(target).is_absolute() {
+                        target.clone()
+                    } else {
+                        ctx.working_dir.join(target).to_string_lossy().into_owned()
+                    };
+                    let diagnostics = {
+                        let mut manager = manager_arc.lock().await;
+                        manager
+                            .fresh_diagnostics(&absolute, &ctx.working_dir, wait)
+                            .await
+                    };
+                    if diagnostics.is_empty() {
+                        if one_file {
+                            return ToolResult::success(format!(
+                                "No diagnostics for '{absolute}'."
+                            ));
+                        }
+                        continue;
+                    }
+                    let shown = diagnostics.len().min(DIAGNOSTIC_MESSAGE_LIMIT);
+                    let mut section = lsp::LspManager::format_diagnostics(&diagnostics[..shown]);
+                    if diagnostics.len() > shown {
+                        section.push_str(&format!(
+                            "\n... and {} more, hidden to keep the output readable",
+                            diagnostics.len() - shown
+                        ));
+                    }
+                    sections.push(section);
+                }
+
+                if sections.is_empty() || (truncated && sections.len() == 1) {
+                    return ToolResult::success(format!(
+                        "No diagnostics for the {} file(s) matched.",
+                        targets.len()
+                    ));
+                }
+                ToolResult::success(sections.join("\n\n"))
             }
 
             other => ToolResult::error(format!(
@@ -847,6 +952,8 @@ mod tests {
         // The permission prompt says which it is, so a mistake here asks for
         // write access to answer a hover.
         assert!(READ_ONLY_ACTIONS.contains(&"hover"));
+        // One file's diagnostics only read. The workspace form runs a build,
+        // and `execute` accounts for that separately.
         assert!(READ_ONLY_ACTIONS.contains(&"diagnostics"));
         assert!(!READ_ONLY_ACTIONS.contains(&"rename"));
         assert!(!READ_ONLY_ACTIONS.contains(&"rename_file"));
@@ -874,6 +981,34 @@ mod tests {
                 "'{action}' is in the schema but is neither read-only nor a known write"
             );
         }
+    }
+
+    #[test]
+    fn a_plain_path_is_one_target() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (targets, truncated) = resolve_diagnostic_targets("src/main.rs", dir.path());
+        assert_eq!(targets, vec!["src/main.rs".to_string()]);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn a_pattern_is_expanded_and_capped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("src")).expect("mkdir");
+        for index in 0..25 {
+            std::fs::write(dir.path().join(format!("src/f{index}.rs")), "").expect("write");
+        }
+        // A directory must not be reported as a file to check.
+        std::fs::create_dir_all(dir.path().join("src/nested.rs")).expect("mkdir");
+
+        let (targets, truncated) = resolve_diagnostic_targets("src/*.rs", dir.path());
+        assert_eq!(targets.len(), MAX_GLOB_TARGETS);
+        assert!(truncated, "the cap was not reported");
+        assert!(targets.iter().all(|t| t.ends_with(".rs")));
+        assert!(
+            !targets.iter().any(|t| t.ends_with("nested.rs")),
+            "a directory was treated as a file"
+        );
     }
 
     #[test]

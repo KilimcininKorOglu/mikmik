@@ -963,8 +963,18 @@ protocol specifies.
 
 `diagnostics` asks every server that handles the file, linters included, and
 waits up to three seconds for a fresh answer rather than reading whatever the
-cache holds. The same problem reported by two servers is shown once, errors
-come before warnings and hints, and at most 50 messages are returned.
+cache holds. A server that answers on request rather than publishing is asked
+directly, because waiting for a notification from one of those waits forever.
+The same problem reported by two servers is shown once, errors come before
+warnings and hints, and at most 50 messages are returned.
+
+`file` may also be a glob, which reports on up to 20 matching files with a
+shorter wait each, or `"*"`, which runs the project's own check instead of
+asking the servers: `cargo check`, `tsc --noEmit`, `go build ./...` or
+`pyright`, chosen by the marker files in the working directory. That covers
+what a language server cannot: a change that breaks a file nothing has opened.
+It runs a build, so it asks for the same permission a write does, and it is cut
+off after two minutes.
 
 The other actions go to the first matching server that is not a linter, and
 wait while that server reports work in progress, because a server that is still

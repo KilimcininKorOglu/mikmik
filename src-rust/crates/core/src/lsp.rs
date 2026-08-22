@@ -1693,6 +1693,38 @@ impl LspClient {
             .await
     }
 
+    /// Ask the server for a file's diagnostics, rather than waiting to be told.
+    ///
+    /// The newer half of the protocol: a server that advertises
+    /// `diagnosticProvider` answers on request and may never publish at all,
+    /// so waiting for a notification from one of those waits forever.
+    pub async fn pull_diagnostics(
+        &self,
+        uri: &str,
+        file_path: &str,
+    ) -> anyhow::Result<Vec<LspDiagnostic>> {
+        let result = self
+            .send_request_inner(
+                "textDocument/diagnostic",
+                json!({ "textDocument": { "uri": uri } }),
+            )
+            .await?;
+        let items = result
+            .get("items")
+            .and_then(|i| i.as_array())
+            .cloned()
+            .unwrap_or_default();
+        Ok(items
+            .iter()
+            .filter_map(|d| parse_diagnostic(d, file_path, &self.server_name))
+            .collect())
+    }
+
+    /// Whether this server answers a diagnostics request.
+    pub fn supports_pull_diagnostics(&self) -> bool {
+        self.supports("diagnosticProvider")
+    }
+
     /// The edits that formatting the whole document would make.
     pub async fn format_document(
         &self,
@@ -2269,6 +2301,138 @@ pub fn apply_workspace_edit(edit: &serde_json::Value) -> anyhow::Result<Vec<Stri
 // ---------------------------------------------------------------------------
 // Location / symbol helpers
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Whole-project diagnostics
+// ---------------------------------------------------------------------------
+
+/// A build or type check that reports the problems of a whole project.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectCheck {
+    /// What is being checked, for the caller to show.
+    pub description: String,
+    pub command: String,
+    pub args: Vec<String>,
+}
+
+/// The checks that suit the project in `cwd`.
+///
+/// A language server reports the file it was asked about, and usually only the
+/// files that are open. A change that breaks a different file is invisible
+/// until something opens it, which is what a project-wide check is for.
+///
+/// Detection is by marker file and does not look at what is installed: a
+/// missing tool is reported when it fails to start, which says more than
+/// silently checking nothing.
+pub fn detect_project_checks(cwd: &Path) -> Vec<ProjectCheck> {
+    let mut checks = Vec::new();
+    let has = |name: &str| cwd.join(name).exists();
+
+    if has("Cargo.toml") {
+        checks.push(ProjectCheck {
+            description: "Rust (cargo check)".to_string(),
+            command: "cargo".to_string(),
+            args: vec![
+                "check".to_string(),
+                "--message-format=short".to_string(),
+                "--all-targets".to_string(),
+            ],
+        });
+    }
+    if has("tsconfig.json") {
+        checks.push(ProjectCheck {
+            description: "TypeScript (tsc --noEmit)".to_string(),
+            command: "npx".to_string(),
+            args: vec![
+                "--no-install".to_string(),
+                "tsc".to_string(),
+                "--noEmit".to_string(),
+            ],
+        });
+    }
+    if has("go.work") {
+        checks.push(ProjectCheck {
+            description: "Go workspace (go build)".to_string(),
+            command: "go".to_string(),
+            args: vec!["build".to_string(), "./...".to_string()],
+        });
+    } else if has("go.mod") {
+        checks.push(ProjectCheck {
+            description: "Go module (go build)".to_string(),
+            command: "go".to_string(),
+            args: vec!["build".to_string(), "./...".to_string()],
+        });
+    }
+    if has("pyrightconfig.json") || has("pyproject.toml") {
+        checks.push(ProjectCheck {
+            description: "Python (pyright)".to_string(),
+            command: "pyright".to_string(),
+            args: vec!["--outputjson".to_string()],
+        });
+    }
+    checks
+}
+
+/// How long a project-wide check may run.
+const PROJECT_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// How many output lines a project-wide check reports.
+const PROJECT_CHECK_OUTPUT_LINES: usize = 50;
+
+/// Run one project-wide check and return what it said.
+///
+/// Both streams are captured, because a compiler writes its diagnostics to
+/// standard error and its progress to standard output, and which one carries
+/// the answer differs per tool.
+pub async fn run_project_check(check: &ProjectCheck, cwd: &Path) -> anyhow::Result<String> {
+    let mut cmd = Command::new(&check.command);
+    cmd.args(&check.args)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    crate::process_tree::spawn_in_own_group(&mut cmd);
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("cannot run `{}`: {e}", check.command))?;
+    let pid = child.id();
+
+    let output = match tokio::time::timeout(PROJECT_CHECK_TIMEOUT, child.wait_with_output()).await {
+        Ok(result) => result?,
+        Err(_) => {
+            // The check owns a process tree: a build spawns compilers.
+            if let Some(pid) = pid {
+                crate::process_tree::kill_tree(pid);
+            }
+            return Err(anyhow::anyhow!(
+                "`{}` did not finish within {}s",
+                check.command,
+                PROJECT_CHECK_TIMEOUT.as_secs()
+            ));
+        }
+    };
+
+    let mut text = String::from_utf8_lossy(&output.stderr).into_owned();
+    if text.trim().is_empty() {
+        text = String::from_utf8_lossy(&output.stdout).into_owned();
+    }
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.is_empty() {
+        return Ok(if output.status.success() {
+            "no problems".to_string()
+        } else {
+            format!("failed with {} and said nothing", output.status)
+        });
+    }
+    let shown = lines.len().min(PROJECT_CHECK_OUTPUT_LINES);
+    let mut report = lines[..shown].join("\n");
+    if lines.len() > shown {
+        report.push_str(&format!("\n... and {} more lines", lines.len() - shown));
+    }
+    Ok(report)
+}
 
 /// What a formatting request tells the server about the file's layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3701,8 +3865,32 @@ impl LspManager {
             tracing::debug!("{e}");
         }
 
+        // A server that answers on request may never publish, so waiting for a
+        // notification from one of those would wait for the whole budget and
+        // then report nothing.
+        let mut pulled: Vec<LspDiagnostic> = Vec::new();
+        let pulling: Vec<String> = before
+            .iter()
+            .filter(|(name, _)| {
+                self.clients
+                    .get(&(name.clone(), root_dir.to_path_buf()))
+                    .map(|client| client.supports_pull_diagnostics())
+                    .unwrap_or(false)
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in &pulling {
+            if let Some(client) = self.clients.get(&(name.clone(), root_dir.to_path_buf())) {
+                match client.pull_diagnostics(&uri, file_path).await {
+                    Ok(diagnostics) => pulled.extend(diagnostics),
+                    Err(e) => tracing::debug!("{name} could not answer a diagnostic request: {e}"),
+                }
+            }
+        }
+        before.retain(|(name, _)| !pulling.contains(name));
+
         let deadline = std::time::Instant::now() + wait;
-        while std::time::Instant::now() < deadline {
+        while !before.is_empty() && std::time::Instant::now() < deadline {
             let all_fresh = before.iter().all(|(name, version)| {
                 self.clients
                     .get(&(name.clone(), root_dir.to_path_buf()))
@@ -3720,6 +3908,7 @@ impl LspManager {
             .filter_map(|(name, _)| self.clients.get(&(name.clone(), root_dir.to_path_buf())))
             .flat_map(|client| client.get_diagnostics(file_path))
             .collect();
+        collected.extend(pulled);
         dedupe_and_sort(&mut collected);
         collected
     }
@@ -4948,6 +5137,58 @@ mod tests {
             waited >= std::time::Duration::from_millis(80),
             "returned after {waited:?}, before the server finished indexing"
         );
+    }
+
+    // ---- Whole-project checks ---------------------------------------------
+
+    #[test]
+    fn a_project_is_recognised_by_its_marker() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(detect_project_checks(dir.path()).is_empty());
+
+        touch(&dir.path().join("Cargo.toml"));
+        let checks = detect_project_checks(dir.path());
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].command, "cargo");
+
+        touch(&dir.path().join("go.mod"));
+        assert_eq!(detect_project_checks(dir.path()).len(), 2);
+    }
+
+    #[test]
+    fn a_go_workspace_is_checked_once() {
+        // `go.work` and `go.mod` side by side describe one project, and
+        // building it twice would double the wait for nothing.
+        let dir = tempfile::tempdir().expect("tempdir");
+        touch(&dir.path().join("go.work"));
+        touch(&dir.path().join("go.mod"));
+        let checks = detect_project_checks(dir.path());
+        assert_eq!(checks.len(), 1, "{checks:?}");
+        assert!(checks[0].description.contains("workspace"));
+    }
+
+    #[tokio::test]
+    async fn a_check_that_cannot_start_says_so() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let check = ProjectCheck {
+            description: "nothing".to_string(),
+            command: "a-build-tool-nobody-installed".to_string(),
+            args: vec![],
+        };
+        let error = error_of(run_project_check(&check, dir.path()).await);
+        assert!(error.contains("cannot run"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_silent_successful_check_reports_no_problems() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let check = ProjectCheck {
+            description: "true".to_string(),
+            command: "true".to_string(),
+            args: vec![],
+        };
+        let output = run_project_check(&check, dir.path()).await.expect("ran");
+        assert_eq!(output, "no problems");
     }
 
     // ---- Configuration files ----------------------------------------------

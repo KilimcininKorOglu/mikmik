@@ -213,23 +213,30 @@ These servers connect at startup along with the ones declared in `settings.json`
 
 ### lsp_servers
 
-An array of LSP server definitions for language-aware editing support. They join the servers from `settings.json` at startup, and the LSP tool routes a file to one of them by `extension_to_language`.
+An array of LSP server definitions for language-aware editing support. They join the servers from `settings.json` at startup, and the LSP tool routes a file to one of them by `file_patterns` and `extension_to_language`. The field meanings match the ones in [tools.md#lsp](tools.md#lsp).
 
-The LSP manager speaks stdio and owns the server's lifecycle, so `transport`, `workspace_folder`, `startup_timeout`, `shutdown_timeout`, `restart_on_crash` and `max_restarts` are read but not applied. A `transport` other than `"stdio"` is reported in the log and the server is started over stdio anyway.
+The LSP manager speaks stdio and owns the server's lifecycle, so `transport`, `workspace_folder`, `shutdown_timeout`, `restart_on_crash` and `max_restarts` are read but not applied. A `transport` other than `"stdio"` is reported in the log and the server is started over stdio anyway.
 
-| Field                   | Type   | Description                               |
-|-------------------------|--------|-------------------------------------------|
-| `name`                  | string | Server identifier                         |
-| `command`               | string | Executable to launch                      |
-| `args`                  | array  | Command-line arguments                    |
-| `extension_to_language` | object | Map of file extension → LSP language ID   |
-| `transport`             | string | `"stdio"` (default)                       |
-| `env`                   | object | Extra environment variables               |
-| `workspace_folder`      | string | Optional workspace path                   |
-| `startup_timeout`       | number | Milliseconds to wait for server readiness |
-| `shutdown_timeout`      | number | Milliseconds to wait for clean shutdown   |
-| `restart_on_crash`      | bool   | Automatically restart on unexpected exit  |
-| `max_restarts`          | number | Maximum restart attempts                  |
+| Field                    | Type   | Description                                                            |
+|--------------------------|--------|------------------------------------------------------------------------|
+| `name`                   | string | Server identifier                                                      |
+| `command`                | string | Executable to launch                                                   |
+| `args`                   | array  | Command-line arguments                                                 |
+| `file_patterns`          | array  | `*.ext`, or a whole file name such as `Dockerfile`                     |
+| `extension_to_language`  | object | Map of file extension → LSP language ID                                |
+| `language_id`            | string | One language ID for every file this server handles                     |
+| `root_markers`           | array  | Files or directories that mark a project this server serves            |
+| `is_linter`              | bool   | The server only reports problems; it answers no navigation request     |
+| `disabled`               | bool   | Switch the server off without removing the entry                       |
+| `initialization_options` | object | Sent once in the `initialize` handshake                                |
+| `settings`               | object | Sent with `workspace/didChangeConfiguration` after the handshake       |
+| `transport`              | string | `"stdio"` (default)                                                    |
+| `env`                    | object | Extra environment variables                                            |
+| `workspace_folder`       | string | Optional workspace path                                                |
+| `startup_timeout`        | number | Milliseconds allowed for the handshake                                 |
+| `shutdown_timeout`       | number | Milliseconds to wait for clean shutdown                                |
+| `restart_on_crash`       | bool   | Automatically restart on unexpected exit                               |
+| `max_restarts`           | number | Maximum restart attempts                                               |
 
 ### output_styles (directory)
 

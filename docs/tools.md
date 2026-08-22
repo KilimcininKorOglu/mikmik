@@ -927,20 +927,58 @@ Query a language server for code intelligence actions. Supports hover documentat
 {
   "lsp_servers": [
     {
-      "language": "rust",
+      "name": "rust-analyzer",
       "command": "rust-analyzer",
-      "args": []
+      "args": [],
+      "file_patterns": ["*.rs"],
+      "root_markers": ["Cargo.toml"]
     },
     {
-      "language": "typescript",
+      "name": "typescript-language-server",
       "command": "typescript-language-server",
-      "args": ["--stdio"]
+      "args": ["--stdio"],
+      "file_patterns": ["*.ts", "*.tsx", "*.js", "*.jsx"],
+      "root_markers": ["package.json", "tsconfig.json"]
     }
   ]
 }
 ```
 
-If no LSP server is configured for a file's language, the tool returns an informative error. The tool resolves relative paths against the current working directory.
+| Field                     | Type            | Required | Description                                                                                              |
+|---------------------------|-----------------|----------|----------------------------------------------------------------------------------------------------------|
+| `name`                    | string          | yes      | The server's identity. A later entry of the same name replaces the earlier one.                          |
+| `command`                 | string          | yes      | The binary to run, by name or by absolute path.                                                          |
+| `args`                    | string[]        | yes      | Arguments passed to the binary.                                                                          |
+| `file_patterns`           | string[]        | yes      | `*.ext` selects an extension. A pattern without `*.` matches a whole file name, such as `Dockerfile`.    |
+| `root_markers`            | string[]        | no       | Files or directories that mark a project this server serves.                                             |
+| `disabled`                | boolean         | no       | Switch the server off without deleting the entry. Default `false`.                                       |
+| `is_linter`               | boolean         | no       | The server only reports problems. It answers diagnostics and never navigation. Default `false`.          |
+| `language_id`             | string          | no       | One language id for every file. Overrides `extension_to_language` and the built-in table.                |
+| `extension_to_language`   | object          | no       | Per-extension language id, e.g. `{".rs": "rust"}`.                                                       |
+| `initialization_options`  | object          | no       | Sent once in the `initialize` handshake.                                                                 |
+| `settings`                | object          | no       | Sent with `workspace/didChangeConfiguration` after the handshake. Unlike the line above, it can change.  |
+| `env`                     | object          | no       | Extra environment variables for the server process.                                                      |
+| `warmup_timeout_ms`       | number          | no       | Budget for the handshake. Default 5000.                                                                  |
+| `request_timeout_ms`      | number          | no       | Budget for one request. Default 30000.                                                                   |
+| `capabilities`            | object          | no       | Opt-in non-standard features: `flycheck`, `ssr`, `expand_macro`, `runnables`, `related_tests`.           |
+| `workspace_ready_timings` | object          | no       | Project-load wait overrides: `timeout_ms`, `poll_ms`, `settle_ms`, `status_request_timeout_ms`.          |
+
+**The language id.** `language_id` wins, then `extension_to_language`, then a
+built-in table that covers the common extensions. Only an extension none of
+them knows falls back to `plaintext`, which most servers ignore. So a server
+that serves one language needs no extension map.
+
+**Routing.** Every enabled server whose `file_patterns` match the file answers
+`diagnostics`. Navigation actions go to the first matching server that is not a
+linter.
+
+**Precedence.** A project's `settings.json` entry replaces the user's entry of
+the same name rather than joining it, because two entries of one name would
+both match and the winner would depend on their order. A project-supplied
+server names a binary to run, so it is only taken after you approve the
+project's settings.
+
+If no LSP server is configured for a file, the tool says so. The tool resolves relative paths against the current working directory.
 
 ---
 

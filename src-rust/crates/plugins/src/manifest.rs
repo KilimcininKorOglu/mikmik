@@ -70,6 +70,28 @@ pub struct PluginLspServer {
     /// Map of file extension → LSP language ID, e.g. `{ ".ts": "typescript" }`.
     #[serde(default)]
     pub extension_to_language: HashMap<String, String>,
+    /// `*.ext` selects an extension; a pattern without `*.` matches a whole
+    /// file name, such as `Dockerfile`.
+    #[serde(default)]
+    pub file_patterns: Vec<String>,
+    /// Files or directories that mark a project this server serves.
+    #[serde(default)]
+    pub root_markers: Vec<String>,
+    /// One language id for every file this server handles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_id: Option<String>,
+    /// The server only reports problems; it answers no navigation request.
+    #[serde(default)]
+    pub is_linter: bool,
+    /// Switch the server off without removing the entry.
+    #[serde(default)]
+    pub disabled: bool,
+    /// Sent once in the `initialize` handshake.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initialization_options: Option<serde_json::Value>,
+    /// Sent with `workspace/didChangeConfiguration` after the handshake.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<serde_json::Value>,
     #[serde(default = "default_transport")]
     pub transport: String,
     #[serde(default)]

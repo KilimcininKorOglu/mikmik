@@ -25,10 +25,21 @@ fn lsp_config_for(server: &crate::manifest::PluginLspServer) -> mikmik_core::lsp
         name: server.name.clone(),
         command: server.command.clone(),
         args: server.args.clone(),
-        file_patterns: Vec::new(),
-        initialization_options: None,
+        file_patterns: server.file_patterns.clone(),
+        initialization_options: server.initialization_options.clone(),
         extension_to_language: server.extension_to_language.clone(),
         env: server.env.clone(),
+        root_markers: server.root_markers.clone(),
+        disabled: server.disabled,
+        settings: server.settings.clone(),
+        is_linter: server.is_linter,
+        language_id: server.language_id.clone(),
+        // The manifest has carried `startup_timeout` since before the LSP
+        // client had a handshake budget, and the two mean the same thing.
+        warmup_timeout_ms: server.startup_timeout,
+        request_timeout_ms: None,
+        capabilities: mikmik_core::lsp::LspServerCapabilities::default(),
+        workspace_ready_timings: None,
     }
 }
 
@@ -434,6 +445,13 @@ mod tests {
             command: "typescript-language-server".to_string(),
             args: vec!["--stdio".to_string()],
             extension_to_language: extensions.clone(),
+            file_patterns: vec![],
+            root_markers: vec![],
+            language_id: None,
+            is_linter: false,
+            disabled: false,
+            initialization_options: None,
+            settings: None,
             transport: "stdio".to_string(),
             env: std::collections::HashMap::new(),
             workspace_folder: None,
@@ -450,6 +468,43 @@ mod tests {
         assert_eq!(config.args, vec!["--stdio".to_string()]);
         assert_eq!(config.extension_to_language, extensions);
         assert_eq!(config.language_for_file("app.ts"), "typescript");
+    }
+
+    #[test]
+    fn a_plugin_declaration_carries_the_routing_fields() {
+        // The manifest used to drop everything except the extension map, so a
+        // plugin could not mark a linter, name a root marker, or set the
+        // handshake budget.
+        let declared = crate::manifest::PluginLspServer {
+            name: "ruff".to_string(),
+            command: "ruff".to_string(),
+            args: vec!["server".to_string()],
+            extension_to_language: std::collections::HashMap::new(),
+            file_patterns: vec!["*.py".to_string()],
+            root_markers: vec!["pyproject.toml".to_string()],
+            language_id: Some("python".to_string()),
+            is_linter: true,
+            disabled: false,
+            initialization_options: Some(serde_json::json!({ "lint": true })),
+            settings: Some(serde_json::json!({ "ruff": { "lineLength": 100 } })),
+            transport: "stdio".to_string(),
+            env: std::collections::HashMap::new(),
+            workspace_folder: None,
+            startup_timeout: Some(9_000),
+            shutdown_timeout: None,
+            restart_on_crash: false,
+            max_restarts: None,
+        };
+
+        let config = lsp_config_for(&declared);
+
+        assert_eq!(config.file_patterns, vec!["*.py".to_string()]);
+        assert_eq!(config.root_markers, vec!["pyproject.toml".to_string()]);
+        assert!(config.is_linter);
+        assert_eq!(config.language_for_file("app.py"), "python");
+        assert!(config.initialization_options.is_some());
+        assert!(config.settings.is_some());
+        assert_eq!(config.warmup_timeout().as_millis() as u64, 9_000);
     }
 
     #[test]

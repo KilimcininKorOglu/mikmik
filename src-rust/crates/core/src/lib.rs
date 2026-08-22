@@ -3229,7 +3229,16 @@ pub mod config {
                 lsp_servers: {
                     let mut v = base.config.lsp_servers;
                     if allow_runnables {
-                        v.extend(over.config.lsp_servers);
+                        // By name, not by appending: a project that overrides
+                        // the user's `rust-analyzer` must replace it, because
+                        // two entries of one name would both match the file
+                        // and the loser would be picked by position.
+                        for server in over.config.lsp_servers {
+                            match v.iter_mut().find(|s| s.name == server.name) {
+                                Some(existing) => *existing = server,
+                                None => v.push(server),
+                            }
+                        }
                     }
                     v
                 },

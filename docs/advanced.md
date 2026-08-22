@@ -762,23 +762,9 @@ The `symbols` and `diagnostics` actions only require `action` and `file`.
 
 ### Configuration
 
-LSP servers must be configured in `settings.json`:
+LSP servers are configured in `settings.json` under `lsp_servers`. The field
+list, the routing rules and the precedence rules are in
+[tools.md#lsp](tools.md#lsp).
 
-```json
-{
-  "lsp_servers": [
-    {
-      "language": "rust",
-      "command": "rust-analyzer",
-      "args": []
-    },
-    {
-      "language": "typescript",
-      "command": "typescript-language-server",
-      "args": ["--stdio"]
-    }
-  ]
-}
-```
-
-If no LSP server is configured for the file's language, the tool returns an informative error. Path resolution is relative to the current working directory.
+If no LSP server is configured for the file, the tool says so. Path resolution
+is relative to the current working directory.

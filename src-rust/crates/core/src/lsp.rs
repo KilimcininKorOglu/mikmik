@@ -30,6 +30,59 @@ use tokio::sync::{oneshot, Mutex};
 // Configuration
 // ---------------------------------------------------------------------------
 
+/// Optional server-specific features a caller may switch on.
+///
+/// Every field names a request outside the LSP specification, so a server that
+/// does not implement it answers "method not found". They are opt-in for that
+/// reason. `rust-analyzer` is the only server in the built-in catalogue that
+/// implements any of them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LspServerCapabilities {
+    /// `rust-analyzer/runFlycheck`, an on-demand `cargo check`.
+    #[serde(default)]
+    pub flycheck: bool,
+    /// `experimental/ssr`, structural search and replace.
+    #[serde(default)]
+    pub ssr: bool,
+    /// `rust-analyzer/expandMacro`.
+    #[serde(default)]
+    pub expand_macro: bool,
+    /// `experimental/runnables`, the tests and binaries a file offers.
+    #[serde(default)]
+    pub runnables: bool,
+    /// `rust-analyzer/relatedTests`.
+    #[serde(default)]
+    pub related_tests: bool,
+}
+
+/// How long to wait for a server to finish loading the project.
+///
+/// A project-aware server answers a navigation request with nothing until it
+/// has indexed the workspace, so a caller that asks too early gets a wrong
+/// empty answer rather than an error.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceReadyTimings {
+    /// Give up waiting after this long and send the request anyway.
+    pub timeout_ms: u64,
+    /// How often to re-check readiness.
+    pub poll_ms: u64,
+    /// How long the server must stay idle before it counts as ready.
+    pub settle_ms: u64,
+    /// Budget for one server-status request.
+    pub status_request_timeout_ms: u64,
+}
+
+impl Default for WorkspaceReadyTimings {
+    fn default() -> Self {
+        Self {
+            timeout_ms: 30_000,
+            poll_ms: 250,
+            settle_ms: 2_000,
+            status_request_timeout_ms: 2_000,
+        }
+    }
+}
+
 /// Configuration for a single LSP server process.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LspServerConfig {
@@ -51,21 +104,216 @@ pub struct LspServerConfig {
     /// Optional extra environment variables for the server process.
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Files or directories that mark a project this server can serve, e.g.
+    /// `["Cargo.toml"]`. A one-level wildcard such as `*.cabal` matches an
+    /// entry directly inside the directory.
+    ///
+    /// Empty means the server is never auto-detected; it still runs when the
+    /// user names it explicitly.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub root_markers: Vec<String>,
+    /// Switch the server off without deleting its entry.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub disabled: bool,
+    /// Settings pushed with `workspace/didChangeConfiguration` after the
+    /// handshake, and again on reload.
+    ///
+    /// Distinct from `initialization_options`, which the server reads once and
+    /// cannot be changed afterwards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<serde_json::Value>,
+    /// This server only reports problems; it answers no navigation request.
+    ///
+    /// A linter is asked for diagnostics and is kept out of hover, definition,
+    /// references, symbols and rename.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_linter: bool,
+    /// One language id for every file this server handles, when the server
+    /// serves a single language. Takes precedence over
+    /// `extension_to_language`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_id: Option<String>,
+    /// Budget for this server's `initialize` handshake. Defaults to
+    /// [`DEFAULT_WARMUP_TIMEOUT_MS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warmup_timeout_ms: Option<u64>,
+    /// Budget for one request to this server. Defaults to
+    /// [`DEFAULT_REQUEST_TIMEOUT_MS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_timeout_ms: Option<u64>,
+    /// Optional non-standard features this server implements.
+    #[serde(default, skip_serializing_if = "LspServerCapabilities::is_empty")]
+    pub capabilities: LspServerCapabilities,
+    /// Overrides for the project-load wait. Only a project-aware server needs
+    /// them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_ready_timings: Option<WorkspaceReadyTimings>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+impl LspServerCapabilities {
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Budget for one `initialize` handshake.
+pub const DEFAULT_WARMUP_TIMEOUT_MS: u64 = 5_000;
+/// Budget for one ordinary request.
+pub const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 30_000;
+
+/// The LSP language identifier for a file extension.
+///
+/// A server that serves one language rarely needs an extension map, and a
+/// wrong `languageId` makes some servers refuse the document outright, so the
+/// common extensions are answered here rather than left to every config.
+pub fn language_id_for_extension(ext: &str) -> Option<&'static str> {
+    let ext = ext.trim_start_matches('.');
+    Some(match ext {
+        "rs" => "rust",
+        "go" => "go",
+        "py" | "pyi" => "python",
+        "ts" => "typescript",
+        "tsx" => "typescriptreact",
+        "js" | "mjs" | "cjs" => "javascript",
+        "jsx" => "javascriptreact",
+        "c" | "h" => "c",
+        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => "cpp",
+        "m" => "objective-c",
+        "mm" => "objective-cpp",
+        "java" => "java",
+        "kt" | "kts" => "kotlin",
+        "scala" | "sc" => "scala",
+        "swift" => "swift",
+        "rb" => "ruby",
+        "php" => "php",
+        "cs" => "csharp",
+        "lua" => "lua",
+        "zig" => "zig",
+        "hs" => "haskell",
+        "ml" | "mli" => "ocaml",
+        "ex" | "exs" => "elixir",
+        "erl" | "hrl" => "erlang",
+        "gleam" => "gleam",
+        "dart" => "dart",
+        "odin" => "odin",
+        "nix" => "nix",
+        "vim" => "vim",
+        "sh" | "bash" => "shellscript",
+        "zsh" => "zsh",
+        "html" | "htm" => "html",
+        "css" => "css",
+        "scss" => "scss",
+        "less" => "less",
+        "json" => "json",
+        "jsonc" => "jsonc",
+        "yaml" | "yml" => "yaml",
+        "toml" => "toml",
+        "md" | "markdown" => "markdown",
+        "tex" => "latex",
+        "vue" => "vue",
+        "svelte" => "svelte",
+        "astro" => "astro",
+        "graphql" | "gql" => "graphql",
+        "prisma" => "prisma",
+        "tf" | "tfvars" => "terraform",
+        "sql" => "sql",
+        "xml" => "xml",
+        "tla" => "tlaplus",
+        _ => return None,
+    })
 }
 
 impl LspServerConfig {
-    /// Look up the LSP language identifier for `file_path`, falling back to
-    /// `"plaintext"` when the extension is not mapped.
+    /// Look up the LSP language identifier for `file_path`.
+    ///
+    /// The explicit `language_id` wins, then the per-server extension map,
+    /// then the built-in table. `"plaintext"` is the last resort, and a server
+    /// that receives it usually ignores the document.
     pub fn language_for_file(&self, file_path: &str) -> String {
+        if let Some(id) = &self.language_id {
+            return id.clone();
+        }
         let ext = Path::new(file_path)
             .extension()
             .and_then(|e| e.to_str())
             .map(|e| format!(".{}", e.to_lowercase()))
             .unwrap_or_default();
-        self.extension_to_language
-            .get(&ext)
-            .cloned()
-            .unwrap_or_else(|| "plaintext".to_string())
+        if let Some(mapped) = self.extension_to_language.get(&ext) {
+            return mapped.clone();
+        }
+        language_id_for_extension(&ext)
+            .unwrap_or("plaintext")
+            .to_string()
+    }
+
+    /// Budget for this server's handshake.
+    pub fn warmup_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(
+            self.warmup_timeout_ms.unwrap_or(DEFAULT_WARMUP_TIMEOUT_MS),
+        )
+    }
+
+    /// Budget for one request to this server.
+    pub fn request_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(
+            self.request_timeout_ms
+                .unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS),
+        )
+    }
+
+    /// The project-load wait for this server.
+    pub fn ready_timings(&self) -> WorkspaceReadyTimings {
+        self.workspace_ready_timings.clone().unwrap_or_default()
+    }
+
+    /// Every file extension this server handles, normalised to `.ext`.
+    ///
+    /// Reads both the extension map and the `*.ext` glob patterns, because a
+    /// config may carry either.
+    pub fn extensions(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .extension_to_language
+            .keys()
+            .map(|e| e.to_lowercase())
+            .collect();
+        for pattern in &self.file_patterns {
+            if let Some(ext) = pattern.strip_prefix("*.") {
+                let normalized = format!(".{}", ext.to_lowercase());
+                if !out.contains(&normalized) {
+                    out.push(normalized);
+                }
+            }
+        }
+        out
+    }
+
+    /// Whether this server handles `file_path`.
+    ///
+    /// Matches the extension, and also the whole file name, so a config can
+    /// name a file that has no extension such as `Dockerfile`.
+    pub fn handles_file(&self, file_path: &str) -> bool {
+        let path = Path::new(file_path);
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| format!(".{}", e.to_lowercase()));
+        if let Some(ext) = ext {
+            if self.extensions().contains(&ext) {
+                return true;
+            }
+        }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_lowercase();
+        self.file_patterns
+            .iter()
+            .any(|p| !p.starts_with("*.") && p.to_lowercase() == name)
     }
 }
 
@@ -881,8 +1129,6 @@ pub struct LspManager {
     configs: Vec<LspServerConfig>,
     /// Running clients keyed by server name
     clients: HashMap<String, LspClient>,
-    /// Map of file extension → list of server names that handle it
-    extension_map: HashMap<String, Vec<String>>,
     /// Set of file URIs that have been opened on a specific server (URI → server name)
     opened_files: HashMap<String, String>,
 }
@@ -892,32 +1138,19 @@ impl LspManager {
         Self {
             configs: Vec::new(),
             clients: HashMap::new(),
-            extension_map: HashMap::new(),
             opened_files: HashMap::new(),
         }
     }
 
     /// Register an LSP server configuration.
+    ///
+    /// A second registration of the same name replaces the first, so a
+    /// project's entry overrides the user's rather than joining it.
     pub fn register_server(&mut self, config: LspServerConfig) {
-        // Build extension → server mapping
-        for ext in config.extension_to_language.keys() {
-            let normalized = ext.to_lowercase();
-            self.extension_map
-                .entry(normalized)
-                .or_default()
-                .push(config.name.clone());
+        match self.configs.iter_mut().find(|c| c.name == config.name) {
+            Some(existing) => *existing = config,
+            None => self.configs.push(config),
         }
-        // Also handle glob patterns like "*.rs" → ".rs"
-        for pattern in &config.file_patterns {
-            if let Some(ext) = pattern.strip_prefix("*.") {
-                let normalized = format!(".{}", ext.to_lowercase());
-                let entry = self.extension_map.entry(normalized).or_default();
-                if !entry.contains(&config.name) {
-                    entry.push(config.name.clone());
-                }
-            }
-        }
-        self.configs.push(config);
     }
 
     /// Return all registered server configurations.
@@ -930,23 +1163,37 @@ impl LspManager {
         self.configs.iter().find(|s| s.name == name)
     }
 
-    /// Public wrapper: find the first server name that handles `file_path` based on extension.
-    /// Returns `None` when no server is configured for the file's extension.
+    /// Public wrapper: find the first server name that handles `file_path`.
+    /// Returns `None` when no server is configured for the file.
     pub fn server_name_for_file_pub(&self, file_path: &str) -> Option<&str> {
         self.server_name_for_file(file_path)
     }
 
-    /// Find the first server name that handles `file_path` based on extension.
+    /// Every enabled server that handles `file_path`, primary servers first.
+    ///
+    /// A linter reports problems and nothing else, so it sorts last and a
+    /// navigation request never reaches it.
+    pub fn servers_for_file(&self, file_path: &str) -> Vec<&LspServerConfig> {
+        let mut matched: Vec<&LspServerConfig> = self
+            .configs
+            .iter()
+            .filter(|c| !c.disabled && c.handles_file(file_path))
+            .collect();
+        matched.sort_by_key(|c| c.is_linter);
+        matched
+    }
+
+    /// The one server that answers navigation for `file_path`.
+    pub fn primary_server_for_file(&self, file_path: &str) -> Option<&LspServerConfig> {
+        self.servers_for_file(file_path)
+            .into_iter()
+            .find(|c| !c.is_linter)
+    }
+
+    /// Find the first server name that handles `file_path`.
     fn server_name_for_file(&self, file_path: &str) -> Option<&str> {
-        let ext = Path::new(file_path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| format!(".{}", e.to_lowercase()))
-            .unwrap_or_default();
-        self.extension_map
-            .get(&ext)
-            .and_then(|names| names.first())
-            .map(|s| s.as_str())
+        self.primary_server_for_file(file_path)
+            .map(|c| c.name.as_str())
     }
 
     /// Spawn and initialize the server for `file_path` if it is not already
@@ -988,7 +1235,12 @@ impl LspManager {
 
     /// Spawn and initialize servers for all registered configurations.
     pub async fn start_servers(&mut self, root_dir: &Path) {
-        let configs: Vec<LspServerConfig> = self.configs.clone();
+        let configs: Vec<LspServerConfig> = self
+            .configs
+            .iter()
+            .filter(|c| !c.disabled)
+            .cloned()
+            .collect();
         for config in configs {
             let name = config.name.clone();
             if self.clients.contains_key(&name) {
@@ -1047,13 +1299,13 @@ impl LspManager {
         Ok(())
     }
 
-    /// Register all servers from a config slice if not already registered.
-    /// Idempotent: servers already present by name are skipped.
+    /// Register every server in `configs`, replacing an entry of the same name.
+    ///
+    /// Called before each tool use with the session's merged configuration, so
+    /// an edit to `settings.json` reaches a manager that is already populated.
     pub fn seed_from_config(&mut self, configs: &[LspServerConfig]) {
         for cfg in configs {
-            if !self.configs.iter().any(|c| c.name == cfg.name) {
-                self.register_server(cfg.clone());
-            }
+            self.register_server(cfg.clone());
         }
     }
 
@@ -1215,6 +1467,15 @@ mod tests {
                 m
             },
             env: HashMap::new(),
+            root_markers: vec![],
+            disabled: false,
+            settings: None,
+            is_linter: false,
+            language_id: None,
+            warmup_timeout_ms: None,
+            request_timeout_ms: None,
+            capabilities: LspServerCapabilities::default(),
+            workspace_ready_timings: None,
         }
     }
 
@@ -1256,6 +1517,125 @@ mod tests {
         mgr.register_server(make_config("rust-analyzer"));
         mgr.register_server(make_config("pyright"));
         assert_eq!(mgr.servers().len(), 2);
+    }
+
+    #[test]
+    fn registering_a_name_twice_replaces_the_first() {
+        // Two entries of one name would both match the file, and which one
+        // won would depend on their order.
+        let mut mgr = LspManager::new();
+        mgr.register_server(make_config("rust-analyzer"));
+        let mut second = make_config("rust-analyzer");
+        second.command = "rust-analyzer-nightly".to_string();
+        mgr.register_server(second);
+        assert_eq!(mgr.servers().len(), 1);
+        assert_eq!(mgr.servers()[0].command, "rust-analyzer-nightly");
+    }
+
+    #[test]
+    fn a_disabled_server_never_answers() {
+        let mut mgr = LspManager::new();
+        let mut cfg = make_config("rust-analyzer");
+        cfg.disabled = true;
+        mgr.register_server(cfg);
+        assert!(mgr.primary_server_for_file("src/main.rs").is_none());
+        // It stays listed, because the user has to see what they switched off.
+        assert_eq!(mgr.servers().len(), 1);
+    }
+
+    #[test]
+    fn a_linter_never_answers_navigation() {
+        let mut mgr = LspManager::new();
+        let mut linter = make_config("clippy-ls");
+        linter.is_linter = true;
+        mgr.register_server(linter);
+        mgr.register_server(make_config("rust-analyzer"));
+
+        assert_eq!(
+            mgr.primary_server_for_file("src/main.rs").map(|c| &c.name),
+            Some(&"rust-analyzer".to_string()),
+        );
+        // Diagnostics still reach both, and the linter sorts last.
+        let names: Vec<&str> = mgr
+            .servers_for_file("src/main.rs")
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["rust-analyzer", "clippy-ls"]);
+    }
+
+    #[test]
+    fn a_server_matches_a_file_name_without_an_extension() {
+        let mut mgr = LspManager::new();
+        let mut cfg = make_config("dockerls");
+        cfg.file_patterns = vec!["Dockerfile".to_string()];
+        cfg.extension_to_language.clear();
+        mgr.register_server(cfg);
+        assert!(mgr.primary_server_for_file("build/Dockerfile").is_some());
+        assert!(mgr.primary_server_for_file("build/main.rs").is_none());
+    }
+
+    #[test]
+    fn an_explicit_language_id_wins_over_the_table() {
+        let mut cfg = make_config("ls");
+        cfg.language_id = Some("rustnext".to_string());
+        assert_eq!(cfg.language_for_file("src/main.rs"), "rustnext");
+    }
+
+    #[test]
+    fn the_built_in_table_answers_an_unmapped_extension() {
+        // Without the table a server that serves one language had to spell out
+        // every extension, and a missing entry sent "plaintext", which some
+        // servers refuse.
+        let mut cfg = make_config("gopls");
+        cfg.extension_to_language.clear();
+        cfg.file_patterns = vec!["*.go".to_string()];
+        assert_eq!(cfg.language_for_file("cmd/main.go"), "go");
+        assert_eq!(cfg.language_for_file("notes.unknown"), "plaintext");
+    }
+
+    #[test]
+    fn the_timeouts_fall_back_to_the_defaults() {
+        let mut cfg = make_config("ls");
+        assert_eq!(
+            cfg.warmup_timeout().as_millis() as u64,
+            DEFAULT_WARMUP_TIMEOUT_MS
+        );
+        assert_eq!(
+            cfg.request_timeout().as_millis() as u64,
+            DEFAULT_REQUEST_TIMEOUT_MS
+        );
+        cfg.warmup_timeout_ms = Some(1234);
+        assert_eq!(cfg.warmup_timeout().as_millis() as u64, 1234);
+    }
+
+    #[test]
+    fn an_old_config_still_parses() {
+        // Every field added later carries `serde(default)`, so a settings file
+        // written before them keeps working.
+        let json = r#"{
+            "name": "rust-analyzer",
+            "command": "rust-analyzer",
+            "args": [],
+            "file_patterns": ["*.rs"],
+            "initialization_options": null
+        }"#;
+        let cfg: LspServerConfig = serde_json::from_str(json).expect("parse");
+        assert!(!cfg.disabled);
+        assert!(!cfg.is_linter);
+        assert!(cfg.root_markers.is_empty());
+        assert!(cfg.settings.is_none());
+    }
+
+    #[test]
+    fn an_unset_field_is_not_written_back() {
+        // `save()` rewrites the whole settings file, so a default that
+        // serialized would bury the user's file in noise.
+        let cfg = make_config("ls");
+        let json = serde_json::to_string(&cfg).expect("serialize");
+        assert!(!json.contains("disabled"), "json = {json}");
+        assert!(!json.contains("is_linter"), "json = {json}");
+        assert!(!json.contains("capabilities"), "json = {json}");
     }
 
     #[test]
@@ -1391,7 +1771,10 @@ mod tests {
     fn test_language_for_file() {
         let cfg = make_config("rust-analyzer");
         assert_eq!(cfg.language_for_file("src/main.rs"), "rust");
-        assert_eq!(cfg.language_for_file("README.md"), "plaintext");
+        // The extension map does not carry `.md`, so the built-in table
+        // answers. Only an extension neither knows falls back to plaintext.
+        assert_eq!(cfg.language_for_file("README.md"), "markdown");
+        assert_eq!(cfg.language_for_file("data.qqq"), "plaintext");
     }
 
     #[test]

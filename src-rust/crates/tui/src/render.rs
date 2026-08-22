@@ -89,6 +89,11 @@ const LIVE_OUTPUT_TAIL_LINES: usize = 10;
 /// `Line`s before a width is known, and a rule that reached the edge would
 /// dominate a block whose output is one short line.
 const TOOL_OUTPUT_RULE: &str = "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}";
+/// How long a one-line result may be and still sit on the header line.
+///
+/// The header already carries the icon and what was asked, so a longer answer
+/// would wrap and cost the line it saved.
+const FOLDED_RESULT_LIMIT: usize = 60;
 const STATUS_THINKING: &str = "thinking";
 const STATUS_THINKING_ELLIPSIS: &str = "thinking\u{2026}";
 
@@ -2721,6 +2726,24 @@ pub(crate) fn tool_running_label(normalized: &str, fallback: &str) -> String {
     .to_string()
 }
 
+/// The whole result of a finished block, when it is short enough to sit on the
+/// header line instead of under a rule.
+///
+/// Only the language-server block, where "nothing found" is an ordinary answer
+/// and the three lines it takes are all noise. An error keeps its own line: it
+/// is the one result worth the room.
+fn fold_onto_header(normalized: &str, block: &crate::app::ToolUseBlock) -> Option<String> {
+    if normalized != "lsp" || block.status != ToolStatus::Done {
+        return None;
+    }
+    let preview = block.output_preview.as_ref()?;
+    let text = preview.trim();
+    if text.is_empty() || text.contains('\n') || text.chars().count() > FOLDED_RESULT_LIMIT {
+        return None;
+    }
+    Some(text.to_string())
+}
+
 fn render_tool_block_lines(
     lines: &mut Vec<Line<'static>>,
     block: &crate::app::ToolUseBlock,
@@ -2802,7 +2825,24 @@ fn render_tool_block_lines(
                 .add_modifier(Modifier::BOLD),
         ));
     }
+
+    // A one-line answer sits on the header rather than under a rule of its
+    // own. "Nothing found" is the ordinary answer to half of what a language
+    // server is asked, and three lines to say it buries the rest of the
+    // transcript.
+    let folded = fold_onto_header(&normalized, block);
+    if let Some(ref text) = folded {
+        header_spans.push(Span::styled(
+            format!("  {text}"),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
+        ));
+    }
     lines.push(Line::from(header_spans));
+    if folded.is_some() {
+        return;
+    }
 
     // What the command has printed so far. Only ever filled while it runs and
     // only when the setting is on, so an ordinary session reaches neither this
@@ -4652,6 +4692,62 @@ mod tool_block_tests {
     }
 
     #[test]
+    fn a_one_line_language_server_answer_stays_on_the_header() {
+        // "Nothing found" is the ordinary answer to half of what a language
+        // server is asked, and three lines to say it buries the transcript.
+        let lines = render(&block(
+            "LSP",
+            ToolStatus::Done,
+            r#"{"action":"definition","file":"src/a.rs","symbol":"foo","line":3}"#,
+            Some("No definition found for foo"),
+        ));
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("definition foo (a.rs:3)"), "{lines:?}");
+        assert!(
+            lines[0].contains("No definition found for foo"),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_longer_language_server_answer_keeps_its_own_lines() {
+        let lines = render(&block(
+            "LSP",
+            ToolStatus::Done,
+            r#"{"action":"references","file":"src/a.rs","symbol":"foo","line":3}"#,
+            Some("src/a.rs:3:5\nsrc/b.rs:9:1"),
+        ));
+        assert!(lines.len() > 2, "{lines:?}");
+        assert!(
+            lines.iter().any(|line| line.contains("src/b.rs:9:1")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_language_server_call_keeps_its_own_line() {
+        // An error is the one result worth the room.
+        let lines = render(&block(
+            "LSP",
+            ToolStatus::Error,
+            r#"{"action":"hover","file":"src/a.rs","line":3}"#,
+            Some("no server"),
+        ));
+        assert!(lines.len() > 1, "{lines:?}");
+    }
+
+    #[test]
+    fn another_tool_keeps_its_output_below_the_rule() {
+        let lines = render(&block(
+            "Bash",
+            ToolStatus::Done,
+            r#"{"command":"ls"}"#,
+            Some("a.txt"),
+        ));
+        assert!(lines.len() > 1, "{lines:?}");
+    }
+
+    #[test]
     fn a_rule_separates_the_command_from_what_it_printed() {
         let with_output = render(&block(
             "Bash",
@@ -4825,6 +4921,7 @@ mod tool_block_tests {
             "websearch",
             "todo",
             "task",
+            "lsp",
             "x",
         ] {
             let icon = tool_icon(t);

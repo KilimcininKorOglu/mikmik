@@ -1174,6 +1174,11 @@ the entry is switched off.
 
 The tool resolves relative paths against the current working directory.
 
+**In the TUI.** The block reads `definition parse_config (parser.rs:42)`, so the
+action, the symbol and the place are all on the header. A one-line answer, which
+"nothing found" always is, sits on that same line. A longer answer, and every
+failure, keeps its own lines under the rule.
+
 ---
 
 ## Advanced Tools

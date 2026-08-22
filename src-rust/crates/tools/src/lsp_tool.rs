@@ -55,6 +55,12 @@ const WORKSPACE: &str = "*";
 /// project has and wait for each file in turn.
 const MAX_GLOB_TARGETS: usize = 20;
 
+/// How many changed lines a preview shows per file.
+///
+/// A rename across a large file is a list nobody reads past the first few
+/// entries; the rest is counted instead.
+const PREVIEW_LINES_PER_FILE: usize = 10;
+
 /// How long each file of a glob waits for its answer.
 ///
 /// Much shorter than a single file's budget: the wait is paid per file, and
@@ -799,13 +805,7 @@ impl Tool for LspTool {
                 }
                 if apply == Some(false) {
                     let mut lines = vec!["Rename preview:".to_string()];
-                    for (uri, edits) in &files {
-                        lines.push(format!(
-                            "{}: {} edit(s)",
-                            lsp::uri_to_path(uri),
-                            edits.len()
-                        ));
-                    }
+                    lines.extend(lsp::preview_workspace_edit(&edit, PREVIEW_LINES_PER_FILE));
                     return ToolResult::success(lines.join("\n"));
                 }
                 match lsp::apply_workspace_edit(&edit) {

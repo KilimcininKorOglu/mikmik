@@ -971,6 +971,10 @@ performed; use `rename_file` for that, which asks every server for the edits
 the move needs, applies them, moves the path, and tells the servers it moved.
 A directory move is limited to 1000 files.
 
+A preview (`apply: false`) shows each changed line before and after, because
+the edit is applied to a copy in memory and the two versions are compared. Ten
+changed lines are shown per file and the rest are counted.
+
 **Code actions.** Listing shows an index and a title for each. Applying takes
 `apply: true` and a `query` that is either the index or part of the title. The
 action's edit is applied first, then its command is run, which is the order the

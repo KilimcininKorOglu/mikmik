@@ -2288,6 +2288,66 @@ pub fn workspace_edit_resource_operations(edit: &serde_json::Value) -> Vec<Strin
         .unwrap_or_default()
 }
 
+/// What a `WorkspaceEdit` would change, line by line.
+///
+/// The edit is applied to a copy in memory and the two versions are compared,
+/// so the preview is what the write would really produce. Counting the ranges
+/// instead would say how many edits there are and never say what they do, which
+/// is the one question a preview is asked.
+///
+/// `max_lines_per_file` bounds a rename that touches a file in a hundred
+/// places; the rest is counted rather than listed.
+pub fn preview_workspace_edit(edit: &serde_json::Value, max_lines_per_file: usize) -> Vec<String> {
+    let mut report: Vec<String> = Vec::new();
+    for (uri, edits) in workspace_edit_files(edit) {
+        let path = uri_to_path(&uri);
+        let Ok(before) = std::fs::read_to_string(&path) else {
+            report.push(format!("{path}: {} edit(s), cannot read", edits.len()));
+            continue;
+        };
+        let after = match apply_text_edits(&before, &edits) {
+            Ok(after) => after,
+            Err(e) => {
+                report.push(format!("{path}: {e}"));
+                continue;
+            }
+        };
+
+        let old_lines: Vec<&str> = before.lines().collect();
+        let new_lines: Vec<&str> = after.lines().collect();
+        // A rename changes text inside lines, so the two sides line up and a
+        // full diff would cost more than it tells. Where the line counts
+        // differ, the tail after the first difference is reported as changed.
+        let mut changed: Vec<String> = Vec::new();
+        let mut extra = 0usize;
+        for (index, (old, new)) in old_lines.iter().zip(new_lines.iter()).enumerate() {
+            if old == new {
+                continue;
+            }
+            if changed.len() >= max_lines_per_file * 2 {
+                extra += 1;
+                continue;
+            }
+            changed.push(format!("  {} - {}", index + 1, old.trim_end()));
+            changed.push(format!("  {} + {}", index + 1, new.trim_end()));
+        }
+        if old_lines.len() != new_lines.len() {
+            changed.push(format!(
+                "  the file goes from {} to {} line(s)",
+                old_lines.len(),
+                new_lines.len()
+            ));
+        }
+
+        report.push(format!("{path}: {} edit(s)", edits.len()));
+        report.extend(changed);
+        if extra > 0 {
+            report.push(format!("  ... and {extra} more changed line(s)"));
+        }
+    }
+    report
+}
+
 /// Apply a `WorkspaceEdit` to the files on disk.
 ///
 /// Returns one line per file, naming how many edits landed. Every file is read
@@ -5547,6 +5607,62 @@ mod tests {
     }
 
     // ---- Whole-project checks ---------------------------------------------
+
+    #[test]
+    fn a_preview_shows_the_line_before_and_after() {
+        // Counting the edits says how many there are and never says what they
+        // do, which is the one question a preview is asked.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("a.rs");
+        std::fs::write(&file, "let old = 1;\nlet keep = 2;\n").expect("write");
+        let uri = path_to_uri(&file.to_string_lossy());
+
+        let edit = json!({
+            "changes": {
+                uri.clone(): [{
+                    "range": {
+                        "start": { "line": 0, "character": 4 },
+                        "end": { "line": 0, "character": 7 }
+                    },
+                    "newText": "new"
+                }]
+            }
+        });
+
+        let report = preview_workspace_edit(&edit, 10);
+        assert!(report[0].ends_with("1 edit(s)"), "{report:?}");
+        assert_eq!(report[1], "  1 - let old = 1;");
+        assert_eq!(report[2], "  1 + let new = 1;");
+        assert_eq!(report.len(), 3, "the unchanged line is not listed");
+    }
+
+    #[test]
+    fn a_preview_counts_what_it_does_not_list() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("a.rs");
+        let before: String = (0..6).map(|i| format!("old {i}\n")).collect();
+        std::fs::write(&file, &before).expect("write");
+        let uri = path_to_uri(&file.to_string_lossy());
+
+        let edits: Vec<serde_json::Value> = (0..6)
+            .map(|i| {
+                json!({
+                    "range": {
+                        "start": { "line": i, "character": 0 },
+                        "end": { "line": i, "character": 3 }
+                    },
+                    "newText": "new"
+                })
+            })
+            .collect();
+        let edit = json!({ "changes": { uri: edits } });
+
+        let report = preview_workspace_edit(&edit, 2);
+        assert_eq!(
+            report.last().map(String::as_str),
+            Some("  ... and 4 more changed line(s)")
+        );
+    }
 
     #[tokio::test]
     async fn a_batch_of_files_spends_the_wait_once() {

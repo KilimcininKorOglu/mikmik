@@ -902,24 +902,56 @@ Code intelligence tools query language servers for semantic information about so
 
 **Permission level:** ReadOnly
 
-Query a language server for code intelligence actions. Supports hover documentation, go-to-definition, find-references, document symbols, and diagnostics. Language servers must be configured in `settings.json` under the `lsp_servers` key.
+Query a language server for code intelligence. Servers for common projects are
+detected automatically; more can be declared in `settings.json` under
+`lsp_servers`.
 
-| Parameter | Type    | Required | Description                                                              |
-|-----------|---------|----------|--------------------------------------------------------------------------|
-| `action`  | string  | yes      | `hover`, `definition`, `references`, `symbols`, or `diagnostics`         |
-| `file`    | string  | yes      | Absolute or working-directory-relative path to the source file           |
-| `line`    | integer | no       | 1-based line number (required for `hover`, `definition`, `references`)   |
-| `column`  | integer | no       | 1-based column number (required for `hover`, `definition`, `references`) |
+| Parameter  | Type    | Required | Description                                                                                                     |
+|------------|---------|----------|-------------------------------------------------------------------------------------------------------------------|
+| `action`   | string  | yes      | See the table below.                                                                                            |
+| `file`     | string  | no       | Absolute or working-directory-relative path. `"*"` or omitted means the workspace, for `symbols`, `reload`, `capabilities` and `request`. |
+| `line`     | integer | no       | 1-based line number, for the position-based actions.                                                            |
+| `column`   | integer | no       | 1-based column number. Prefer `symbol`.                                                                         |
+| `symbol`   | string  | no       | The symbol on `line` to point at. `name#2` selects the second occurrence on that line.                          |
+| `query`    | string  | no       | Workspace symbol search text, code-action selector, or the method name for `request`.                           |
+| `new_name` | string  | no       | The new name for `rename`, or the destination path for `rename_file`.                                           |
+| `apply`    | boolean | no       | `rename` and `rename_file` apply by default; `false` previews. `code_actions` lists by default; `true` applies.  |
+| `payload`  | string  | no       | JSON parameters for `request`.                                                                                  |
 
 **Actions:**
 
-| Action        | Description                                                       |
-|---------------|-------------------------------------------------------------------|
-| `hover`       | Returns documentation/type info for the symbol at `line`:`column` |
-| `definition`  | Returns the file and position where the symbol is defined         |
-| `references`  | Lists all references to the symbol at `line`:`column`             |
-| `symbols`     | Returns all symbols (functions, classes, variables) in the file   |
-| `diagnostics` | Returns LSP diagnostics (errors, warnings) for the file           |
+| Action            | Writes | Description                                                                 |
+|-------------------|--------|-----------------------------------------------------------------------------|
+| `hover`           | no     | Documentation and type of the symbol at the position                        |
+| `definition`      | no     | Where the symbol is defined                                                 |
+| `type_definition` | no     | Where the symbol's type is defined                                          |
+| `implementation`  | no     | What implements the interface or trait at the position                      |
+| `references`      | no     | Every reference to the symbol at the position                               |
+| `symbols`         | no     | One file's symbols, or the workspace's with `file: "*"` and a `query`       |
+| `diagnostics`     | no     | Errors and warnings for the file                                            |
+| `status`          | no     | Which servers are configured, running, or missing their binary              |
+| `capabilities`    | no     | What a server says it supports                                              |
+| `rename`          | yes    | Rename the symbol everywhere it is used                                     |
+| `rename_file`     | yes    | Move a file or directory and update every reference to it                   |
+| `code_actions`    | yes    | List the fixes and refactorings offered, and apply one                      |
+| `reload`          | yes    | Re-read the configuration and push it to the servers again                  |
+| `request`         | yes    | Send a raw LSP request, for anything the actions above do not cover         |
+
+**Naming a position.** `symbol` is the reliable way to point at a token:
+counting columns by hand is the commonest way a request lands on the wrong one
+and answers nothing. With neither `column` nor `symbol`, the first
+non-whitespace column of the line is used.
+
+**Rename.** `rename` applies the edits unless `apply` is `false`. A create,
+rename or delete of a whole file inside the server's answer is reported and not
+performed; use `rename_file` for that, which asks every server for the edits
+the move needs, applies them, moves the path, and tells the servers it moved.
+A directory move is limited to 1000 files.
+
+**Code actions.** Listing shows an index and a title for each. Applying takes
+`apply: true` and a `query` that is either the index or part of the title. The
+action's edit is applied first, then its command is run, which is the order the
+protocol specifies.
 
 `diagnostics` asks every server that handles the file, linters included, and
 waits up to three seconds for a fresh answer rather than reading whatever the

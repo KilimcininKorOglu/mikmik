@@ -730,17 +730,28 @@ Environment variables can be set in `settings.json` under an `env` key. These ar
 
 ## LSP integration
 
-The `LSP` tool provides code intelligence by communicating with a Language Server Protocol server for the current file.
+The `LSP` tool provides code intelligence by talking to a language server.
+Servers for common projects are detected automatically; the rest are declared
+in `settings.json` under `lsp_servers`.
 
 ### Operations
 
-| Operation     | Description                                                         |
-|---------------|---------------------------------------------------------------------|
-| `hover`       | Get type information and documentation for the symbol at a position |
-| `definition`  | Find where a symbol is defined                                      |
-| `references`  | Find all references to a symbol                                     |
-| `symbols`     | List all symbols (functions, classes, variables) in the file        |
-| `diagnostics` | Get errors and warnings reported by the language server             |
+| Operation         | Description                                                         |
+|-------------------|---------------------------------------------------------------------|
+| `hover`           | Type information and documentation for the symbol at a position     |
+| `definition`      | Where a symbol is defined                                           |
+| `type_definition` | Where the symbol's type is defined                                  |
+| `implementation`  | What implements the interface or trait at a position                |
+| `references`      | Every reference to a symbol                                         |
+| `symbols`         | One file's symbols, or the workspace's                              |
+| `diagnostics`     | Errors and warnings for a file                                      |
+| `rename`          | Rename a symbol everywhere it is used                               |
+| `rename_file`     | Move a file or directory and update every reference                 |
+| `code_actions`    | List the fixes and refactorings offered, and apply one              |
+| `status`          | Which servers are configured, running, or missing their binary      |
+| `capabilities`    | What a server says it supports                                      |
+| `reload`          | Re-read the configuration and push it to the servers again          |
+| `request`         | Send a raw LSP request                                              |
 
 ### Input schema
 
@@ -749,16 +760,12 @@ The `LSP` tool provides code intelligence by communicating with a Language Serve
   "action": "hover",
   "file": "src/main.rs",
   "line": 42,
-  "column": 15
+  "symbol": "parse_config"
 }
 ```
 
-- `action` — required, one of the operations above
-- `file` — required, absolute or working-directory-relative path
-- `line` — 1-based line number (required for `hover`, `definition`, `references`)
-- `column` — 1-based column number (required for `hover`, `definition`, `references`)
-
-The `symbols` and `diagnostics` actions only require `action` and `file`.
+`symbol` names the token on that line, which is more reliable than counting
+columns. The full parameter list is in [tools.md#lsp](tools.md#lsp).
 
 ### Configuration
 
@@ -766,5 +773,6 @@ LSP servers are configured in `settings.json` under `lsp_servers`. The field
 list, the routing rules and the precedence rules are in
 [tools.md#lsp](tools.md#lsp).
 
-If no LSP server is configured for the file, the tool says so. Path resolution
-is relative to the current working directory.
+If no language server is running for the file, the tool names the reason for
+each server that could have served it. Path resolution is relative to the
+current working directory.

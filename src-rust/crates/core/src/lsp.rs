@@ -1351,6 +1351,186 @@ impl LspClient {
         Ok(symbols)
     }
 
+    /// The type of the symbol at a position.
+    pub async fn type_definition(
+        &self,
+        uri: &str,
+        line: u32,
+        character: u32,
+    ) -> anyhow::Result<Vec<String>> {
+        let result = self
+            .send_request_inner(
+                "textDocument/typeDefinition",
+                position_params(uri, line, character),
+            )
+            .await?;
+        Ok(extract_locations(&result))
+    }
+
+    /// What implements the interface or trait at a position.
+    pub async fn implementation(
+        &self,
+        uri: &str,
+        line: u32,
+        character: u32,
+    ) -> anyhow::Result<Vec<String>> {
+        let result = self
+            .send_request_inner(
+                "textDocument/implementation",
+                position_params(uri, line, character),
+            )
+            .await?;
+        Ok(extract_locations(&result))
+    }
+
+    /// Symbols matching `query` anywhere in the workspace.
+    pub async fn workspace_symbols(&self, query: &str) -> anyhow::Result<Vec<WorkspaceSymbol>> {
+        let result = self
+            .send_request_inner("workspace/symbol", json!({ "query": query }))
+            .await?;
+        Ok(parse_workspace_symbols(&result))
+    }
+
+    /// The edits that renaming the symbol at a position would make.
+    ///
+    /// The edit is returned rather than applied, because whether to apply it is
+    /// the caller's decision.
+    pub async fn rename(
+        &self,
+        uri: &str,
+        line: u32,
+        character: u32,
+        new_name: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let mut params = position_params(uri, line, character);
+        params["newName"] = json!(new_name);
+        self.send_request_inner("textDocument/rename", params).await
+    }
+
+    /// The code actions offered at a position.
+    ///
+    /// `only` filters by kind, server-side. The diagnostics the server already
+    /// published for the file are passed as context, because most quick fixes
+    /// are offered for a specific diagnostic and a server given none offers
+    /// only the refactorings.
+    pub async fn code_actions(
+        &self,
+        uri: &str,
+        line: u32,
+        character: u32,
+        only: Option<&str>,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let diagnostics = self
+            .shared
+            .diagnostics
+            .get(uri)
+            .map(|entry| {
+                entry
+                    .value()
+                    .iter()
+                    .map(|d| {
+                        json!({
+                            "range": {
+                                "start": {
+                                    "line": d.line.saturating_sub(1),
+                                    "character": d.column.saturating_sub(1)
+                                },
+                                "end": {
+                                    "line": d.line.saturating_sub(1),
+                                    "character": d.column.saturating_sub(1)
+                                }
+                            },
+                            "severity": d.severity as u8,
+                            "message": d.message,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let mut context = json!({ "diagnostics": diagnostics });
+        if let Some(kind) = only.filter(|k| !k.is_empty()) {
+            context["only"] = json!([kind]);
+        }
+
+        let zero_based_line = line.saturating_sub(1);
+        let zero_based_character = character.saturating_sub(1);
+        let result = self
+            .send_request_inner(
+                "textDocument/codeAction",
+                json!({
+                    "textDocument": { "uri": uri },
+                    "range": {
+                        "start": { "line": zero_based_line, "character": zero_based_character },
+                        "end": { "line": zero_based_line, "character": zero_based_character }
+                    },
+                    "context": context,
+                }),
+            )
+            .await?;
+        Ok(result.as_array().cloned().unwrap_or_default())
+    }
+
+    /// Ask the server to fill in the parts of a code action it left out.
+    ///
+    /// A server is allowed to send a title and compute the edit only if the
+    /// action is chosen, which is why applying one means asking again.
+    pub async fn resolve_code_action(
+        &self,
+        action: &serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        self.send_request_inner("codeAction/resolve", action.clone())
+            .await
+    }
+
+    /// Run a command the server offers.
+    pub async fn execute_command(
+        &self,
+        command: &str,
+        arguments: &serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        self.send_request_inner(
+            "workspace/executeCommand",
+            json!({ "command": command, "arguments": arguments }),
+        )
+        .await
+    }
+
+    /// Ask the server what edits a rename of these files would need.
+    pub async fn will_rename_files(
+        &self,
+        pairs: &[(String, String)],
+    ) -> anyhow::Result<serde_json::Value> {
+        let files: Vec<serde_json::Value> = pairs
+            .iter()
+            .map(|(old, new)| json!({ "oldUri": old, "newUri": new }))
+            .collect();
+        self.send_request_inner("workspace/willRenameFiles", json!({ "files": files }))
+            .await
+    }
+
+    /// Tell the server the files have been renamed.
+    pub async fn did_rename_files(&self, pairs: &[(String, String)]) -> anyhow::Result<()> {
+        let files: Vec<serde_json::Value> = pairs
+            .iter()
+            .map(|(old, new)| json!({ "oldUri": old, "newUri": new }))
+            .collect();
+        self.send_notification_inner("workspace/didRenameFiles", json!({ "files": files }))
+            .await
+    }
+
+    /// Send a request this client has no method for.
+    ///
+    /// The escape hatch for a server-specific request, and for reaching a part
+    /// of the protocol nothing here wraps yet.
+    pub async fn raw_request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        self.send_request_inner(method, params).await
+    }
+
     /// Get cached diagnostics for `file_path`.
     pub fn get_diagnostics(&self, file_path: &str) -> Vec<LspDiagnostic> {
         let uri = path_to_uri(file_path);
@@ -1889,6 +2069,225 @@ pub fn apply_workspace_edit(edit: &serde_json::Value) -> anyhow::Result<Vec<Stri
 // ---------------------------------------------------------------------------
 // Location / symbol helpers
 // ---------------------------------------------------------------------------
+
+/// How many files one rename may move.
+///
+/// A directory rename that walks a build output would otherwise send a request
+/// naming a hundred thousand files, which no server survives.
+pub const MAX_RENAME_PAIRS: usize = 1_000;
+
+/// Every file a move touches, as (old path, new path).
+///
+/// A file gives one pair. A directory gives one pair per file inside it,
+/// because the servers are told about files, not directories.
+fn enumerate_rename_pairs(
+    from: &Path,
+    to: &Path,
+) -> anyhow::Result<Vec<(std::path::PathBuf, std::path::PathBuf)>> {
+    if from.is_file() {
+        return Ok(vec![(from.to_path_buf(), to.to_path_buf())]);
+    }
+
+    let mut pairs = Vec::new();
+    let mut stack = vec![from.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", dir.display()))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let relative = path.strip_prefix(from).unwrap_or(&path);
+            pairs.push((path.clone(), to.join(relative)));
+            if pairs.len() > MAX_RENAME_PAIRS {
+                return Err(anyhow::anyhow!(
+                    "'{}' holds more than {MAX_RENAME_PAIRS} files; move it in smaller pieces",
+                    from.display()
+                ));
+            }
+        }
+    }
+    Ok(pairs)
+}
+
+/// Find the column of `symbol` on `line` of `file_path`.
+///
+/// Counting columns by hand is the commonest way a position request lands on
+/// the wrong token and answers nothing, so a caller may name the symbol
+/// instead. `name#2` selects the second occurrence on that line; without the
+/// suffix the first is used.
+///
+/// With no symbol the first non-whitespace column is used, which is right for
+/// a line whose only interesting token is at its start and wrong otherwise, so
+/// callers that need precision ask for one.
+///
+/// `line` and the result are both 1-based.
+pub fn resolve_symbol_column(
+    file_path: &str,
+    line: u32,
+    symbol: Option<&str>,
+) -> anyhow::Result<u32> {
+    let content = std::fs::read_to_string(file_path)
+        .map_err(|e| anyhow::anyhow!("cannot read '{file_path}': {e}"))?;
+    let text = content
+        .lines()
+        .nth(line.saturating_sub(1) as usize)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "'{file_path}' has {} lines, so line {line} does not exist",
+                content.lines().count()
+            )
+        })?;
+
+    let Some(spec) = symbol.filter(|s| !s.is_empty()) else {
+        let column = text
+            .char_indices()
+            .find(|(_, ch)| !ch.is_whitespace())
+            .map(|(index, _)| utf16_column(text, index))
+            .unwrap_or(0);
+        return Ok(column + 1);
+    };
+
+    let (name, occurrence) = match spec.rsplit_once('#') {
+        Some((name, count)) => {
+            let nth: usize = count.parse().map_err(|_| {
+                anyhow::anyhow!("'{spec}' does not name an occurrence; write `name#2`")
+            })?;
+            if nth == 0 {
+                return Err(anyhow::anyhow!("occurrences are counted from 1"));
+            }
+            (name, nth)
+        }
+        None => (spec, 1),
+    };
+
+    // Exact first, then case-insensitively: a caller who typed the name in the
+    // wrong case meant the symbol that is there.
+    let found = nth_match(text, name, occurrence).or_else(|| {
+        let lowered = text.to_lowercase();
+        nth_match(&lowered, &name.to_lowercase(), occurrence)
+    });
+
+    match found {
+        Some(index) => Ok(utf16_column(text, index) + 1),
+        None => Err(anyhow::anyhow!(
+            "'{name}' does not appear on line {line} of '{file_path}'{}",
+            if occurrence > 1 {
+                format!(" {occurrence} times")
+            } else {
+                String::new()
+            }
+        )),
+    }
+}
+
+/// The byte index of the `nth` occurrence of `needle` in `haystack`.
+fn nth_match(haystack: &str, needle: &str, nth: usize) -> Option<usize> {
+    if needle.is_empty() {
+        return None;
+    }
+    haystack.match_indices(needle).nth(nth - 1).map(|(i, _)| i)
+}
+
+/// The UTF-16 column of a byte index, which is what the protocol counts.
+fn utf16_column(text: &str, byte_index: usize) -> u32 {
+    text[..byte_index]
+        .chars()
+        .map(|c| c.len_utf16() as u32)
+        .sum()
+}
+
+/// The lines around a location, for showing a result in context.
+///
+/// A bare `file:line:column` makes the reader open the file to learn anything.
+/// Each line is prefixed with its number.
+pub fn read_location_context(file_path: &str, line: u32, around: u32) -> Vec<String> {
+    let Ok(content) = std::fs::read_to_string(file_path) else {
+        return Vec::new();
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let target = line.saturating_sub(1) as usize;
+    let first = target.saturating_sub(around as usize);
+    let last = (target + around as usize).min(lines.len().saturating_sub(1));
+    if first > last || lines.is_empty() {
+        return Vec::new();
+    }
+    (first..=last)
+        .map(|index| format!("{:>6} | {}", index + 1, lines[index]))
+        .collect()
+}
+
+/// The parameters every position-based request shares.
+///
+/// The protocol counts from zero and every caller here counts from one, so the
+/// conversion lives in one place.
+fn position_params(uri: &str, line: u32, character: u32) -> serde_json::Value {
+    json!({
+        "textDocument": { "uri": uri },
+        "position": {
+            "line": line.saturating_sub(1),
+            "character": character.saturating_sub(1),
+        }
+    })
+}
+
+/// A symbol found anywhere in the workspace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceSymbol {
+    pub name: String,
+    pub kind: String,
+    /// The class or module the symbol belongs to, when the server says.
+    pub container: Option<String>,
+    pub location: LspLocation,
+}
+
+/// Read a `workspace/symbol` answer.
+///
+/// A server may answer with `SymbolInformation`, which carries `location`, or
+/// with the newer `WorkspaceSymbol`, whose location may be only a URI while
+/// the range is filled in on request. The URI-only form is read as line one.
+pub fn parse_workspace_symbols(result: &serde_json::Value) -> Vec<WorkspaceSymbol> {
+    result
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let name = item.get("name")?.as_str()?.to_string();
+                    let kind =
+                        symbol_kind_name(item.get("kind").and_then(|k| k.as_u64()).unwrap_or(0))
+                            .to_string();
+                    let location = item.get("location")?;
+                    let uri = location.get("uri")?.as_str()?;
+                    Some(WorkspaceSymbol {
+                        name,
+                        kind,
+                        container: item
+                            .get("containerName")
+                            .and_then(|c| c.as_str())
+                            .filter(|c| !c.is_empty())
+                            .map(|c| c.to_string()),
+                        location: LspLocation {
+                            file: uri_to_path(uri),
+                            line: location
+                                .pointer("/range/start/line")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0) as u32
+                                + 1,
+                            column: location
+                                .pointer("/range/start/character")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0) as u32
+                                + 1,
+                        },
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 /// A place in a file, as a server reported it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2561,6 +2960,335 @@ impl LspManager {
         let uri = path_to_uri(file_path);
         let client = self.navigation_client(file_path, root_dir).await?;
         client.document_symbols(&uri).await
+    }
+
+    /// Where the type of the symbol at a position is declared.
+    pub async fn type_definition(
+        &mut self,
+        file_path: &str,
+        root_dir: &Path,
+        line: u32,
+        character: u32,
+    ) -> anyhow::Result<Vec<String>> {
+        let uri = path_to_uri(file_path);
+        let client = self.navigation_client(file_path, root_dir).await?;
+        client.type_definition(&uri, line, character).await
+    }
+
+    /// What implements the interface or trait at a position.
+    pub async fn implementation(
+        &mut self,
+        file_path: &str,
+        root_dir: &Path,
+        line: u32,
+        character: u32,
+    ) -> anyhow::Result<Vec<String>> {
+        let uri = path_to_uri(file_path);
+        let client = self.navigation_client(file_path, root_dir).await?;
+        client.implementation(&uri, line, character).await
+    }
+
+    /// Symbols matching `query` across the workspace.
+    ///
+    /// Every non-linter server is asked, because a workspace holds more than
+    /// one language and the caller does not name a file here. Repeats are
+    /// dropped: two servers indexing one file report the same symbol.
+    pub async fn workspace_symbols(
+        &mut self,
+        query: &str,
+        root_dir: &Path,
+        limit: usize,
+    ) -> anyhow::Result<Vec<WorkspaceSymbol>> {
+        let names: Vec<String> = self
+            .configs
+            .iter()
+            .filter(|c| !c.disabled && !c.is_linter)
+            .map(|c| c.name.clone())
+            .collect();
+
+        let mut found: Vec<WorkspaceSymbol> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
+        for name in names {
+            let client = match self.ensure_client(&name, root_dir).await {
+                Ok(client) => client,
+                Err(e) => {
+                    errors.push(e.to_string());
+                    continue;
+                }
+            };
+            if !client.supports("workspaceSymbolProvider") {
+                continue;
+            }
+            client.wait_for_project_loaded().await;
+            match client.workspace_symbols(query).await {
+                Ok(symbols) => found.extend(symbols),
+                Err(e) => errors.push(e.to_string()),
+            }
+        }
+
+        if found.is_empty() && !errors.is_empty() {
+            return Err(anyhow::anyhow!("{}", errors.join("; ")));
+        }
+
+        found.sort_by(|a, b| {
+            a.name
+                .cmp(&b.name)
+                .then(a.location.file.cmp(&b.location.file))
+                .then(a.location.line.cmp(&b.location.line))
+        });
+        found.dedup_by(|a, b| a.name == b.name && a.location == b.location);
+        found.truncate(limit);
+        Ok(found)
+    }
+
+    /// The edits a rename would make, without applying them.
+    pub async fn rename(
+        &mut self,
+        file_path: &str,
+        root_dir: &Path,
+        line: u32,
+        character: u32,
+        new_name: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let uri = path_to_uri(file_path);
+        let client = self.navigation_client(file_path, root_dir).await?;
+        if !client.supports("renameProvider") {
+            return Err(anyhow::anyhow!(
+                "'{}' does not implement rename",
+                client.server_name
+            ));
+        }
+        client.rename(&uri, line, character, new_name).await
+    }
+
+    /// The code actions offered at a position.
+    pub async fn code_actions(
+        &mut self,
+        file_path: &str,
+        root_dir: &Path,
+        line: u32,
+        character: u32,
+        only: Option<&str>,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let uri = path_to_uri(file_path);
+        let client = self.navigation_client(file_path, root_dir).await?;
+        if !client.supports("codeActionProvider") {
+            return Err(anyhow::anyhow!(
+                "'{}' does not implement code actions",
+                client.server_name
+            ));
+        }
+        client.code_actions(&uri, line, character, only).await
+    }
+
+    /// Apply one code action: resolve it if needed, apply its edit, run its
+    /// command.
+    ///
+    /// An action may carry an edit, a command, both, or neither, and the
+    /// specification says the edit is applied first.
+    pub async fn apply_code_action(
+        &mut self,
+        file_path: &str,
+        root_dir: &Path,
+        action: &serde_json::Value,
+    ) -> anyhow::Result<Vec<String>> {
+        let server_name = self
+            .primary_server_for_file(file_path)
+            .map(|c| c.name.clone())
+            .ok_or_else(|| anyhow::anyhow!("no language server handles '{file_path}'"))?;
+        let client = self.ensure_client(&server_name, root_dir).await?;
+
+        // A server is allowed to send a title now and the edit only when the
+        // action is chosen. A failure here is not fatal: the action may have
+        // arrived complete.
+        let resolved = if action.get("edit").is_none() && action.get("data").is_some() {
+            client
+                .resolve_code_action(action)
+                .await
+                .unwrap_or_else(|_| action.clone())
+        } else {
+            action.clone()
+        };
+
+        let mut report = Vec::new();
+        if let Some(edit) = resolved.get("edit") {
+            report.extend(apply_workspace_edit(edit)?);
+            for operation in workspace_edit_resource_operations(edit) {
+                report.push(format!("not performed: {operation}"));
+            }
+        }
+        if let Some(command) = resolved.get("command") {
+            // An action's `command` may be the command object itself or a
+            // nested one.
+            let (name, arguments) = match command.get("command") {
+                Some(inner) => (
+                    inner.as_str().unwrap_or_default(),
+                    command
+                        .get("arguments")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                ),
+                None => (
+                    command.as_str().unwrap_or_default(),
+                    resolved
+                        .get("arguments")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                ),
+            };
+            if !name.is_empty() {
+                client.execute_command(name, &arguments).await?;
+                report.push(format!("ran {name}"));
+            }
+        }
+        Ok(report)
+    }
+
+    /// Move a file or a directory, and let every server update the references.
+    ///
+    /// A rename on disk alone leaves every import of the old path broken. The
+    /// servers are asked first for the edits the move needs, then the move
+    /// happens, then they are told it happened. With `apply` false only the
+    /// edits are reported.
+    pub async fn rename_file(
+        &mut self,
+        from: &Path,
+        to: &Path,
+        root_dir: &Path,
+        apply: bool,
+    ) -> anyhow::Result<Vec<String>> {
+        if from == to {
+            return Err(anyhow::anyhow!(
+                "the source and the destination are the same"
+            ));
+        }
+        if !from.exists() {
+            return Err(anyhow::anyhow!("'{}' does not exist", from.display()));
+        }
+        if to.exists() {
+            return Err(anyhow::anyhow!("'{}' already exists", to.display()));
+        }
+
+        let pairs = enumerate_rename_pairs(from, to)?;
+        if pairs.is_empty() {
+            return Err(anyhow::anyhow!("'{}' holds no files", from.display()));
+        }
+
+        let uri_pairs: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(old, new)| {
+                (
+                    path_to_uri(&old.to_string_lossy()),
+                    // The destination does not exist yet, so its URI is built
+                    // from the path rather than canonicalised.
+                    format!(
+                        "file://{}",
+                        percent_encode_path(&new.to_string_lossy().replace('\\', "/"))
+                    ),
+                )
+            })
+            .collect();
+
+        let affected: Vec<String> = pairs
+            .iter()
+            .flat_map(|(old, new)| {
+                [
+                    old.to_string_lossy().into_owned(),
+                    new.to_string_lossy().into_owned(),
+                ]
+            })
+            .collect();
+        let names: Vec<String> = self
+            .configs
+            .iter()
+            .filter(|c| !c.disabled && !c.is_linter)
+            .filter(|c| affected.iter().any(|path| c.handles_file(path)))
+            .map(|c| c.name.clone())
+            .collect();
+
+        let mut report = Vec::new();
+        let mut edits: Vec<serde_json::Value> = Vec::new();
+        for name in &names {
+            let client = match self.ensure_client(name, root_dir).await {
+                Ok(client) => client,
+                Err(e) => {
+                    report.push(format!("{name}: {e}"));
+                    continue;
+                }
+            };
+            if !client.supports("workspace.fileOperations.willRename") {
+                continue;
+            }
+            client.wait_for_project_loaded().await;
+            match client.will_rename_files(&uri_pairs).await {
+                Ok(edit) if !edit.is_null() => edits.push(edit),
+                Ok(_) => {}
+                // A server that does not implement it says so, and that is not
+                // a reason to abandon the rename.
+                Err(e) => report.push(format!("{name}: {e}")),
+            }
+        }
+
+        if !apply {
+            for edit in &edits {
+                for (uri, file_edits) in workspace_edit_files(edit) {
+                    report.push(format!(
+                        "would change {}: {} edit(s)",
+                        uri_to_path(&uri),
+                        file_edits.len()
+                    ));
+                }
+            }
+            report.push(format!("would move {} → {}", from.display(), to.display()));
+            return Ok(report);
+        }
+
+        for edit in &edits {
+            report.extend(apply_workspace_edit(edit)?);
+        }
+
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", parent.display()))?;
+        }
+        std::fs::rename(from, to).map_err(|e| {
+            anyhow::anyhow!("cannot move {} to {}: {e}", from.display(), to.display())
+        })?;
+        report.push(format!("moved {} → {}", from.display(), to.display()));
+
+        // The documents are gone from their old paths, so the servers must
+        // forget them before they are told about the move.
+        for (old_uri, _) in &uri_pairs {
+            for name in &names {
+                if let Some(client) = self
+                    .clients
+                    .get_mut(&(name.clone(), root_dir.to_path_buf()))
+                {
+                    if client.has_open(old_uri) {
+                        let _ = client.close_document(old_uri).await;
+                    }
+                }
+            }
+        }
+        for name in &names {
+            if let Some(client) = self.clients.get(&(name.clone(), root_dir.to_path_buf())) {
+                let _ = client.did_rename_files(&uri_pairs).await;
+            }
+        }
+
+        Ok(report)
+    }
+
+    /// Send a request this manager has no method for.
+    pub async fn raw_request(
+        &mut self,
+        server_name: &str,
+        root_dir: &Path,
+        method: &str,
+        params: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        let client = self.ensure_client(server_name, root_dir).await?;
+        client.raw_request(method, params).await
     }
 
     /// Diagnostics for `file_path`, waiting for a fresh answer.
@@ -3848,6 +4576,138 @@ mod tests {
             waited >= std::time::Duration::from_millis(80),
             "returned after {waited:?}, before the server finished indexing"
         );
+    }
+
+    // ---- Symbols and positions -------------------------------------------
+
+    #[test]
+    fn a_symbol_names_its_own_column() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("a.rs");
+        std::fs::write(&file, "fn main() {\n    let value = parse(value);\n}\n").expect("write");
+        let path = file.to_string_lossy().into_owned();
+
+        assert_eq!(
+            resolve_symbol_column(&path, 2, Some("parse")).expect("found"),
+            17
+        );
+        // The second occurrence, not the first.
+        assert_eq!(
+            resolve_symbol_column(&path, 2, Some("value#2")).expect("found"),
+            23
+        );
+        // No symbol: the first thing that is not whitespace.
+        assert_eq!(resolve_symbol_column(&path, 2, None).expect("found"), 5);
+    }
+
+    #[test]
+    fn a_symbol_column_counts_the_way_the_protocol_does() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("a.rs");
+        std::fs::write(&file, "let café = parse();\n").expect("write");
+        let path = file.to_string_lossy().into_owned();
+
+        // `café` is 4 characters and 5 bytes. A byte count would put the
+        // request one column late and the server would answer nothing.
+        assert_eq!(
+            resolve_symbol_column(&path, 1, Some("parse")).expect("found"),
+            12
+        );
+    }
+
+    #[test]
+    fn a_missing_symbol_is_reported_rather_than_guessed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("a.rs");
+        std::fs::write(&file, "fn main() {}\n").expect("write");
+        let path = file.to_string_lossy().into_owned();
+
+        let error = resolve_symbol_column(&path, 1, Some("nowhere")).expect_err("should fail");
+        assert!(error.to_string().contains("does not appear"), "{error}");
+
+        let error = resolve_symbol_column(&path, 99, None).expect_err("should fail");
+        assert!(error.to_string().contains("does not exist"), "{error}");
+    }
+
+    #[test]
+    fn the_context_of_a_location_is_read() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("a.rs");
+        std::fs::write(&file, "one\ntwo\nthree\nfour\n").expect("write");
+        let path = file.to_string_lossy().into_owned();
+
+        let context = read_location_context(&path, 2, 1);
+        assert_eq!(context.len(), 3);
+        assert!(context[1].contains("two"), "{context:?}");
+        // At the first line there is nothing above it to show.
+        assert_eq!(read_location_context(&path, 1, 1).len(), 2);
+    }
+
+    #[test]
+    fn a_workspace_symbol_answer_is_read() {
+        let answer = json!([{
+            "name": "parse_config",
+            "kind": 12,
+            "containerName": "config",
+            "location": {
+                "uri": "file:///tmp/a.rs",
+                "range": {
+                    "start": { "line": 4, "character": 3 },
+                    "end": { "line": 4, "character": 15 }
+                }
+            }
+        }]);
+        let symbols = parse_workspace_symbols(&answer);
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].name, "parse_config");
+        assert_eq!(symbols[0].kind, "function");
+        assert_eq!(symbols[0].container.as_deref(), Some("config"));
+        assert_eq!(symbols[0].location.to_string(), "/tmp/a.rs:5:4");
+    }
+
+    // ---- Moving files -----------------------------------------------------
+
+    #[test]
+    fn a_file_move_is_one_pair() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let from = dir.path().join("a.rs");
+        std::fs::write(&from, "").expect("write");
+        let to = dir.path().join("b.rs");
+
+        let pairs = enumerate_rename_pairs(&from, &to).expect("pairs");
+        assert_eq!(pairs, vec![(from, to)]);
+    }
+
+    #[test]
+    fn a_directory_move_names_every_file_in_it() {
+        // The servers are told about files, not directories, so a directory
+        // move that sent one pair would leave every import broken.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let from = dir.path().join("src");
+        std::fs::create_dir_all(from.join("nested")).expect("mkdir");
+        std::fs::write(from.join("a.rs"), "").expect("write");
+        std::fs::write(from.join("nested/b.rs"), "").expect("write");
+        let to = dir.path().join("lib");
+
+        let mut pairs = enumerate_rename_pairs(&from, &to).expect("pairs");
+        pairs.sort();
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].1, to.join("a.rs"));
+        assert_eq!(pairs[1].1, to.join("nested/b.rs"));
+    }
+
+    #[tokio::test]
+    async fn a_move_onto_an_existing_path_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let from = dir.path().join("a.rs");
+        let to = dir.path().join("b.rs");
+        std::fs::write(&from, "").expect("write");
+        std::fs::write(&to, "keep").expect("write");
+
+        let mut mgr = LspManager::new();
+        let error = error_of(mgr.rename_file(&from, &to, dir.path(), true).await);
+        assert!(error.contains("already exists"), "{error}");
+        assert_eq!(std::fs::read_to_string(&to).expect("read"), "keep");
     }
 
     // ---- Client lifecycle -------------------------------------------------

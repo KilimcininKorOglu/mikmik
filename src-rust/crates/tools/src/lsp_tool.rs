@@ -289,6 +289,10 @@ impl Tool for LspTool {
                 "payload": {
                     "type": "string",
                     "description": "JSON parameters for `request`."
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Seconds to allow for the server's answer. Default 20, clamped to 5..300. Raise it for a cold server on a large project."
                 }
             },
             "required": ["action"]
@@ -341,6 +345,10 @@ impl Tool for LspTool {
         if let Err(e) = require_a_position(&action, &input, column, symbol) {
             return ToolResult::error(e);
         }
+        let request_timeout = input
+            .get("timeout")
+            .and_then(|v| v.as_u64())
+            .map(|seconds| std::time::Duration::from_secs(seconds.clamp(5, 300)));
         let query = input.get("query").and_then(|v| v.as_str()).unwrap_or("");
         let new_name = input.get("new_name").and_then(|v| v.as_str()).unwrap_or("");
         let apply = input.get("apply").and_then(|v| v.as_bool());
@@ -367,6 +375,7 @@ impl Tool for LspTool {
                 .effective_lsp_idle_timeout()
                 .or_else(|| manager.apply_file_config(&ctx.working_dir));
             manager.set_idle_timeout(idle);
+            manager.set_request_timeout(request_timeout);
             manager.sweep_idle().await;
         }
 

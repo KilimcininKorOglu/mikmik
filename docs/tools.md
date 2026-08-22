@@ -925,6 +925,7 @@ detected automatically; more can be declared in `settings.json` under
 | `new_name` | string  | no       | The new name for `rename`, or the destination path for `rename_file`.                                           |
 | `apply`    | boolean | no       | `rename` and `rename_file` apply by default; `false` previews. `code_actions` lists by default; `true` applies.  |
 | `payload`  | string  | no       | JSON parameters for `request`.                                                                                  |
+| `timeout`  | integer | no       | Seconds allowed for the server's answer. Default 20, clamped to 5..300.                                         |
 
 **Actions:**
 
@@ -1139,6 +1140,13 @@ the entry is switched off.
   per-request `request_timeout_ms`.
 - When a server exits, every request still waiting fails with the reason and the
   last lines the server wrote to its standard error.
+- A file written by `Write` or `Edit` is announced to every running server with
+  `workspace/didChangeWatchedFiles`, not only to the ones that serve its type: a
+  server watches files that affect it without serving them, a lock file or a
+  schema for instance.
+- A URI is stored and looked up in one spelling, resolved through the
+  filesystem. A server that answers with a different case, a resolved symlink or
+  a different set of percent escapes still matches.
 
 The tool resolves relative paths against the current working directory.
 

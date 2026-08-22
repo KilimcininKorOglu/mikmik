@@ -22,6 +22,9 @@ const WRITE_DIAGNOSTICS_WAIT: std::time::Duration = std::time::Duration::from_mi
 /// How many problems one write reports.
 const REPORT_LIMIT: usize = 10;
 
+/// The LSP `FileChangeType` for a file whose content changed.
+const FILE_CHANGED: u8 = 2;
+
 /// What each session has already reported, so a problem is announced once.
 type Ledgers = HashMap<String, lsp::DiagnosticsLedger>;
 
@@ -58,6 +61,16 @@ pub async fn report_after_write(file_path: &str, ctx: &ToolContext) -> Option<St
             // No server for this file type. Nothing to start, nothing to say.
             return None;
         }
+    }
+
+    // Every server hears about the change, not only the ones that serve this
+    // file type: a server watches files that affect it without serving them,
+    // a lock file or a schema for instance.
+    {
+        let manager = manager_arc.lock().await;
+        manager
+            .notify_files_changed(&[file_path.to_string()], FILE_CHANGED)
+            .await;
     }
 
     let mut notes: Vec<String> = Vec::new();

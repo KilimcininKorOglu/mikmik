@@ -1036,7 +1036,7 @@ impl LspClient {
     pub fn diagnostic_version(&self, uri: &str) -> u64 {
         self.shared
             .diagnostic_versions
-            .get(uri)
+            .get(&normalize_uri(uri))
             .map(|v| *v)
             .unwrap_or(0)
     }
@@ -1765,7 +1765,7 @@ impl LspClient {
 
     /// Get cached diagnostics for `file_path`.
     pub fn get_diagnostics(&self, file_path: &str) -> Vec<LspDiagnostic> {
-        let uri = path_to_uri(file_path);
+        let uri = normalize_uri(&path_to_uri(file_path));
         self.shared
             .diagnostics
             .get(&uri)
@@ -2015,8 +2015,10 @@ fn handle_notification(shared: &Arc<ClientShared>, method: &str, params: &serde_
 fn handle_publish_diagnostics(params: &serde_json::Value, shared: &Arc<ClientShared>) {
     let server_name = shared.server_name.as_str();
     let diagnostics = &shared.diagnostics;
+    // Normalised, because a server may answer with a spelling of the URI that
+    // differs from the one it was sent, and a lookup would then miss.
     let uri = match params.get("uri").and_then(|v| v.as_str()) {
-        Some(u) => u.to_string(),
+        Some(u) => normalize_uri(u),
         None => return,
     };
 
@@ -2931,6 +2933,21 @@ pub fn path_to_uri(path: &str) -> String {
     }
 }
 
+/// The one spelling of a URI that this client stores and looks up by.
+///
+/// A server may answer with a URI spelled differently from the one it was
+/// sent: a different case on a case-insensitive filesystem, a symlink
+/// resolved, or a different set of percent escapes. Storing diagnostics under
+/// the server's spelling and looking them up under ours then misses every
+/// time. Both sides go through here first.
+pub fn normalize_uri(uri: &str) -> String {
+    let path = uri_to_path(uri);
+    // `path_to_uri` canonicalises, which resolves symlinks and answers with
+    // the case the filesystem holds. A path that no longer exists keeps its
+    // own spelling, which is still better than two spellings.
+    path_to_uri(&path)
+}
+
 /// The filesystem path a `file:` URI names.
 pub fn uri_to_path(uri: &str) -> String {
     let Some(rest) = uri.strip_prefix("file://") else {
@@ -3150,6 +3167,26 @@ impl LspManager {
         self.idle_timeout = timeout;
     }
 
+    /// Give every server the same budget for one request.
+    ///
+    /// For a caller that knows this request is the expensive one: the first
+    /// question asked of a cold server on a large project, for instance. A
+    /// server's own `request_timeout_ms` is left alone when this is `None`.
+    pub fn set_request_timeout(&mut self, timeout: Option<std::time::Duration>) {
+        // `None` leaves each server on its own budget rather than clearing a
+        // `request_timeout_ms` the user configured.
+        let Some(timeout) = timeout else {
+            return;
+        };
+        let ms = Some(timeout.as_millis() as u64);
+        for config in &mut self.configs {
+            config.request_timeout_ms = ms;
+        }
+        for client in self.clients.values_mut() {
+            client.server_config.request_timeout_ms = ms;
+        }
+    }
+
     /// Stop every server that has been idle past the timeout.
     pub async fn sweep_idle(&mut self) {
         let Some(timeout) = self.idle_timeout else {
@@ -3363,6 +3400,29 @@ impl LspManager {
             }
         }
         Ok(())
+    }
+
+    /// Tell every running server that files changed on disk.
+    ///
+    /// A server watches the files it was told to watch, and a change made by
+    /// something other than this client, a command that rewrote a generated
+    /// file for instance, reaches it only this way.
+    ///
+    /// `kind` is the LSP `FileChangeType`: 1 created, 2 changed, 3 deleted.
+    pub async fn notify_files_changed(&self, paths: &[String], kind: u8) {
+        if paths.is_empty() {
+            return;
+        }
+        let changes: Vec<(String, u8)> =
+            paths.iter().map(|path| (path_to_uri(path), kind)).collect();
+        for client in self.clients.values() {
+            if let Err(e) = client.notify_watched_files(&changes).await {
+                tracing::debug!(
+                    "could not tell {} about a file change: {e}",
+                    client.server_name
+                );
+            }
+        }
     }
 
     /// The servers currently running for `file_path` under `root_dir`.
@@ -4493,6 +4553,35 @@ mod tests {
         let locations = parse_locations(&plain);
         assert_eq!(locations.len(), 1);
         assert_eq!(locations[0].to_string(), "/tmp/a.rs:1:1");
+    }
+
+    #[test]
+    fn two_spellings_of_one_uri_agree() {
+        // A server may answer with the URI spelled differently from the one it
+        // was sent. Storing under its spelling and looking up under ours would
+        // then miss every time.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("a.rs");
+        std::fs::write(&file, "").expect("write");
+
+        std::fs::create_dir(dir.path().join("nested")).expect("mkdir");
+
+        let ours = path_to_uri(&file.to_string_lossy());
+        // The same file named through a directory and back out of it, which
+        // canonicalising resolves.
+        let theirs = format!(
+            "file://{}",
+            dir.path().join("nested/../a.rs").to_string_lossy()
+        );
+        assert_eq!(normalize_uri(&ours), normalize_uri(&theirs));
+    }
+
+    #[test]
+    fn a_uri_that_names_nothing_keeps_its_own_spelling() {
+        // Two spellings of a file that does not exist cannot be reconciled,
+        // and inventing one would be worse than keeping what was given.
+        let uri = "file:///tmp/a-file-that-is-not-there.rs";
+        assert_eq!(normalize_uri(uri), uri);
     }
 
     #[test]

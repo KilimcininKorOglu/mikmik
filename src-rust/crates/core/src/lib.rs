@@ -1402,6 +1402,16 @@ pub mod config {
         /// [`Config::effective_lsp_auto_detect`].
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub lsp_auto_detect: Option<bool>,
+        /// Stop a language server after this many milliseconds without a
+        /// request. Unset, zero and negative values keep every server until
+        /// the session ends.
+        ///
+        /// A server holds the whole project in memory, so a session that
+        /// touched one file of a language keeps paying for it. Stopping one
+        /// costs the next request the indexing time again, which is why this
+        /// is a choice rather than a default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub lsp_idle_timeout_ms: Option<u64>,
         pub allowed_tools: Vec<String>,
         pub disallowed_tools: Vec<String>,
         pub env: HashMap<String, String>,
@@ -2380,6 +2390,16 @@ pub mod config {
             self.lsp_auto_detect.unwrap_or(true)
         }
 
+        /// How long a language server may sit idle before it is stopped.
+        ///
+        /// `None` keeps it for the whole session, which is the default: the
+        /// alternative makes the next request pay for indexing again.
+        pub fn effective_lsp_idle_timeout(&self) -> Option<std::time::Duration> {
+            self.lsp_idle_timeout_ms
+                .filter(|ms| *ms > 0)
+                .map(std::time::Duration::from_millis)
+        }
+
         /// Whether `CLAUDE.md` files are read. Unset means no, so an update
         /// does not start injecting a file the session never read before.
         pub fn effective_claude_md_enabled(&self) -> bool {
@@ -3250,6 +3270,9 @@ pub mod config {
                 // files carry, so a repository that could switch it on would
                 // decide that a process runs.
                 lsp_auto_detect: base.config.lsp_auto_detect,
+                // How long a process on the user's machine lives is theirs to
+                // decide, like the switch above.
+                lsp_idle_timeout_ms: base.config.lsp_idle_timeout_ms,
                 lsp_servers: {
                     let mut v = base.config.lsp_servers;
                     if allow_runnables {

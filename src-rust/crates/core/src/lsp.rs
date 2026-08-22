@@ -2112,6 +2112,25 @@ pub fn uri_to_path(uri: &str) -> String {
     }
 }
 
+/// Drop repeats and put the worst first.
+///
+/// Two servers watching one file report the same compiler error twice, and
+/// showing it twice wastes the reader's attention and the model's context.
+/// Sorting by severity puts the errors above the hints, because a file with
+/// both is usually broken for the first reason.
+fn dedupe_and_sort(diagnostics: &mut Vec<LspDiagnostic>) {
+    let mut seen: std::collections::HashSet<(String, u32, u32, String)> =
+        std::collections::HashSet::new();
+    diagnostics.retain(|d| seen.insert((d.file.clone(), d.line, d.column, d.message.clone())));
+    diagnostics.sort_by(|a, b| {
+        a.severity
+            .cmp(&b.severity)
+            .then(a.file.cmp(&b.file))
+            .then(a.line.cmp(&b.line))
+            .then(a.column.cmp(&b.column))
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Diagnostic formatting (shared utility)
 // ---------------------------------------------------------------------------
@@ -2154,15 +2173,30 @@ impl LspManager {
 
 /// Manages a collection of [`LspClient`] instances, routing file operations
 /// to the correct server based on extension mappings.
+/// How long a server that failed to start is left alone.
+pub const INIT_FAILURE_BACKOFF: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// One running server: its name and the workspace root it was started for.
+///
+/// The root is part of the key because a server is initialized for one root
+/// and answers against it. Keyed by name alone, a second directory would reuse
+/// a client that indexed the first one.
+type ClientKey = (String, std::path::PathBuf);
+
 pub struct LspManager {
     /// Registered configs (used for lookup before a client is started)
     configs: Vec<LspServerConfig>,
-    /// Running clients keyed by server name
-    clients: HashMap<String, LspClient>,
-    /// Set of file URIs that have been opened on a specific server (URI → server name)
-    opened_files: HashMap<String, String>,
+    /// Running clients.
+    clients: HashMap<ClientKey, LspClient>,
+    /// When each client was last asked for something.
+    last_used: HashMap<ClientKey, std::time::Instant>,
+    /// When each client last failed to start.
+    init_failures: HashMap<ClientKey, std::time::Instant>,
     /// Directories already scanned for catalogue servers.
     detected_roots: std::collections::HashSet<std::path::PathBuf>,
+    /// Shut a server down after this long without a request. `None` keeps
+    /// every server until the session ends.
+    idle_timeout: Option<std::time::Duration>,
 }
 
 impl LspManager {
@@ -2170,8 +2204,39 @@ impl LspManager {
         Self {
             configs: Vec::new(),
             clients: HashMap::new(),
-            opened_files: HashMap::new(),
+            last_used: HashMap::new(),
+            init_failures: HashMap::new(),
             detected_roots: std::collections::HashSet::new(),
+            idle_timeout: None,
+        }
+    }
+
+    /// Shut a server down after this long without a request.
+    ///
+    /// A language server holds the whole project in memory, and a session that
+    /// touched one Rust file keeps paying for it. Off by default, because
+    /// stopping a server means the next request pays for indexing again.
+    pub fn set_idle_timeout(&mut self, timeout: Option<std::time::Duration>) {
+        self.idle_timeout = timeout;
+    }
+
+    /// Stop every server that has been idle past the timeout.
+    pub async fn sweep_idle(&mut self) {
+        let Some(timeout) = self.idle_timeout else {
+            return;
+        };
+        let stale: Vec<ClientKey> = self
+            .last_used
+            .iter()
+            .filter(|(_, last)| last.elapsed() >= timeout)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in stale {
+            if let Some(mut client) = self.clients.remove(&key) {
+                tracing::debug!("stopping idle language server '{}'", key.0);
+                let _ = client.shutdown().await;
+            }
+            self.last_used.remove(&key);
         }
     }
 
@@ -2231,105 +2296,164 @@ impl LspManager {
 
     /// Spawn and initialize the server for `file_path` if it is not already
     /// running.  Returns `None` when no server is configured for this file type.
-    async fn ensure_started(
+    /// Start and initialize `server_name` for `root_dir`, or return the
+    /// running one.
+    ///
+    /// A server that failed to start is not retried for
+    /// [`INIT_FAILURE_BACKOFF`]. Without that, every request pays the same
+    /// startup timeout again, which turns one missing binary into a session
+    /// where each call is slow.
+    pub async fn ensure_client(
         &mut self,
-        file_path: &str,
+        server_name: &str,
         root_dir: &Path,
-    ) -> anyhow::Result<Option<&mut LspClient>> {
-        let server_name = match self.server_name_for_file(file_path) {
-            Some(n) => n.to_string(),
-            None => return Ok(None),
-        };
+    ) -> anyhow::Result<&mut LspClient> {
+        let key = (server_name.to_string(), root_dir.to_path_buf());
 
-        if !self.clients.contains_key(&server_name) {
-            let config = match self.configs.iter().find(|c| c.name == server_name) {
-                Some(c) => c.clone(),
-                None => return Ok(None),
-            };
-            match LspClient::start(config).await {
+        if !self.clients.contains_key(&key) {
+            if let Some(failed_at) = self.init_failures.get(&key) {
+                if failed_at.elapsed() < INIT_FAILURE_BACKOFF {
+                    return Err(anyhow::anyhow!(
+                        "language server '{server_name}' failed to start recently; \
+                         not retried for another {}s",
+                        (INIT_FAILURE_BACKOFF - failed_at.elapsed()).as_secs()
+                    ));
+                }
+                self.init_failures.remove(&key);
+            }
+
+            let config = self
+                .configs
+                .iter()
+                .find(|c| c.name == server_name)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("no language server named '{server_name}'"))?;
+            if config.disabled {
+                return Err(anyhow::anyhow!(
+                    "language server '{server_name}' is switched off"
+                ));
+            }
+
+            let started = match LspClient::start_in(config, root_dir).await {
                 Ok(mut client) => {
                     let root_uri = path_to_uri(&root_dir.to_string_lossy());
-                    if let Err(e) = client.initialize(&root_uri).await {
-                        tracing::warn!("Failed to initialize LSP server '{}': {}", server_name, e);
-                        // Don't insert — allow retry on next call
-                        return Ok(None);
+                    match client.initialize(&root_uri).await {
+                        Ok(()) => Ok(client),
+                        Err(e) => Err(e),
                     }
-                    self.clients.insert(server_name.clone(), client);
+                }
+                Err(e) => Err(e),
+            };
+
+            match started {
+                Ok(client) => {
+                    tracing::info!("language server '{server_name}' started");
+                    self.clients.insert(key.clone(), client);
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to start LSP server '{}': {}", server_name, e);
-                    return Ok(None);
+                    self.init_failures.insert(key, std::time::Instant::now());
+                    return Err(anyhow::anyhow!(
+                        "could not start language server '{server_name}': {e}"
+                    ));
                 }
             }
         }
 
-        Ok(self.clients.get_mut(&server_name))
+        self.last_used
+            .insert(key.clone(), std::time::Instant::now());
+        self.clients
+            .get_mut(&key)
+            .ok_or_else(|| anyhow::anyhow!("language server '{server_name}' is not running"))
+    }
+
+    /// Forget that `server_name` failed to start, so the next call retries.
+    pub fn clear_failure(&mut self, server_name: &str, root_dir: &Path) {
+        self.init_failures
+            .remove(&(server_name.to_string(), root_dir.to_path_buf()));
     }
 
     /// Spawn and initialize servers for all registered configurations.
     pub async fn start_servers(&mut self, root_dir: &Path) {
-        let configs: Vec<LspServerConfig> = self
+        let names: Vec<String> = self
             .configs
             .iter()
             .filter(|c| !c.disabled)
-            .cloned()
+            .map(|c| c.name.clone())
             .collect();
-        for config in configs {
-            let name = config.name.clone();
-            if self.clients.contains_key(&name) {
-                continue;
-            }
-            match LspClient::start(config).await {
-                Ok(mut client) => {
-                    let root_uri = path_to_uri(&root_dir.to_string_lossy());
-                    if let Err(e) = client.initialize(&root_uri).await {
-                        tracing::warn!("Failed to initialize LSP server '{}': {}", name, e);
-                        continue;
-                    }
-                    self.clients.insert(name.clone(), client);
-                    tracing::info!("LSP server '{}' started", name);
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to start LSP server '{}': {}", name, e);
-                }
+        for name in names {
+            if let Err(e) = self.ensure_client(&name, root_dir).await {
+                tracing::warn!("{e}");
             }
         }
     }
 
-    /// Open a file on the appropriate LSP server.
-    pub async fn open_file(&mut self, file_path: &str, root_dir: &Path) -> anyhow::Result<()> {
+    /// Send the current content of `file_path` to every server that handles it.
+    ///
+    /// The server answers against the copy it holds, so a file opened once and
+    /// edited afterwards would be answered from the text as it was when it was
+    /// opened. Reading from disk each time is what keeps the two in step.
+    pub async fn sync_file(&mut self, file_path: &str, root_dir: &Path) -> anyhow::Result<()> {
         let uri = path_to_uri(file_path);
-        let server_name = match self.server_name_for_file(file_path) {
-            Some(n) => n.to_string(),
-            None => return Ok(()),
-        };
-
-        // Skip if already opened on this server
-        if self.opened_files.get(&uri).map(|s| s.as_str()) == Some(server_name.as_str()) {
+        let names: Vec<String> = self
+            .servers_for_file(file_path)
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
+        if names.is_empty() {
             return Ok(());
         }
 
-        let content = match tokio::fs::read_to_string(file_path).await {
-            Ok(c) => c,
-            Err(e) => {
-                return Err(anyhow::anyhow!(
-                    "Cannot read '{}' for LSP: {}",
-                    file_path,
-                    e
-                ))
+        let content = tokio::fs::read_to_string(file_path).await.map_err(|e| {
+            anyhow::anyhow!("cannot read '{file_path}' for the language server: {e}")
+        })?;
+
+        let mut last_error = None;
+        for name in names {
+            let client = match self.ensure_client(&name, root_dir).await {
+                Ok(client) => client,
+                Err(e) => {
+                    // One server failing must not hide the answer another one
+                    // would have given.
+                    tracing::debug!("{e}");
+                    last_error = Some(e);
+                    continue;
+                }
+            };
+            let language = client.server_config.language_for_file(file_path);
+            if let Err(e) = client.sync_document(&uri, &language, &content).await {
+                tracing::debug!("could not send '{file_path}' to {name}: {e}");
+                last_error = Some(e);
             }
-        };
+        }
 
-        // Ensure the server is running first (borrows self mutably, so must
-        // finish before we borrow opened_files).
-        self.ensure_started(file_path, root_dir).await?;
-
-        if let Some(client) = self.clients.get_mut(&server_name) {
-            let lang = client.server_config.language_for_file(file_path);
-            client.open_document(&uri, &lang, &content).await?;
-            self.opened_files.insert(uri, server_name);
+        // Only report a failure when nothing at all is running for the file.
+        if self.running_for_file(file_path, root_dir).is_empty() {
+            if let Some(e) = last_error {
+                return Err(e);
+            }
         }
         Ok(())
+    }
+
+    /// The servers currently running for `file_path` under `root_dir`.
+    fn running_for_file(&self, file_path: &str, root_dir: &Path) -> Vec<String> {
+        self.servers_for_file(file_path)
+            .iter()
+            .map(|c| c.name.clone())
+            .filter(|name| {
+                self.clients
+                    .contains_key(&(name.clone(), root_dir.to_path_buf()))
+            })
+            .collect()
+    }
+
+    /// Open a file on the appropriate LSP server.
+    ///
+    /// Kept as the name callers already use; it sends the current content, so
+    /// calling it again after an edit updates the server rather than doing
+    /// nothing.
+    pub async fn open_file(&mut self, file_path: &str, root_dir: &Path) -> anyhow::Result<()> {
+        self.sync_file(file_path, root_dir).await
     }
 
     /// Register every server in `configs`, replacing an entry of the same name.
@@ -2371,6 +2495,24 @@ impl LspManager {
         self.detected_roots.clear();
     }
 
+    /// The server that answers navigation for `file_path`, started and ready.
+    ///
+    /// "Ready" is the part that matters: a project-aware server answers with
+    /// nothing while it is still indexing, and nothing reads as "not found".
+    async fn navigation_client(
+        &mut self,
+        file_path: &str,
+        root_dir: &Path,
+    ) -> anyhow::Result<&mut LspClient> {
+        let server_name = self
+            .primary_server_for_file(file_path)
+            .map(|c| c.name.clone())
+            .ok_or_else(|| anyhow::anyhow!("no language server handles '{file_path}'"))?;
+        let client = self.ensure_client(&server_name, root_dir).await?;
+        client.wait_for_project_loaded().await;
+        Ok(client)
+    }
+
     /// Get hover information for `file_path` at the given 1-based position.
     pub async fn hover(
         &mut self,
@@ -2380,15 +2522,7 @@ impl LspManager {
         character: u32,
     ) -> anyhow::Result<Option<String>> {
         let uri = path_to_uri(file_path);
-        let server_name = self
-            .server_name_for_file(file_path)
-            .ok_or_else(|| anyhow::anyhow!("No LSP server configured for '{}'", file_path))?
-            .to_string();
-        self.ensure_started(file_path, root_dir).await?;
-        let client = self
-            .clients
-            .get(&server_name)
-            .ok_or_else(|| anyhow::anyhow!("LSP server '{}' not running", server_name))?;
+        let client = self.navigation_client(file_path, root_dir).await?;
         client.hover(&uri, line, character).await
     }
 
@@ -2401,15 +2535,7 @@ impl LspManager {
         character: u32,
     ) -> anyhow::Result<Vec<String>> {
         let uri = path_to_uri(file_path);
-        let server_name = self
-            .server_name_for_file(file_path)
-            .ok_or_else(|| anyhow::anyhow!("No LSP server configured for '{}'", file_path))?
-            .to_string();
-        self.ensure_started(file_path, root_dir).await?;
-        let client = self
-            .clients
-            .get(&server_name)
-            .ok_or_else(|| anyhow::anyhow!("LSP server '{}' not running", server_name))?;
+        let client = self.navigation_client(file_path, root_dir).await?;
         client.definition(&uri, line, character).await
     }
 
@@ -2422,15 +2548,7 @@ impl LspManager {
         character: u32,
     ) -> anyhow::Result<Vec<String>> {
         let uri = path_to_uri(file_path);
-        let server_name = self
-            .server_name_for_file(file_path)
-            .ok_or_else(|| anyhow::anyhow!("No LSP server configured for '{}'", file_path))?
-            .to_string();
-        self.ensure_started(file_path, root_dir).await?;
-        let client = self
-            .clients
-            .get(&server_name)
-            .ok_or_else(|| anyhow::anyhow!("LSP server '{}' not running", server_name))?;
+        let client = self.navigation_client(file_path, root_dir).await?;
         client.references(&uri, line, character).await
     }
 
@@ -2441,45 +2559,151 @@ impl LspManager {
         root_dir: &Path,
     ) -> anyhow::Result<Vec<String>> {
         let uri = path_to_uri(file_path);
-        let server_name = self
-            .server_name_for_file(file_path)
-            .ok_or_else(|| anyhow::anyhow!("No LSP server configured for '{}'", file_path))?
-            .to_string();
-        self.ensure_started(file_path, root_dir).await?;
-        let client = self
-            .clients
-            .get(&server_name)
-            .ok_or_else(|| anyhow::anyhow!("LSP server '{}' not running", server_name))?;
+        let client = self.navigation_client(file_path, root_dir).await?;
         client.document_symbols(&uri).await
+    }
+
+    /// Diagnostics for `file_path`, waiting for a fresh answer.
+    ///
+    /// Every server that handles the file is asked, linters included. The file
+    /// is sent first, then the answer is waited for by version rather than by
+    /// a fixed sleep: a sleep long enough for a cold server would be wasted on
+    /// a warm one, and a short one reports "no problems" for a server that has
+    /// not replied yet.
+    ///
+    /// The wait ends early once every server has published again.
+    pub async fn fresh_diagnostics(
+        &mut self,
+        file_path: &str,
+        root_dir: &Path,
+        wait: std::time::Duration,
+    ) -> Vec<LspDiagnostic> {
+        let uri = path_to_uri(file_path);
+        let names: Vec<String> = self
+            .servers_for_file(file_path)
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
+
+        // The version each server was on before the file was sent.
+        let mut before: Vec<(String, u64)> = Vec::new();
+        for name in &names {
+            match self.ensure_client(name, root_dir).await {
+                Ok(client) => before.push((name.clone(), client.diagnostic_version(&uri))),
+                Err(e) => tracing::debug!("{e}"),
+            }
+        }
+        if before.is_empty() {
+            return Vec::new();
+        }
+
+        if let Err(e) = self.sync_file(file_path, root_dir).await {
+            tracing::debug!("{e}");
+        }
+
+        let deadline = std::time::Instant::now() + wait;
+        while std::time::Instant::now() < deadline {
+            let all_fresh = before.iter().all(|(name, version)| {
+                self.clients
+                    .get(&(name.clone(), root_dir.to_path_buf()))
+                    .map(|client| client.diagnostic_version(&uri) > *version)
+                    .unwrap_or(true)
+            });
+            if all_fresh {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+
+        let mut collected: Vec<LspDiagnostic> = before
+            .iter()
+            .filter_map(|(name, _)| self.clients.get(&(name.clone(), root_dir.to_path_buf())))
+            .flat_map(|client| client.get_diagnostics(file_path))
+            .collect();
+        dedupe_and_sort(&mut collected);
+        collected
     }
 
     /// Get cached diagnostics for `file_path` across all running servers.
     pub fn get_diagnostics_for_file(&self, file_path: &str) -> Vec<LspDiagnostic> {
-        self.clients
+        let mut collected: Vec<LspDiagnostic> = self
+            .clients
             .values()
             .flat_map(|c| c.get_diagnostics(file_path))
-            .collect()
+            .collect();
+        dedupe_and_sort(&mut collected);
+        collected
     }
 
     /// Get all cached diagnostics from all running servers.
     pub fn all_diagnostics(&self) -> Vec<LspDiagnostic> {
-        self.clients
+        let mut collected: Vec<LspDiagnostic> = self
+            .clients
             .values()
             .flat_map(|c| c.all_diagnostics())
+            .collect();
+        dedupe_and_sort(&mut collected);
+        collected
+    }
+
+    /// Reload a server: push its settings again, and restart it if that fails.
+    ///
+    /// A restart is the blunt instrument, so it is the fallback rather than
+    /// the first move: the next request pays for indexing the project again.
+    pub async fn reload_server(
+        &mut self,
+        server_name: &str,
+        root_dir: &Path,
+    ) -> anyhow::Result<String> {
+        self.clear_failure(server_name, root_dir);
+        let key = (server_name.to_string(), root_dir.to_path_buf());
+        let Some(client) = self.clients.get_mut(&key) else {
+            // Not running: the next request starts it, which is the reload.
+            self.ensure_client(server_name, root_dir).await?;
+            return Ok(format!("started {server_name}"));
+        };
+
+        client.push_settings().await;
+        Ok(format!("reloaded {server_name}"))
+    }
+
+    /// Stop a server, so the next request starts it again.
+    pub async fn restart_server(
+        &mut self,
+        server_name: &str,
+        root_dir: &Path,
+    ) -> anyhow::Result<String> {
+        let key = (server_name.to_string(), root_dir.to_path_buf());
+        self.init_failures.remove(&key);
+        self.last_used.remove(&key);
+        match self.clients.remove(&key) {
+            Some(mut client) => {
+                let _ = client.shutdown().await;
+                Ok(format!("restarted {server_name}"))
+            }
+            None => Ok(format!("{server_name} was not running")),
+        }
+    }
+
+    /// Every server that is running, with the root it serves.
+    pub fn running_clients(&self) -> Vec<(&str, &Path, &LspClient)> {
+        self.clients
+            .iter()
+            .map(|((name, root), client)| (name.as_str(), root.as_path(), client))
             .collect()
     }
 
     /// Shut down all running servers.
     pub async fn shutdown_all(&mut self) {
-        let names: Vec<String> = self.clients.keys().cloned().collect();
-        for name in names {
-            if let Some(mut client) = self.clients.remove(&name) {
+        let keys: Vec<ClientKey> = self.clients.keys().cloned().collect();
+        for key in keys {
+            if let Some(mut client) = self.clients.remove(&key) {
                 if let Err(e) = client.shutdown().await {
-                    tracing::warn!("Error shutting down LSP server '{}': {}", name, e);
+                    tracing::warn!("Error shutting down LSP server '{}': {}", key.0, e);
                 }
             }
         }
-        self.opened_files.clear();
+        self.last_used.clear();
     }
 
     /// Get a legacy-compatible async diagnostic query (returns cached results).
@@ -3624,6 +3848,117 @@ mod tests {
             waited >= std::time::Duration::from_millis(80),
             "returned after {waited:?}, before the server finished indexing"
         );
+    }
+
+    // ---- Client lifecycle -------------------------------------------------
+
+    /// The message of a result that must be an error.
+    ///
+    /// `expect_err` needs `Debug` on the success type, and a live client
+    /// holds a process handle and a set of channels that nothing should try
+    /// to format.
+    fn error_of<T>(result: anyhow::Result<T>) -> String {
+        match result {
+            Ok(_) => panic!("expected an error"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_is_not_retried_immediately() {
+        // Every request used to pay the same startup timeout again, which
+        // turns one missing binary into a session where each call is slow.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut mgr = LspManager::new();
+        let mut config = make_config("nonexistent-server");
+        config.command = "a-server-nobody-installed".to_string();
+        mgr.register_server(config);
+
+        let first = error_of(mgr.ensure_client("nonexistent-server", dir.path()).await);
+        assert!(first.contains("could not start"), "{first}");
+
+        let second = error_of(mgr.ensure_client("nonexistent-server", dir.path()).await);
+        assert!(
+            second.contains("not retried"),
+            "the second call did not back off: {second}"
+        );
+
+        mgr.clear_failure("nonexistent-server", dir.path());
+        let third = error_of(mgr.ensure_client("nonexistent-server", dir.path()).await);
+        assert!(
+            third.contains("could not start"),
+            "clearing the failure did not allow a retry: {third}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_disabled_server_is_not_started() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut mgr = LspManager::new();
+        let mut config = make_config("ls");
+        config.disabled = true;
+        mgr.register_server(config);
+
+        let error = error_of(mgr.ensure_client("ls", dir.path()).await);
+        assert!(error.contains("switched off"), "{error}");
+    }
+
+    #[test]
+    fn diagnostics_from_two_servers_are_deduplicated_and_ordered() {
+        // Two servers watching one file report the same compiler error twice.
+        let mut diagnostics = vec![
+            make_diagnostic("a.rs", 5, 1, DiagnosticSeverity::Hint, "unused"),
+            make_diagnostic("a.rs", 1, 1, DiagnosticSeverity::Error, "type mismatch"),
+            make_diagnostic("a.rs", 1, 1, DiagnosticSeverity::Error, "type mismatch"),
+            make_diagnostic("a.rs", 2, 1, DiagnosticSeverity::Warning, "unused import"),
+        ];
+        dedupe_and_sort(&mut diagnostics);
+
+        assert_eq!(diagnostics.len(), 3, "the repeat was not dropped");
+        assert_eq!(diagnostics[0].severity, DiagnosticSeverity::Error);
+        assert_eq!(diagnostics[1].severity, DiagnosticSeverity::Warning);
+        assert_eq!(diagnostics[2].severity, DiagnosticSeverity::Hint);
+    }
+
+    #[tokio::test]
+    async fn an_idle_server_is_stopped_when_a_timeout_is_set() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (client, _server) = connected(make_config("ls"));
+        let mut mgr = LspManager::new();
+        mgr.register_server(make_config("ls"));
+        mgr.clients
+            .insert(("ls".to_string(), dir.path().to_path_buf()), client);
+        mgr.last_used.insert(
+            ("ls".to_string(), dir.path().to_path_buf()),
+            std::time::Instant::now() - std::time::Duration::from_secs(60),
+        );
+
+        // Off by default: a server is kept until the session ends.
+        mgr.sweep_idle().await;
+        assert_eq!(mgr.running_clients().len(), 1);
+
+        mgr.set_idle_timeout(Some(std::time::Duration::from_secs(30)));
+        mgr.sweep_idle().await;
+        assert!(mgr.running_clients().is_empty(), "the idle server stayed");
+    }
+
+    #[tokio::test]
+    async fn a_client_is_keyed_by_its_root_as_well_as_its_name() {
+        // Keyed by name alone, a second directory reuses a client that
+        // indexed the first one and answers against the wrong project.
+        let first = tempfile::tempdir().expect("tempdir");
+        let second = tempfile::tempdir().expect("tempdir");
+        let mut mgr = LspManager::new();
+        mgr.register_server(make_config("ls"));
+
+        let (client_a, _a) = connected(make_config("ls"));
+        let (client_b, _b) = connected(make_config("ls"));
+        mgr.clients
+            .insert(("ls".to_string(), first.path().to_path_buf()), client_a);
+        mgr.clients
+            .insert(("ls".to_string(), second.path().to_path_buf()), client_b);
+
+        assert_eq!(mgr.running_clients().len(), 2);
     }
 
     #[test]

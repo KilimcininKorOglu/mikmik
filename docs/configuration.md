@@ -512,10 +512,11 @@ under `<project>/.mikmik/plugins/`) needs approval before it launches; see
 
 ### Language servers
 
-| Key               | Type                       | Default | Description                                                                    |
-|-------------------|----------------------------|---------|--------------------------------------------------------------------------------|
-| `lsp_servers`     | array of `LspServerConfig` | []      | Language servers the LSP tool may use. Field list in [tools.md#lsp](tools.md#lsp). |
-| `lsp_auto_detect` | boolean                    | true    | Consult the bundled catalogue of language servers.                             |
+| Key                    | Type                       | Default | Description                                                                    |
+|------------------------|----------------------------|---------|--------------------------------------------------------------------------------|
+| `lsp_servers`          | array of `LspServerConfig` | []      | Language servers the LSP tool may use. Field list in [tools.md#lsp](tools.md#lsp). |
+| `lsp_auto_detect`      | boolean                    | true    | Consult the bundled catalogue of language servers.                             |
+| `lsp_idle_timeout_ms`  | number                     | unset   | Stop a language server after this long without a request.                      |
 
 With `lsp_auto_detect` on, a catalogue server is used only when both are true:
 the working directory carries one of the server's root markers, and the
@@ -536,6 +537,20 @@ settings file cannot switch it on, because detection starts a process and the
 markers that trigger it are files the repository itself carries.
 
 The settings screen has a **Detect language servers** row for the same key.
+
+**Server lifetime.** A server starts on the first request that needs it and
+runs until the session ends, when it is shut down and its process tree with it.
+`lsp_idle_timeout_ms` stops one earlier, after the given time with no request.
+Unset and zero both mean "keep it". Stopping a server is not free: the next
+request pays for indexing the project again, which for a large workspace is
+several seconds.
+
+A server that fails to start is not retried for three minutes. Without that,
+every request pays the same startup timeout again and one missing binary makes
+the whole session slow.
+
+One server runs per working directory, not per name, because a server is
+initialized for one workspace root and answers against it.
 
 ### Environment variables injected into tools
 

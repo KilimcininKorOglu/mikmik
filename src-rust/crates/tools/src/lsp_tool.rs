@@ -9,6 +9,19 @@ use serde_json::Value;
 
 pub struct LspTool;
 
+/// How long one file's diagnostics are waited for.
+///
+/// Long enough for a warm server to answer and for a cold one to finish its
+/// first pass on a single file; not long enough to hold a turn when the server
+/// has nothing to say.
+const SINGLE_DIAGNOSTICS_WAIT: std::time::Duration = std::time::Duration::from_millis(3_000);
+
+/// How many diagnostics one answer carries.
+///
+/// A file with hundreds of errors says the same thing as a file with fifty,
+/// and the rest is context the model pays for.
+const DIAGNOSTIC_MESSAGE_LIMIT: usize = 50;
+
 /// Explain why no server answered for `file_path`.
 ///
 /// "No server configured" alone left the caller guessing between three very
@@ -156,6 +169,11 @@ impl Tool for LspTool {
                 manager.seed_detected(&ctx.working_dir);
             }
             manager.seed_from_config(&ctx.config.lsp_servers);
+            // Read on every call rather than once, so a change to the setting
+            // applies without restarting the session. The sweep runs here
+            // because nothing else wakes up to run it.
+            manager.set_idle_timeout(ctx.config.effective_lsp_idle_timeout());
+            manager.sweep_idle().await;
         }
 
         // Check that at least one server is registered for this file before
@@ -249,23 +267,30 @@ impl Tool for LspTool {
             }
 
             "diagnostics" => {
-                // Give the server a short window to deliver diagnostics via the
-                // textDocument/publishDiagnostics notification (at most 200 ms).
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
+                // Wait for a fresh answer rather than sleeping a fixed 200 ms
+                // and reading whatever the cache happens to hold: a cold
+                // server had not replied by then, so a broken file reported
+                // "no diagnostics".
                 let diagnostics = {
-                    let manager = lsp_manager_arc.lock().await;
-                    manager.get_diagnostics_for_file(&file_path)
+                    let mut manager = lsp_manager_arc.lock().await;
+                    manager
+                        .fresh_diagnostics(&file_path, &ctx.working_dir, SINGLE_DIAGNOSTICS_WAIT)
+                        .await
                 };
 
                 if diagnostics.is_empty() {
-                    return ToolResult::success(format!(
-                        "No diagnostics for '{}'.",
-                        file_path
-                    ));
+                    return ToolResult::success(format!("No diagnostics for '{}'.", file_path));
                 }
 
-                let output = mikmik_core::lsp::LspManager::format_diagnostics(&diagnostics);
+                let shown = diagnostics.len().min(DIAGNOSTIC_MESSAGE_LIMIT);
+                let output =
+                    mikmik_core::lsp::LspManager::format_diagnostics(&diagnostics[..shown]);
+                if diagnostics.len() > shown {
+                    return ToolResult::success(format!(
+                        "{output}\n... and {} more, hidden to keep the output readable",
+                        diagnostics.len() - shown
+                    ));
+                }
                 ToolResult::success(output)
             }
 

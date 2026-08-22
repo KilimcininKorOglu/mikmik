@@ -921,6 +921,15 @@ Query a language server for code intelligence actions. Supports hover documentat
 | `symbols`     | Returns all symbols (functions, classes, variables) in the file   |
 | `diagnostics` | Returns LSP diagnostics (errors, warnings) for the file           |
 
+`diagnostics` asks every server that handles the file, linters included, and
+waits up to three seconds for a fresh answer rather than reading whatever the
+cache holds. The same problem reported by two servers is shown once, errors
+come before warnings and hints, and at most 50 messages are returned.
+
+The other actions go to the first matching server that is not a linter, and
+wait while that server reports work in progress, because a server that is still
+indexing answers "nothing found" rather than "not ready".
+
 **Configuration** (`settings.json`):
 
 ```json

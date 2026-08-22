@@ -2262,6 +2262,15 @@ async fn run_headless(
     // Interpreters started by the REPL tool are kept alive between calls on
     // purpose; this is where that purpose ends.
     mikmik_tools::repl_tool::shutdown_session(&tool_ctx.session_id).await;
+    // A language server holds the whole project in memory and outlives the
+    // session otherwise: its manager is a global, so nothing else stops it.
+    // `shutdown` asks first and kills the process tree after, so a server that
+    // spawned a compiler does not leave it behind.
+    mikmik_core::lsp::global_lsp_manager()
+        .lock()
+        .await
+        .shutdown_all()
+        .await;
     // The auto-compact circuit breaker is keyed by session, so it has to be
     // dropped here or a long-lived process keeps one entry per session it ran.
     mikmik_query::compact::forget_compact_state(&tool_ctx.session_id);
@@ -6738,6 +6747,15 @@ async fn run_interactive(
     // Interpreters started by the REPL tool are kept alive between calls on
     // purpose; this is where that purpose ends.
     mikmik_tools::repl_tool::shutdown_session(&tool_ctx.session_id).await;
+    // A language server holds the whole project in memory and outlives the
+    // session otherwise: its manager is a global, so nothing else stops it.
+    // `shutdown` asks first and kills the process tree after, so a server that
+    // spawned a compiler does not leave it behind.
+    mikmik_core::lsp::global_lsp_manager()
+        .lock()
+        .await
+        .shutdown_all()
+        .await;
     // The auto-compact circuit breaker is keyed by session, so it has to be
     // dropped here or a long-lived process keeps one entry per session it ran.
     mikmik_query::compact::forget_compact_state(&tool_ctx.session_id);

@@ -1519,6 +1519,32 @@ impl LspClient {
             .await
     }
 
+    /// The edits that formatting the whole document would make.
+    pub async fn format_document(
+        &self,
+        uri: &str,
+        options: &FormatOptions,
+    ) -> anyhow::Result<Vec<TextEdit>> {
+        let result = self
+            .send_request_inner(
+                "textDocument/formatting",
+                json!({
+                    "textDocument": { "uri": uri },
+                    "options": {
+                        "tabSize": options.tab_size,
+                        "insertSpaces": options.insert_spaces,
+                        "trimTrailingWhitespace": true,
+                        "insertFinalNewline": true,
+                    }
+                }),
+            )
+            .await?;
+        Ok(result
+            .as_array()
+            .map(|edits| edits.iter().filter_map(TextEdit::from_json).collect())
+            .unwrap_or_default())
+    }
+
     /// Send a request this client has no method for.
     ///
     /// The escape hatch for a server-specific request, and for reaching a part
@@ -2070,6 +2096,70 @@ pub fn apply_workspace_edit(edit: &serde_json::Value) -> anyhow::Result<Vec<Stri
 // Location / symbol helpers
 // ---------------------------------------------------------------------------
 
+/// What a formatting request tells the server about the file's layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormatOptions {
+    pub tab_size: u32,
+    pub insert_spaces: bool,
+}
+
+impl Default for FormatOptions {
+    fn default() -> Self {
+        Self {
+            tab_size: 4,
+            insert_spaces: true,
+        }
+    }
+}
+
+/// Work out how a file is indented.
+///
+/// A formatting request has to say what the file uses, and a wrong answer
+/// reformats the whole file on the first save. The file itself is the only
+/// reliable source: an editor setting says what the user prefers, not what
+/// this file already does.
+pub fn detect_indent(content: &str) -> FormatOptions {
+    let mut tabs = 0usize;
+    let mut space_widths: Vec<u32> = Vec::new();
+
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line.starts_with('\t') {
+            tabs += 1;
+            continue;
+        }
+        let spaces = line.chars().take_while(|c| *c == ' ').count() as u32;
+        if spaces > 0 {
+            space_widths.push(spaces);
+        }
+    }
+
+    if tabs > space_widths.len() {
+        return FormatOptions {
+            tab_size: 4,
+            insert_spaces: false,
+        };
+    }
+    if space_widths.is_empty() {
+        return FormatOptions::default();
+    }
+
+    // The smallest step between indent levels, which is the unit. Taking the
+    // smallest indent instead would read a continuation line as the unit.
+    space_widths.sort_unstable();
+    space_widths.dedup();
+    let mut smallest_step = space_widths[0];
+    for pair in space_widths.windows(2) {
+        smallest_step = smallest_step.min(pair[1] - pair[0]);
+    }
+    FormatOptions {
+        tab_size: smallest_step.clamp(1, 8),
+        insert_spaces: true,
+    }
+}
+
 /// How many files one rename may move.
 ///
 /// A directory rename that walks a build output would otherwise send a request
@@ -2508,6 +2598,48 @@ pub fn uri_to_path(uri: &str) -> String {
     #[cfg(not(windows))]
     {
         decoded
+    }
+}
+
+/// What a diagnostic says, without where it says it.
+///
+/// A line inserted above a problem moves it without changing it, and reporting
+/// the same message again because its line number moved is noise.
+fn diagnostic_identity(diagnostic: &LspDiagnostic) -> String {
+    format!("{}\u{1}{}", diagnostic.file, diagnostic.message)
+}
+
+/// Remembers which problems have already been reported, per file.
+///
+/// A model that is told about the same error after every edit spends its
+/// attention re-reading it. Only what is new is worth an interruption.
+#[derive(Debug, Default)]
+pub struct DiagnosticsLedger {
+    seen: HashMap<String, std::collections::HashSet<String>>,
+}
+
+impl DiagnosticsLedger {
+    /// Keep only the diagnostics this file has not reported before.
+    ///
+    /// The record is replaced rather than added to, so a problem that goes
+    /// away and comes back is reported again, which is right: it is news the
+    /// second time too.
+    pub fn only_new(&mut self, file: &str, diagnostics: Vec<LspDiagnostic>) -> Vec<LspDiagnostic> {
+        let identities: std::collections::HashSet<String> =
+            diagnostics.iter().map(diagnostic_identity).collect();
+        let previous = self.seen.insert(file.to_string(), identities);
+        match previous {
+            Some(previous) => diagnostics
+                .into_iter()
+                .filter(|d| !previous.contains(&diagnostic_identity(d)))
+                .collect(),
+            None => diagnostics,
+        }
+    }
+
+    /// Forget a file, so its next report starts fresh.
+    pub fn forget(&mut self, file: &str) {
+        self.seen.remove(file);
     }
 }
 
@@ -3142,6 +3274,44 @@ impl LspManager {
             }
         }
         Ok(report)
+    }
+
+    /// Format `file_path` with its language server and write the result.
+    ///
+    /// Returns whether anything changed. The file is read, sent, formatted and
+    /// written here rather than by the caller, because the edits address the
+    /// text the server holds and any gap between the two would corrupt it.
+    pub async fn format_file(&mut self, file_path: &str, root_dir: &Path) -> anyhow::Result<bool> {
+        let uri = path_to_uri(file_path);
+        let content = tokio::fs::read_to_string(file_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("cannot read '{file_path}': {e}"))?;
+        let options = detect_indent(&content);
+
+        self.sync_file(file_path, root_dir).await?;
+        let server_name = self
+            .primary_server_for_file(file_path)
+            .map(|c| c.name.clone())
+            .ok_or_else(|| anyhow::anyhow!("no language server handles '{file_path}'"))?;
+        let client = self.ensure_client(&server_name, root_dir).await?;
+        if !client.supports("documentFormattingProvider") {
+            return Ok(false);
+        }
+
+        let edits = client.format_document(&uri, &options).await?;
+        if edits.is_empty() {
+            return Ok(false);
+        }
+        let formatted = apply_text_edits(&content, &edits)?;
+        if formatted == content {
+            return Ok(false);
+        }
+        tokio::fs::write(file_path, &formatted)
+            .await
+            .map_err(|e| anyhow::anyhow!("cannot write '{file_path}': {e}"))?;
+        // The server's copy is now behind the file it just formatted.
+        self.sync_file(file_path, root_dir).await?;
+        Ok(true)
     }
 
     /// Move a file or a directory, and let every server update the references.
@@ -4576,6 +4746,100 @@ mod tests {
             waited >= std::time::Duration::from_millis(80),
             "returned after {waited:?}, before the server finished indexing"
         );
+    }
+
+    // ---- Reporting a write ------------------------------------------------
+
+    #[test]
+    fn only_a_new_problem_is_reported() {
+        // Repeating the same error after every edit spends the reader's
+        // attention on something they already know.
+        let mut ledger = DiagnosticsLedger::default();
+        let first = vec![
+            make_diagnostic("a.rs", 3, 1, DiagnosticSeverity::Error, "missing semicolon"),
+            make_diagnostic("a.rs", 9, 1, DiagnosticSeverity::Warning, "unused import"),
+        ];
+        assert_eq!(ledger.only_new("a.rs", first.clone()).len(), 2);
+
+        // The same two again: nothing new.
+        assert!(ledger.only_new("a.rs", first.clone()).is_empty());
+
+        // A third problem is news, the two known ones are not.
+        let mut second = first.clone();
+        second.push(make_diagnostic(
+            "a.rs",
+            12,
+            1,
+            DiagnosticSeverity::Error,
+            "type mismatch",
+        ));
+        let fresh = ledger.only_new("a.rs", second);
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].message, "type mismatch");
+    }
+
+    #[test]
+    fn a_moved_problem_is_not_reported_again() {
+        // Inserting a line above an error moves it without changing it.
+        let mut ledger = DiagnosticsLedger::default();
+        let before = vec![make_diagnostic(
+            "a.rs",
+            3,
+            1,
+            DiagnosticSeverity::Error,
+            "missing semicolon",
+        )];
+        assert_eq!(ledger.only_new("a.rs", before).len(), 1);
+
+        let after = vec![make_diagnostic(
+            "a.rs",
+            4,
+            1,
+            DiagnosticSeverity::Error,
+            "missing semicolon",
+        )];
+        assert!(
+            ledger.only_new("a.rs", after).is_empty(),
+            "the same problem was reported again because its line moved"
+        );
+    }
+
+    #[test]
+    fn a_problem_that_returns_is_reported_again() {
+        let mut ledger = DiagnosticsLedger::default();
+        let problem = vec![make_diagnostic(
+            "a.rs",
+            3,
+            1,
+            DiagnosticSeverity::Error,
+            "missing semicolon",
+        )];
+        assert_eq!(ledger.only_new("a.rs", problem.clone()).len(), 1);
+        // Fixed.
+        assert!(ledger.only_new("a.rs", vec![]).is_empty());
+        // Broken again: news the second time too.
+        assert_eq!(ledger.only_new("a.rs", problem).len(), 1);
+    }
+
+    #[test]
+    fn the_indent_of_a_file_is_read_from_the_file() {
+        // A wrong answer reformats the whole file on the first save.
+        assert_eq!(
+            detect_indent("fn main() {\n  let a = 1;\n  if a {\n    let b = 2;\n  }\n}\n"),
+            FormatOptions {
+                tab_size: 2,
+                insert_spaces: true
+            }
+        );
+        assert_eq!(
+            detect_indent("fn main() {\n\tlet a = 1;\n\tif a {\n\t\tlet b = 2;\n\t}\n}\n"),
+            FormatOptions {
+                tab_size: 4,
+                insert_spaces: false
+            }
+        );
+        // Nothing to go on: the default rather than a guess.
+        assert_eq!(detect_indent("one\ntwo\n"), FormatOptions::default());
     }
 
     // ---- Symbols and positions -------------------------------------------

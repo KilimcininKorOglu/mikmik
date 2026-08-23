@@ -82,6 +82,15 @@ pub struct Rule {
     pub repeat: RepeatPolicy,
 }
 
+/// Which of the model's two written streams a rule watches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProseStream {
+    /// The answer.
+    Text,
+    /// The reasoning, when the model shows it.
+    Thinking,
+}
+
 /// The text one tool call would introduce, and the file it goes to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Payload {
@@ -507,6 +516,28 @@ impl RuleSet {
         })
     }
 
+    /// Does any rule watch what the model writes, rather than what it calls?
+    ///
+    /// Checked once per turn: a session with no prose rule must not pay for a
+    /// scan on every delta, and almost every session has none.
+    pub fn watches_prose(&self) -> bool {
+        self.rules
+            .iter()
+            .any(|rule| rule.scope.text || rule.scope.thinking)
+    }
+
+    /// The rules the model's own words break.
+    pub fn match_prose(&self, written: &str, stream: ProseStream) -> Vec<&Rule> {
+        self.rules
+            .iter()
+            .filter(|rule| match stream {
+                ProseStream::Text => rule.scope.text,
+                ProseStream::Thinking => rule.scope.thinking,
+            })
+            .filter(|rule| rule.conditions.iter().any(|c| c.is_match(written)))
+            .collect()
+    }
+
     /// The rules one tool call breaks.
     pub fn match_tool(&self, tool: &str, input: &serde_json::Value) -> Vec<&Rule> {
         if self.rules.is_empty() {
@@ -840,6 +871,32 @@ mod tests {
         assert!(!scope.text);
         assert!(!scope.thinking);
         assert!(matches!(scope.tools, Some(ToolSelector::Any)));
+    }
+
+    #[test]
+    fn the_two_written_streams_are_watched_apart() {
+        let rules = set_of(vec![
+            rule("in-the-answer", "forbidden", Some("text")),
+            rule("in-the-reasoning", "forbidden", Some("thinking")),
+        ]);
+        assert!(rules.watches_prose());
+
+        let answer = rules.match_prose("this is forbidden", ProseStream::Text);
+        assert_eq!(answer.len(), 1);
+        assert_eq!(answer[0].name, "in-the-answer");
+
+        let reasoning = rules.match_prose("this is forbidden", ProseStream::Thinking);
+        assert_eq!(reasoning.len(), 1);
+        assert_eq!(reasoning[0].name, "in-the-reasoning");
+    }
+
+    #[test]
+    fn a_rule_on_tools_never_reads_the_answer() {
+        let rules = set_of(vec![rule("on-edits", "forbidden", Some("tool:Edit"))]);
+        assert!(!rules.watches_prose());
+        assert!(rules
+            .match_prose("this is forbidden", ProseStream::Text)
+            .is_empty());
     }
 
     #[test]

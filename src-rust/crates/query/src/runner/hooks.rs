@@ -261,6 +261,139 @@ pub(crate) async fn check_rules(
     RuleOutcome::Remind(reminders.join("\n\n"))
 }
 
+/// How many times one turn may be interrupted by a prose rule.
+///
+/// A rule speaks once per session by default and cannot loop, but `repeat:
+/// always` can, and a model that keeps writing the same forbidden word would
+/// then never finish a turn.
+const MAX_PROSE_INTERRUPTS: u8 = 3;
+
+/// How much new text has to arrive before the rules are checked again.
+///
+/// A delta is often one token. Rescanning the whole answer on each of them is
+/// quadratic, and a rule that matches four characters later than it could is
+/// not worth that.
+const PROSE_CHECK_STEP: usize = 48;
+
+/// Watches what the model writes, so a rule can stop it mid-answer.
+///
+/// Built once per turn. A session whose rules all watch tools carries an idle
+/// watch that costs one boolean per delta, which is every ordinary session.
+pub(crate) struct ProseWatch {
+    rules: std::sync::Arc<mikmik_core::rules::RuleSet>,
+    session_id: String,
+    project_root: std::path::PathBuf,
+    text: String,
+    thinking: String,
+    checked_len: usize,
+    /// Names for the transcript, and the rendered blocks for the model.
+    fired: Vec<String>,
+    rendered: Vec<String>,
+    interrupts_left: u8,
+}
+
+impl ProseWatch {
+    /// Build the watch for one turn.
+    pub(crate) fn new(tool_ctx: &mikmik_tools::ToolContext) -> Self {
+        let project_root = mikmik_core::session_storage::transcript_root_for(&tool_ctx.working_dir);
+        let rules = if tool_ctx.config.effective_rules_enabled() {
+            mikmik_core::rules::rules_for(
+                &project_root,
+                mikmik_core::claudemd::MemoryFilenames::from_config(&tool_ctx.config),
+                tool_ctx.config.effective_rules_builtin(),
+                &tool_ctx.config.rules_disabled,
+            )
+        } else {
+            std::sync::Arc::new(mikmik_core::rules::RuleSet::default())
+        };
+        Self {
+            rules,
+            session_id: tool_ctx.session_id.clone(),
+            project_root,
+            text: String::new(),
+            thinking: String::new(),
+            checked_len: 0,
+            fired: Vec::new(),
+            rendered: Vec::new(),
+            interrupts_left: MAX_PROSE_INTERRUPTS,
+        }
+    }
+
+    /// Forget the previous turn's text.
+    ///
+    /// A rule reads one answer, not the transcript. Without this, a turn that
+    /// ended cleanly would still be scanned again under the next one.
+    pub(crate) fn start_turn(&mut self) {
+        self.text.clear();
+        self.thinking.clear();
+        self.checked_len = 0;
+    }
+
+    /// Whether anything is being watched at all.
+    pub(crate) fn is_idle(&self) -> bool {
+        self.interrupts_left == 0 || !self.rules.watches_prose()
+    }
+
+    /// Take one delta. Returns `true` when the turn must stop here.
+    pub(crate) fn push(&mut self, delta: &str, stream: mikmik_core::rules::ProseStream) -> bool {
+        if self.is_idle() {
+            return false;
+        }
+        let written = match stream {
+            mikmik_core::rules::ProseStream::Text => &mut self.text,
+            mikmik_core::rules::ProseStream::Thinking => &mut self.thinking,
+        };
+        written.push_str(delta);
+        let total = self.text.len() + self.thinking.len();
+        if total < self.checked_len + PROSE_CHECK_STEP {
+            return false;
+        }
+        self.checked_len = total;
+        self.check(stream)
+    }
+
+    fn check(&mut self, stream: mikmik_core::rules::ProseStream) -> bool {
+        let written = match stream {
+            mikmik_core::rules::ProseStream::Text => &self.text,
+            mikmik_core::rules::ProseStream::Thinking => &self.thinking,
+        };
+        let turn = 0u64; // Prose rules are claimed per session, not per turn.
+        let mut hit = false;
+        for rule in self.rules.match_prose(written, stream) {
+            if !mikmik_core::rules::claim(&self.session_id, rule, turn) {
+                continue;
+            }
+            tracing::info!(rule = %rule.name, "conditional rule matched what was written");
+            self.fired.push(rule.name.clone());
+            self.rendered.push(mikmik_core::rules::render_rule(rule));
+            hit = true;
+        }
+        if hit {
+            self.interrupts_left = self.interrupts_left.saturating_sub(1);
+        }
+        hit
+    }
+
+    /// What the model is told before it writes the turn again.
+    ///
+    /// `None` when nothing matched, which is the ordinary case.
+    pub(crate) async fn take_message(&mut self) -> Option<mikmik_core::types::Message> {
+        if self.rendered.is_empty() {
+            return None;
+        }
+        let names = std::mem::take(&mut self.fired);
+        if let Ok(path) =
+            mikmik_core::session_storage::transcript_path(&self.project_root, &self.session_id)
+        {
+            if let Err(e) = mikmik_core::session_storage::append_rules_fired(&path, &names).await {
+                tracing::debug!("could not record which rules spoke: {e}");
+            }
+        }
+        let body = std::mem::take(&mut self.rendered).join("\n\n");
+        Some(mikmik_core::types::Message::user(body))
+    }
+}
+
 /// Run every `PostToolUse` hook, from settings and from plugins, for one tool.
 pub(crate) async fn run_post_tool_hooks(
     tool_ctx: &mikmik_tools::ToolContext,

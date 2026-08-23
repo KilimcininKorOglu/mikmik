@@ -1419,9 +1419,11 @@ async fn connect_mcp_manager_arc(
 async fn run_rules_command(args: &[String]) -> anyhow::Result<()> {
     const USAGE: &str = "Usage:\n  \
         mikmik rules list\n  \
-        mikmik rules test <tool> <file> [text]\n\n\
+        mikmik rules test <tool> <file> [text]\n  \
+        mikmik rules test text|thinking [prose]\n\n\
         `test` reads the text from stdin when it is not given on the command line.\n\
-        Example: mikmik rules test Edit src/a.rs 'let x = y.unwrap();'";
+        Example: mikmik rules test Edit src/a.rs 'let x = y.unwrap();'\n\
+        Example: mikmik rules test text 'I will just cast it to any'";
 
     let settings = Settings::load().await.unwrap_or_default();
     let config = settings.effective_config();
@@ -1450,9 +1452,15 @@ async fn run_rules_command(args: &[String]) -> anyhow::Result<()> {
                 project_root.display()
             );
             for rule in rules.iter() {
-                let action = match rule.action {
-                    mikmik_core::rules::RuleAction::Block => "block",
-                    mikmik_core::rules::RuleAction::Remind => "remind",
+                // A rule on prose has no tool result to ride on, so it always
+                // stops the turn. Saying "remind" here would hide that.
+                let action = if rule.scope.text || rule.scope.thinking {
+                    "interrupt"
+                } else {
+                    match rule.action {
+                        mikmik_core::rules::RuleAction::Block => "block",
+                        mikmik_core::rules::RuleAction::Remind => "remind",
+                    }
                 };
                 println!("  {}  [{action}]", rule.name);
                 if let Some(description) = &rule.description {
@@ -1466,8 +1474,19 @@ async fn run_rules_command(args: &[String]) -> anyhow::Result<()> {
                 eprintln!("{USAGE}");
                 std::process::exit(2);
             };
-            let file = args.get(2).cloned().unwrap_or_default();
-            let text = match args.get(3) {
+            // Prose takes no file, so its text is one argument earlier.
+            let prose = match tool.as_str() {
+                "text" => Some(mikmik_core::rules::ProseStream::Text),
+                "thinking" => Some(mikmik_core::rules::ProseStream::Thinking),
+                _ => None,
+            };
+            let text_arg = if prose.is_some() { 2 } else { 3 };
+            let file = if prose.is_some() {
+                String::new()
+            } else {
+                args.get(2).cloned().unwrap_or_default()
+            };
+            let text = match args.get(text_arg) {
                 Some(text) => text.clone(),
                 None => {
                     use std::io::Read;
@@ -1476,6 +1495,21 @@ async fn run_rules_command(args: &[String]) -> anyhow::Result<()> {
                     buffer
                 }
             };
+
+            if let Some(stream) = prose {
+                let matched = rules.match_prose(&text, stream);
+                if matched.is_empty() {
+                    println!("No rule matches.");
+                    return Ok(());
+                }
+                for rule in matched {
+                    println!("{}  (would stop the turn)", rule.name);
+                    if let Some(description) = &rule.description {
+                        println!("  {description}");
+                    }
+                }
+                return Ok(());
+            }
 
             // Shaped like the tool's own arguments, so the same payload
             // extraction runs as in a session.

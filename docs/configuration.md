@@ -996,6 +996,29 @@ another agent (`tool:edit`) still works. A pattern such as `*.rs` matches a
 nested path: writing `**/*.rs` is not required. Brace groups (`*.{ts,tsx}`) are
 expanded.
 
+**Rules on what the model writes.** `scope: text` reads the answer and
+`scope: thinking` reads the reasoning, as it arrives. A match there stops the
+turn at that point: the half-written answer is thrown away, the rule is handed
+to the model, and it writes the turn again. `on_match` does not apply, because
+there is no tool result for the rule to ride on; `mikmik rules list` prints
+**interrupt** for these so nothing is hidden.
+
+```markdown
+---
+description: Say what the code does, not what it probably does
+condition: "probably fine|should be okay"
+scope: text
+---
+
+Do not hedge about behaviour you can check. Run it, then say what happened.
+```
+
+Three interruptions per query is the limit. A retried turn does not count
+against `max_turns`, so without that limit a `repeat: always` rule could hold
+the query open. `globs` has nothing to gate here and is ignored.
+
+None of the rules that ship with the binary watch prose.
+
 **Repeat.** A rule speaks once per session by default, because a rule that
 repeats on every turn becomes noise and noise is ignored. `repeat: always` says
 it every time, and `repeat: 10` says it again after ten turns.
@@ -1044,6 +1067,8 @@ notice is in `crates/core/assets/rules/NOTICE.md`.
 mikmik rules list                                    # every rule this directory loads
 mikmik rules test Edit src/a.rs 'let x = y.unwrap();' # would anything fire?
 mikmik rules test Bash '' 'git add -A'
+mikmik rules test text 'that is probably fine'       # rules on prose take no file
+mikmik rules test thinking 'I should be okay here'
 ```
 
 `test` runs the real matcher, so what it prints is what a session would do. The

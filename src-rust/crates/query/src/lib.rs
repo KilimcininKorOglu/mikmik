@@ -583,6 +583,12 @@ async fn run_query_loop_inner(
     }
 
     let mut used_fallback = false;
+    // Watches what the model writes so a `scope: text` or `scope: thinking`
+    // rule can stop the turn at the point of the violation instead of after it.
+    // Built once for the whole query, because the interrupt budget it carries
+    // is a query-wide one: an interrupt does not count against `max_turns`, so
+    // a per-turn budget would let a `repeat: always` rule loop forever.
+    let mut prose_watch = runner::hooks::ProseWatch::new(tool_ctx);
     // How many automatic retries remain when a stream stalls (no data for 45s).
     let mut retries_left: u32 = 2;
     // Max-steps graceful degradation (issue #230 / MI-3): set once the final
@@ -1237,6 +1243,12 @@ async fn run_query_loop_inner(
                     // accumulated text/tool-calls are then incomplete and MUST
                     // NOT be assembled into a "completed" turn (issue #215).
                     let mut provider_stream_error: Option<String> = None;
+                    // Set when a rule matched what the model was writing. The
+                    // accumulated text is then thrown away, exactly as it is on
+                    // a stall: the assistant message is built after this loop,
+                    // so there is nothing to unwind.
+                    let mut prose_interrupt = false;
+                    prose_watch.start_turn();
 
                     loop {
                         tokio::select! {
@@ -1278,12 +1290,24 @@ async fn run_query_loop_inner(
                                             }
                                             mikmik_api::StreamEvent::TextDelta { text, .. } => {
                                                 text_chunks.push(text.clone());
+                                                if prose_watch.push(text, mikmik_core::rules::ProseStream::Text) {
+                                                    prose_interrupt = true;
+                                                    break;
+                                                }
                                             }
                                             mikmik_api::StreamEvent::ThinkingDelta { thinking, .. } => {
                                                 thinking_chunks.push(thinking.clone());
+                                                if prose_watch.push(thinking, mikmik_core::rules::ProseStream::Thinking) {
+                                                    prose_interrupt = true;
+                                                    break;
+                                                }
                                             }
                                             mikmik_api::StreamEvent::ReasoningDelta { reasoning, .. } => {
                                                 thinking_chunks.push(reasoning.clone());
+                                                if prose_watch.push(reasoning, mikmik_core::rules::ProseStream::Thinking) {
+                                                    prose_interrupt = true;
+                                                    break;
+                                                }
                                             }
                                             mikmik_api::StreamEvent::InputJsonDelta { index, partial_json } => {
                                                 if let Some((_, _, buf, _)) = tool_call_blocks.get_mut(index) {
@@ -1311,6 +1335,24 @@ async fn run_query_loop_inner(
                                 }
                             }
                         }
+                    }
+
+                    // A rule spoke about what was being written. Drop the half
+                    // answer, hand the rule to the model, and let it write the
+                    // turn again. This does not count against `max_turns`,
+                    // which is what `ProseWatch`'s own budget is there to bound.
+                    if prose_interrupt {
+                        if let Some(msg) = prose_watch.take_message().await {
+                            if let Some(ref tx) = event_tx {
+                                let _ = tx.send(QueryEvent::Status(
+                                    "A rule matched what was being written — writing it again…"
+                                        .to_string(),
+                                ));
+                            }
+                            messages.push(msg);
+                        }
+                        turn -= 1;
+                        continue;
                     }
 
                     // If the stream stalled (no data for 45s), retry.
@@ -1602,6 +1644,12 @@ async fn run_query_loop_inner(
         let stall_deadline = tokio::time::sleep(STALL_TIMEOUT);
         tokio::pin!(stall_deadline);
 
+        // Same interrupt as the provider arm. The accumulator holds the partial
+        // message, and `finish()` is only called after this loop, so breaking
+        // out early leaves nothing behind.
+        let mut prose_interrupt = false;
+        prose_watch.start_turn();
+
         let stream_stalled = loop {
             tokio::select! {
                 _ = cancel_token.cancelled() => {
@@ -1618,6 +1666,23 @@ async fn run_query_loop_inner(
                         Some(evt) => {
                             accumulator.on_event(&evt);
                             match &evt {
+                                AnthropicStreamEvent::ContentBlockDelta { delta, .. } => {
+                                    let written = match delta {
+                                        mikmik_api::streaming::ContentDelta::TextDelta { text } => {
+                                            Some((text, mikmik_core::rules::ProseStream::Text))
+                                        }
+                                        mikmik_api::streaming::ContentDelta::ThinkingDelta { thinking } => {
+                                            Some((thinking, mikmik_core::rules::ProseStream::Thinking))
+                                        }
+                                        _ => None,
+                                    };
+                                    if let Some((written, stream)) = written {
+                                        if prose_watch.push(written, stream) {
+                                            prose_interrupt = true;
+                                            break false;
+                                        }
+                                    }
+                                }
                                 AnthropicStreamEvent::Error { error_type, message } => {
                                     if error_type == "overloaded_error" {
                                         warn!(model = %effective_model, "API overloaded");
@@ -1633,6 +1698,19 @@ async fn run_query_loop_inner(
                 }
             }
         };
+
+        if prose_interrupt {
+            if let Some(msg) = prose_watch.take_message().await {
+                if let Some(ref tx) = event_tx {
+                    let _ = tx.send(QueryEvent::Status(
+                        "A rule matched what was being written — writing it again…".to_string(),
+                    ));
+                }
+                messages.push(msg);
+            }
+            turn -= 1;
+            continue;
+        }
 
         if stream_stalled && retries_left > 0 {
             retries_left -= 1;
@@ -3875,6 +3953,118 @@ mod conditional_rule_tests {
             check_rules(&ctx, "Edit", &writing_unwrap()).await,
             RuleOutcome::Silent
         ));
+        mikmik_core::rules::forget_session(&ctx.session_id);
+        mikmik_core::rules::reload();
+    }
+
+    /// Longer than one check step, so a single push reaches the scan.
+    const ONE_STEP: &str =
+        "and here is a long enough sentence to reach the next scan of what was written";
+
+    #[tokio::test]
+    async fn a_rule_on_prose_stops_the_turn_and_says_why() {
+        let _lock = HOME_LOCK.lock().await;
+        let _home = HomeGuard::new();
+        let project = tempfile::tempdir().expect("tempdir");
+        write_rule(
+            project.path(),
+            "no-hedging",
+            "---\ncondition: \"probably fine\"\nscope: text\n---\nSAY-WHAT-YOU-MEAN\n",
+        );
+        mikmik_core::rules::reload();
+
+        let ctx = context_in(project.path(), "prose-hit");
+        mikmik_core::rules::forget_session(&ctx.session_id);
+        let mut watch = crate::runner::ProseWatch::new(&ctx);
+        assert!(!watch.is_idle(), "a rule on text is being watched");
+
+        watch.start_turn();
+        assert!(
+            !watch.push(ONE_STEP, mikmik_core::rules::ProseStream::Text),
+            "innocent text runs on"
+        );
+        assert!(
+            watch.push(
+                &format!("that is probably fine.{ONE_STEP}"),
+                mikmik_core::rules::ProseStream::Text
+            ),
+            "the forbidden phrase stops the turn"
+        );
+
+        let message = watch.take_message().await.expect("the rule speaks");
+        let body = format!("{:?}", message.content);
+        assert!(body.contains("SAY-WHAT-YOU-MEAN"), "{body}");
+
+        // `repeat` defaults to once, so the next turn runs clean.
+        watch.start_turn();
+        assert!(!watch.push(
+            &format!("that is probably fine.{ONE_STEP}"),
+            mikmik_core::rules::ProseStream::Text
+        ));
+        assert!(watch.take_message().await.is_none());
+
+        mikmik_core::rules::forget_session(&ctx.session_id);
+        mikmik_core::rules::reload();
+    }
+
+    #[tokio::test]
+    async fn a_rule_on_tools_leaves_the_writing_alone() {
+        let _lock = HOME_LOCK.lock().await;
+        let _home = HomeGuard::new();
+        let project = tempfile::tempdir().expect("tempdir");
+        write_rule(
+            project.path(),
+            "no-unwrap",
+            "---\ncondition: \"\\\\.unwrap\\\\(\\\\)\"\nscope: \"tool:Edit\"\n---\nBODY\n",
+        );
+        mikmik_core::rules::reload();
+
+        let ctx = context_in(project.path(), "prose-idle");
+        mikmik_core::rules::forget_session(&ctx.session_id);
+        let mut watch = crate::runner::ProseWatch::new(&ctx);
+        assert!(watch.is_idle(), "no rule watches prose, so nothing is read");
+        assert!(!watch.push(
+            &format!("here we call y.unwrap() on it.{ONE_STEP}"),
+            mikmik_core::rules::ProseStream::Text
+        ));
+        assert!(watch.take_message().await.is_none());
+
+        mikmik_core::rules::forget_session(&ctx.session_id);
+        mikmik_core::rules::reload();
+    }
+
+    #[tokio::test]
+    async fn a_rule_that_repeats_still_cannot_hold_the_query() {
+        let _lock = HOME_LOCK.lock().await;
+        let _home = HomeGuard::new();
+        let project = tempfile::tempdir().expect("tempdir");
+        write_rule(
+            project.path(),
+            "no-hedging",
+            "---\ncondition: \"probably fine\"\nscope: text\nrepeat: always\n---\nBODY\n",
+        );
+        mikmik_core::rules::reload();
+
+        let ctx = context_in(project.path(), "prose-budget");
+        mikmik_core::rules::forget_session(&ctx.session_id);
+        let mut watch = crate::runner::ProseWatch::new(&ctx);
+
+        let mut stops = 0;
+        for _ in 0..6 {
+            watch.start_turn();
+            if watch.push(
+                &format!("that is probably fine.{ONE_STEP}"),
+                mikmik_core::rules::ProseStream::Text,
+            ) {
+                stops += 1;
+                let _ = watch.take_message().await;
+            }
+        }
+        assert_eq!(
+            stops, 3,
+            "the budget runs out and the turn is allowed to end"
+        );
+
         mikmik_core::rules::forget_session(&ctx.session_id);
         mikmik_core::rules::reload();
     }

@@ -2,7 +2,7 @@
 //! Verifies that core data structures are usable as the TS CLI would use them.
 
 use mikmik_core::{
-    claudemd::load_all_memory_files,
+    agentsmd::load_all_memory_files,
     file_history::FileHistory,
     message_utils::{estimate_tokens, get_message_text, is_tool_use_message},
     prompt_history::HistoryEntry,

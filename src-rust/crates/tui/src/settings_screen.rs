@@ -200,7 +200,7 @@ impl SettingsScreen {
         self.auto_compact = self.settings_snapshot.effective_auto_compact();
         self.auto_memory =
             mikmik_core::memdir::is_auto_memory_enabled(self.settings_snapshot.auto_memory_enabled);
-        let filenames = mikmik_core::claudemd::MemoryFilenames::from_config(
+        let filenames = mikmik_core::agentsmd::MemoryFilenames::from_config(
             &self.settings_snapshot.effective_config(),
         );
         self.agents_md = filenames.agents_md;

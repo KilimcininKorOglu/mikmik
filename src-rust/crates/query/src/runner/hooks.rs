@@ -199,7 +199,7 @@ pub(crate) async fn check_rules(
     }
 
     let project_root = mikmik_core::session_storage::transcript_root_for(&tool_ctx.working_dir);
-    let filenames = mikmik_core::claudemd::MemoryFilenames::from_config(&tool_ctx.config);
+    let filenames = mikmik_core::agentsmd::MemoryFilenames::from_config(&tool_ctx.config);
     let rules = mikmik_core::rules::rules_for(
         &project_root,
         filenames,
@@ -299,7 +299,7 @@ impl ProseWatch {
         let rules = if tool_ctx.config.effective_rules_enabled() {
             mikmik_core::rules::rules_for(
                 &project_root,
-                mikmik_core::claudemd::MemoryFilenames::from_config(&tool_ctx.config),
+                mikmik_core::agentsmd::MemoryFilenames::from_config(&tool_ctx.config),
                 tool_ctx.config.effective_rules_builtin(),
                 &tool_ctx.config.rules_disabled,
             )

@@ -9,7 +9,7 @@
 //! argument object. An `Edit` that **removes** a `.unwrap()` must not trip the
 //! rule that forbids writing one, and it would if `old_string` were matched.
 
-use crate::claudemd::{is_conditional_rule, MemoryFileInfo, MemoryFilenames};
+use crate::agentsmd::{is_conditional_rule, MemoryFileInfo, MemoryFilenames};
 use regex::Regex;
 use std::path::{Path, PathBuf};
 
@@ -466,7 +466,7 @@ impl RuleSet {
                 set.insert(rule.clone());
             }
         }
-        let files = crate::claudemd::load_all_memory_files(project_root, filenames);
+        let files = crate::agentsmd::load_all_memory_files(project_root, filenames);
         for file in files.iter().filter(|f| is_conditional_rule(f)) {
             if let Some(rule) = rule_from_file(file) {
                 set.insert(rule);
@@ -727,10 +727,10 @@ pub fn builtin_rules() -> &'static [Rule] {
         BUILTIN_RULES
             .iter()
             .filter_map(|(name, text)| {
-                let (frontmatter, body) = crate::claudemd::parse_frontmatter(text);
+                let (frontmatter, body) = crate::agentsmd::parse_frontmatter(text);
                 let file = MemoryFileInfo {
                     path: PathBuf::from(format!("<built-in>/{name}.md")),
-                    scope: crate::claudemd::MemoryScope::Managed,
+                    scope: crate::agentsmd::MemoryScope::Managed,
                     content: body.to_string(),
                     frontmatter,
                     mtime: None,
@@ -853,7 +853,7 @@ pub fn render_rule(rule: &Rule) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::claudemd::MemoryScope;
+    use crate::agentsmd::MemoryScope;
     use serde_json::json;
 
     fn rule(name: &str, condition: &str, scope: Option<&str>) -> Rule {
@@ -1081,7 +1081,7 @@ mod tests {
             path: PathBuf::from("/rules/broken.md"),
             scope: MemoryScope::Managed,
             content: "body".to_string(),
-            frontmatter: crate::claudemd::MemoryFrontmatter {
+            frontmatter: crate::agentsmd::MemoryFrontmatter {
                 condition: vec!["(unclosed".to_string()],
                 ..Default::default()
             },

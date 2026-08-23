@@ -716,7 +716,7 @@ async fn main() -> anyhow::Result<()> {
     // Build context
     let ctx_builder = ContextBuilder::new(cwd.clone())
         .disable_claude_mds(config.disable_claude_mds)
-        .memory_filenames(mikmik_core::claudemd::MemoryFilenames::from_config(&config));
+        .memory_filenames(mikmik_core::agentsmd::MemoryFilenames::from_config(&config));
     let system_ctx = ctx_builder.build_system_context().await;
     let user_ctx = ctx_builder.build_user_context().await;
     let loaded_instructions = !system_ctx.trim().is_empty() || !user_ctx.trim().is_empty();
@@ -1431,7 +1431,7 @@ async fn run_rules_command(args: &[String]) -> anyhow::Result<()> {
     let project_root = mikmik_core::session_storage::transcript_root_for(&cwd);
     let rules = mikmik_core::rules::rules_for(
         &project_root,
-        mikmik_core::claudemd::MemoryFilenames::from_config(&config),
+        mikmik_core::agentsmd::MemoryFilenames::from_config(&config),
         config.effective_rules_builtin(),
         &config.rules_disabled,
     );

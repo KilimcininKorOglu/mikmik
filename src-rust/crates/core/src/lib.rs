@@ -52,7 +52,7 @@ pub mod cloud_session;
 pub mod remote_session;
 
 // AGENTS.md hierarchical memory loading (T4-1).
-pub mod claudemd;
+pub mod agentsmd;
 
 // Conditional rules: memory that waits for the model to break it.
 pub mod rules;
@@ -5076,7 +5076,7 @@ pub mod context {
     pub struct ContextBuilder {
         cwd: PathBuf,
         disable_claude_mds: bool,
-        memory_filenames: crate::claudemd::MemoryFilenames,
+        memory_filenames: crate::agentsmd::MemoryFilenames,
     }
 
     impl ContextBuilder {
@@ -5084,7 +5084,7 @@ pub mod context {
             Self {
                 cwd,
                 disable_claude_mds: false,
-                memory_filenames: crate::claudemd::MemoryFilenames::default(),
+                memory_filenames: crate::agentsmd::MemoryFilenames::default(),
             }
         }
 
@@ -5094,7 +5094,7 @@ pub mod context {
         }
 
         /// Which of `AGENTS.md` and `CLAUDE.md` this session reads.
-        pub fn memory_filenames(mut self, names: crate::claudemd::MemoryFilenames) -> Self {
+        pub fn memory_filenames(mut self, names: crate::agentsmd::MemoryFilenames) -> Self {
             self.memory_filenames = names;
             self
         }
@@ -5130,8 +5130,8 @@ pub mod context {
             parts.push(format!("Today's date is {}.", date));
 
             if !self.disable_claude_mds {
-                if let Some(claude_md) = self.find_and_read_claude_md().await {
-                    parts.push(claude_md);
+                if let Some(memory) = self.find_and_read_memory().await {
+                    parts.push(memory);
                 }
             }
 
@@ -5176,20 +5176,20 @@ pub mod context {
         /// `AGENTS.md` from directories above any project and skipped the
         /// managed and local scopes entirely. The set of locations is now
         /// exactly the documented one, resolved by
-        /// [`crate::claudemd::load_all_memory_files`].
+        /// [`crate::agentsmd::load_all_memory_files`].
         ///
         /// The project root is the repository root, so a session started in a
         /// subdirectory reads the same files as one started at the top.
         ///
         /// Off the runtime: loading is synchronous and `@include` can pull in
         /// an arbitrary tree, so the reads do not belong on an executor thread.
-        async fn find_and_read_claude_md(&self) -> Option<String> {
+        async fn find_and_read_memory(&self) -> Option<String> {
             let project_root = crate::session_storage::transcript_root_for(&self.cwd);
             let filenames = self.memory_filenames;
 
             let prompt = tokio::task::spawn_blocking(move || {
-                let files = crate::claudemd::load_all_memory_files(&project_root, filenames);
-                crate::claudemd::build_memory_prompt(&files)
+                let files = crate::agentsmd::load_all_memory_files(&project_root, filenames);
+                crate::agentsmd::build_memory_prompt(&files)
             })
             .await
             .ok()?;

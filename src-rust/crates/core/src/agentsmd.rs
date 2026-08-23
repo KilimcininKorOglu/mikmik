@@ -1,8 +1,11 @@
 //! AGENTS.md hierarchical memory loading.
-//! Mirrors src/utils/claudemd.ts (1,479 lines).
 //!
 //! Priority order: managed > user > project > local
 //! Supports @include directives, YAML frontmatter, and mtime-based caching.
+//!
+//! Not to be confused with `memdir.rs`, which reads `MEMORY.md` as the index of
+//! the notes the model writes for itself. This module reads what the user
+//! wrote, and it is the only side a conditional rule can come from.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -572,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn load_scope_claudemd_only_fallback() {
+    fn a_project_with_only_a_claude_md_still_loads() {
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _home = HomeGuard::new();
         let tmp = tempfile::tempdir().unwrap();

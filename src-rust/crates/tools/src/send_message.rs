@@ -27,6 +27,9 @@ pub struct AgentMessage {
     pub timestamp: u64,
 }
 
+/// How much of a message the tool result echoes back to the sender.
+const PREVIEW_CHARS: usize = 60;
+
 /// Global inbox: recipient_id → queued messages.
 static INBOX: Lazy<DashMap<String, Vec<AgentMessage>>> = Lazy::new(DashMap::new);
 
@@ -116,10 +119,13 @@ impl Tool for SendMessageTool {
             timestamp: now,
         };
 
-        let preview = params.summary.as_deref().unwrap_or_else(|| {
-            let s = params.message.as_str();
-            &s[..s.len().min(60)]
-        });
+        // Both halves are model-supplied text, so both are bounded, and the
+        // cut lands on a character boundary: slicing at a fixed byte offset
+        // panics whenever that byte falls inside a multi-byte character.
+        let preview = mikmik_core::truncate::truncate_text(
+            params.summary.as_deref().unwrap_or(&params.message),
+            PREVIEW_CHARS,
+        );
 
         if params.to == "*" {
             // Broadcast: deliver to every existing inbox key
@@ -146,5 +152,55 @@ impl Tool for SendMessageTool {
         INBOX.entry(params.to.clone()).or_default().push(msg);
 
         ToolResult::success(format!("Message sent to '{}': {}", params.to, preview))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::allow_all_context;
+    use std::path::PathBuf;
+
+    /// A message whose 60th byte lands inside a character. Slicing there is
+    /// what the preview used to do, and it panicked.
+    fn multibyte_message() -> String {
+        format!("a{}", "€".repeat(25))
+    }
+
+    #[tokio::test]
+    async fn preview_survives_a_multibyte_message() {
+        let ctx = allow_all_context(PathBuf::from("/workspace"));
+        let result = SendMessageTool
+            .execute(
+                json!({ "to": "preview-boundary-probe", "message": multibyte_message() }),
+                &ctx,
+            )
+            .await;
+
+        assert!(!result.is_error, "{}", result.content);
+        drain_inbox("preview-boundary-probe");
+    }
+
+    #[tokio::test]
+    async fn preview_bounds_a_long_summary_too() {
+        let ctx = allow_all_context(PathBuf::from("/workspace"));
+        let result = SendMessageTool
+            .execute(
+                json!({
+                    "to": "preview-summary-probe",
+                    "message": "short",
+                    "summary": "€".repeat(200),
+                }),
+                &ctx,
+            )
+            .await;
+
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("(truncated)"),
+            "an oversized summary should be cut: {}",
+            result.content
+        );
+        drain_inbox("preview-summary-probe");
     }
 }

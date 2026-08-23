@@ -420,9 +420,19 @@ impl RuleSet {
     /// A later file of the same name replaces an earlier one, so a project may
     /// restate a rule the user set globally, and the user may restate a
     /// built-in one.
-    pub fn load(project_root: &Path, filenames: MemoryFilenames, disabled: &[String]) -> Self {
-        let files = crate::claudemd::load_all_memory_files(project_root, filenames);
+    pub fn load(
+        project_root: &Path,
+        filenames: MemoryFilenames,
+        builtin: bool,
+        disabled: &[String],
+    ) -> Self {
         let mut set = Self::default();
+        if builtin {
+            for rule in builtin_rules() {
+                set.insert(rule.clone());
+            }
+        }
+        let files = crate::claudemd::load_all_memory_files(project_root, filenames);
         for file in files.iter().filter(|f| is_conditional_rule(f)) {
             if let Some(rule) = rule_from_file(file) {
                 set.insert(rule);
@@ -519,6 +529,148 @@ impl RuleSet {
 }
 
 // ---------------------------------------------------------------------------
+// The catalogue that ships with the binary
+// ---------------------------------------------------------------------------
+
+/// The rules embedded in the binary, by name.
+///
+/// Named one by one rather than scanned from a directory, because the files
+/// have to be in the binary and a directory scan at runtime would look for
+/// them on a machine that never had them. `NOTICE.md` is deliberately absent:
+/// it is the third-party notice, not a rule.
+const BUILTIN_RULES: &[(&str, &str)] = &[
+    (
+        "git-add-all",
+        include_str!("../assets/rules/git-add-all.md"),
+    ),
+    (
+        "git-destructive",
+        include_str!("../assets/rules/git-destructive.md"),
+    ),
+    (
+        "go-add-cleanup",
+        include_str!("../assets/rules/go-add-cleanup.md"),
+    ),
+    (
+        "go-exp-promoted",
+        include_str!("../assets/rules/go-exp-promoted.md"),
+    ),
+    ("go-ioutil", include_str!("../assets/rules/go-ioutil.md")),
+    (
+        "go-join-hostport",
+        include_str!("../assets/rules/go-join-hostport.md"),
+    ),
+    ("go-rand-v2", include_str!("../assets/rules/go-rand-v2.md")),
+    ("no-secrets", include_str!("../assets/rules/no-secrets.md")),
+    (
+        "rs-box-leak",
+        include_str!("../assets/rules/rs-box-leak.md"),
+    ),
+    (
+        "rs-future-prelude",
+        include_str!("../assets/rules/rs-future-prelude.md"),
+    ),
+    (
+        "rs-lazylock",
+        include_str!("../assets/rules/rs-lazylock.md"),
+    ),
+    (
+        "rs-match-ergonomics",
+        include_str!("../assets/rules/rs-match-ergonomics.md"),
+    ),
+    (
+        "rs-no-unwrap",
+        include_str!("../assets/rules/rs-no-unwrap.md"),
+    ),
+    (
+        "rs-parking-lot",
+        include_str!("../assets/rules/rs-parking-lot.md"),
+    ),
+    (
+        "rs-result-type",
+        include_str!("../assets/rules/rs-result-type.md"),
+    ),
+    (
+        "rs-unsafe-safety",
+        include_str!("../assets/rules/rs-unsafe-safety.md"),
+    ),
+    (
+        "sql-parameterize",
+        include_str!("../assets/rules/sql-parameterize.md"),
+    ),
+    (
+        "ts-bare-catch",
+        include_str!("../assets/rules/ts-bare-catch.md"),
+    ),
+    (
+        "ts-import-type",
+        include_str!("../assets/rules/ts-import-type.md"),
+    ),
+    ("ts-no-any", include_str!("../assets/rules/ts-no-any.md")),
+    (
+        "ts-no-deprecated-leftovers",
+        include_str!("../assets/rules/ts-no-deprecated-leftovers.md"),
+    ),
+    (
+        "ts-no-dynamic-import",
+        include_str!("../assets/rules/ts-no-dynamic-import.md"),
+    ),
+    (
+        "ts-no-local-is-record",
+        include_str!("../assets/rules/ts-no-local-is-record.md"),
+    ),
+    (
+        "ts-no-return-type",
+        include_str!("../assets/rules/ts-no-return-type.md"),
+    ),
+    (
+        "ts-no-test-timers",
+        include_str!("../assets/rules/ts-no-test-timers.md"),
+    ),
+    (
+        "ts-no-tiny-functions",
+        include_str!("../assets/rules/ts-no-tiny-functions.md"),
+    ),
+    (
+        "ts-promise-with-resolvers",
+        include_str!("../assets/rules/ts-promise-with-resolvers.md"),
+    ),
+    ("ts-set-map", include_str!("../assets/rules/ts-set-map.md")),
+    (
+        "web-no-localstorage",
+        include_str!("../assets/rules/web-no-localstorage.md"),
+    ),
+];
+
+/// Every rule that ships with the binary.
+///
+/// A file that fails to parse here is a build-time mistake rather than a
+/// user's, so it is logged and skipped and the session still starts.
+pub fn builtin_rules() -> &'static [Rule] {
+    static RULES: once_cell::sync::Lazy<Vec<Rule>> = once_cell::sync::Lazy::new(|| {
+        BUILTIN_RULES
+            .iter()
+            .filter_map(|(name, text)| {
+                let (frontmatter, body) = crate::claudemd::parse_frontmatter(text);
+                let file = MemoryFileInfo {
+                    path: PathBuf::from(format!("<built-in>/{name}.md")),
+                    scope: crate::claudemd::MemoryScope::Managed,
+                    content: body.to_string(),
+                    frontmatter,
+                    mtime: None,
+                };
+                let rule = rule_from_file(&file);
+                if rule.is_none() {
+                    tracing::error!("built-in rule '{name}' has no usable condition");
+                }
+                rule
+            })
+            .collect()
+    });
+    &RULES
+}
+
+// ---------------------------------------------------------------------------
 // Session state
 // ---------------------------------------------------------------------------
 
@@ -536,6 +688,7 @@ static FIRED: once_cell::sync::Lazy<
 pub fn rules_for(
     project_root: &Path,
     filenames: MemoryFilenames,
+    builtin: bool,
     disabled: &[String],
 ) -> std::sync::Arc<RuleSet> {
     if let Some(found) = LOADED.read().get(project_root) {
@@ -543,7 +696,7 @@ pub fn rules_for(
     }
     // Loaded outside the lock: this reads a directory tree, and holding a
     // global write lock across that would stall every other tool call.
-    let loaded = std::sync::Arc::new(RuleSet::load(project_root, filenames, disabled));
+    let loaded = std::sync::Arc::new(RuleSet::load(project_root, filenames, builtin, disabled));
     LOADED
         .write()
         .entry(project_root.to_path_buf())
@@ -813,6 +966,139 @@ mod tests {
             mtime: None,
         };
         assert!(rule_from_file(&file).is_none());
+    }
+
+    // ---- The shipped catalogue -------------------------------------------
+
+    #[test]
+    fn every_shipped_rule_parses() {
+        // A rule that does not compile is dropped, so without this the
+        // catalogue could shrink silently between releases.
+        assert_eq!(
+            builtin_rules().len(),
+            BUILTIN_RULES.len(),
+            "a shipped rule was dropped: {:?}",
+            BUILTIN_RULES
+                .iter()
+                .map(|(name, _)| *name)
+                .filter(|name| !builtin_rules().iter().any(|r| &r.name == name))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn every_shipped_rule_says_what_it_is_about() {
+        for rule in builtin_rules() {
+            assert!(
+                rule.description.is_some(),
+                "'{}' has no description, so a listing cannot explain it",
+                rule.name
+            );
+            assert!(!rule.content.is_empty(), "'{}' has no body", rule.name);
+        }
+    }
+
+    #[test]
+    fn the_catalogue_names_each_rule_once() {
+        let mut names: Vec<&str> = BUILTIN_RULES.iter().map(|(name, _)| *name).collect();
+        names.sort();
+        let count = names.len();
+        names.dedup();
+        assert_eq!(names.len(), count, "a name is listed twice");
+    }
+
+    #[test]
+    fn a_shipped_rule_is_replaced_by_one_of_the_same_name() {
+        // How a user overrides a rule they disagree with, rather than only
+        // switching it off.
+        let mut set = RuleSet::default();
+        for rule in builtin_rules() {
+            set.insert(rule.clone());
+        }
+        let before = set.len();
+        set.insert(rule("rs-no-unwrap", "never-matches-anything", None));
+        assert_eq!(set.len(), before);
+
+        let input = json!({ "file_path": "a.rs", "new_string": "x.unwrap()" });
+        assert!(
+            !set.match_tool("Edit", &input)
+                .iter()
+                .any(|r| r.name == "rs-no-unwrap"),
+            "the replacement's condition should be the one that runs"
+        );
+    }
+
+    #[test]
+    fn the_git_rules_catch_what_they_are_for() {
+        let mut set = RuleSet::default();
+        for rule in builtin_rules() {
+            set.insert(rule.clone());
+        }
+        let fires = |command: &str| -> Vec<String> {
+            set.match_tool("Bash", &json!({ "command": command }))
+                .iter()
+                .map(|r| r.name.clone())
+                .collect()
+        };
+
+        assert!(fires("git add -A").contains(&"git-add-all".to_string()));
+        assert!(fires("git add .").contains(&"git-add-all".to_string()));
+        assert!(fires("git commit -a -m x").contains(&"git-add-all".to_string()));
+        assert!(fires("git reset --hard").contains(&"git-destructive".to_string()));
+        assert!(fires("git clean -fd").contains(&"git-destructive".to_string()));
+        assert!(fires("git push --force origin main").contains(&"git-destructive".to_string()));
+
+        // The ordinary forms have to stay silent, or the rule is unusable.
+        assert!(
+            fires("git add src/a.rs").is_empty(),
+            "naming a file is fine"
+        );
+        assert!(fires("git status --short").is_empty());
+        assert!(
+            fires("git checkout -- src/a.rs").is_empty(),
+            "restoring one named file is the advice, not the mistake"
+        );
+        assert!(fires("git commit -m 'add a thing'").is_empty());
+    }
+
+    #[test]
+    fn the_unwrap_rule_reads_what_is_written_not_what_is_removed() {
+        let mut set = RuleSet::default();
+        for rule in builtin_rules() {
+            set.insert(rule.clone());
+        }
+        let writing = json!({
+            "file_path": "src/a.rs",
+            "old_string": "let x = 1;",
+            "new_string": "let x = y.unwrap();"
+        });
+        let removing = json!({
+            "file_path": "src/a.rs",
+            "old_string": "let x = y.unwrap();",
+            "new_string": "let x = y?;"
+        });
+        assert!(set
+            .match_tool("Edit", &writing)
+            .iter()
+            .any(|r| r.name == "rs-no-unwrap"));
+        assert!(set.match_tool("Edit", &removing).is_empty());
+    }
+
+    #[test]
+    fn a_shipped_rule_stays_inside_its_language() {
+        let mut set = RuleSet::default();
+        for rule in builtin_rules() {
+            set.insert(rule.clone());
+        }
+        // `: any` is a TypeScript rule and this is Rust, where the same two
+        // characters appear in every type annotation.
+        let rust = json!({ "file_path": "src/a.rs", "new_string": "fn f(x: anyhow::Error) {}" });
+        assert!(
+            !set.match_tool("Edit", &rust)
+                .iter()
+                .any(|r| r.name == "ts-no-any"),
+            "a TypeScript rule fired on a Rust file"
+        );
     }
 
     // ---- Repeat policy ---------------------------------------------------

@@ -1413,6 +1413,13 @@ pub mod config {
         /// memory files without a condition are unaffected.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub rules_enabled: Option<bool>,
+        /// Whether the rules that ship with the binary run. Defaults to on.
+        ///
+        /// They cover the mistakes a pattern can catch in Rust, Go,
+        /// TypeScript, SQL and shell. Switch the whole set off here, or one
+        /// rule at a time with `rules_disabled`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub rules_builtin: Option<bool>,
         /// Names of conditional rules that must not run.
         ///
         /// The file stem, so `no-unwrap` for `no-unwrap.md`.
@@ -2434,6 +2441,12 @@ pub mod config {
             self.lsp_auto_detect.unwrap_or(true)
         }
 
+        /// Whether the shipped catalogue runs. Unset means yes: a rule only
+        /// speaks when the model writes something its condition matches.
+        pub fn effective_rules_builtin(&self) -> bool {
+            self.rules_builtin.unwrap_or(true)
+        }
+
         /// Whether conditional rules run. Unset means yes: a rule only speaks
         /// when the model writes something its condition matches, so a session
         /// that breaks none of them never hears one.
@@ -3349,6 +3362,7 @@ pub mod config {
                 // because a rule only restricts what the model writes. It must
                 // not switch off or drop a rule the user set for themselves.
                 rules_enabled: base.config.rules_enabled,
+                rules_builtin: base.config.rules_builtin,
                 rules_disabled: base.config.rules_disabled,
                 // These two only change what a tool reports and whether a
                 // formatter runs, so a project may set them.

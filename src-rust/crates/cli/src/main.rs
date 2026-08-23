@@ -519,6 +519,12 @@ async fn main() -> anyhow::Result<()> {
         return mikmik_acp::run_acp_server(Some(acp_login_runner())).await;
     }
 
+    // Fast-path: `mikmik rules [list|test]` — see and try the conditional
+    // rules this directory would load.
+    if raw_args.get(1).map(|s| s.as_str()) == Some("rules") {
+        return run_rules_command(&raw_args[2..]).await;
+    }
+
     // Fast-path: `mikmik models [provider] [--refresh] [--verbose] [--json]`
     //   — list all available providers and models from the bundled snapshot
     //     plus any disk-cached overlay from models.dev.
@@ -1403,6 +1409,108 @@ async fn connect_mcp_manager_arc(
     let mcp_manager = Arc::new(mikmik_mcp::McpManager::connect_all(servers).await);
     mcp_manager.clone().spawn_notification_poll_loop();
     Some(mcp_manager)
+}
+
+/// The `rules` subcommand: `list` and `test`.
+///
+/// A rule that never fires and a rule that fires on everything look the same
+/// from the outside: silence, or noise. This runs the real matcher so the
+/// author can see which it is before shipping the file.
+async fn run_rules_command(args: &[String]) -> anyhow::Result<()> {
+    const USAGE: &str = "Usage:\n  \
+        mikmik rules list\n  \
+        mikmik rules test <tool> <file> [text]\n\n\
+        `test` reads the text from stdin when it is not given on the command line.\n\
+        Example: mikmik rules test Edit src/a.rs 'let x = y.unwrap();'";
+
+    let settings = Settings::load().await.unwrap_or_default();
+    let config = settings.effective_config();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let project_root = mikmik_core::session_storage::transcript_root_for(&cwd);
+    let rules = mikmik_core::rules::rules_for(
+        &project_root,
+        mikmik_core::claudemd::MemoryFilenames::from_config(&config),
+        config.effective_rules_builtin(),
+        &config.rules_disabled,
+    );
+
+    match args.first().map(|s| s.as_str()) {
+        None | Some("list") => {
+            if rules.is_empty() {
+                println!("No conditional rules load here.");
+                println!(
+                    "Write one in {}/.mikmik/rules/, or see docs/configuration.md.",
+                    project_root.display()
+                );
+                return Ok(());
+            }
+            println!(
+                "{} rule(s), from {}:\n",
+                rules.len(),
+                project_root.display()
+            );
+            for rule in rules.iter() {
+                let action = match rule.action {
+                    mikmik_core::rules::RuleAction::Block => "block",
+                    mikmik_core::rules::RuleAction::Remind => "remind",
+                };
+                println!("  {}  [{action}]", rule.name);
+                if let Some(description) = &rule.description {
+                    println!("      {description}");
+                }
+                println!("      from {}", rule.path.display());
+            }
+        }
+        Some("test") => {
+            let Some(tool) = args.get(1) else {
+                eprintln!("{USAGE}");
+                std::process::exit(2);
+            };
+            let file = args.get(2).cloned().unwrap_or_default();
+            let text = match args.get(3) {
+                Some(text) => text.clone(),
+                None => {
+                    use std::io::Read;
+                    let mut buffer = String::new();
+                    std::io::stdin().read_to_string(&mut buffer)?;
+                    buffer
+                }
+            };
+
+            // Shaped like the tool's own arguments, so the same payload
+            // extraction runs as in a session.
+            let input = match tool.as_str() {
+                "Bash" => serde_json::json!({ "command": text }),
+                "Write" => serde_json::json!({ "file_path": file, "content": text }),
+                _ => serde_json::json!({
+                    "file_path": file,
+                    "old_string": "",
+                    "new_string": text
+                }),
+            };
+
+            let matched = rules.match_tool(tool, &input);
+            if matched.is_empty() {
+                println!("No rule matches.");
+                return Ok(());
+            }
+            for rule in matched {
+                let action = match rule.action {
+                    mikmik_core::rules::RuleAction::Block => "would block the call",
+                    mikmik_core::rules::RuleAction::Remind => "would ride on the result",
+                };
+                println!("{}  ({action})", rule.name);
+                if let Some(description) = &rule.description {
+                    println!("  {description}");
+                }
+            }
+        }
+        Some(other) => {
+            eprintln!("mikmik rules: unknown action '{other}'\n\n{USAGE}");
+            std::process::exit(2);
+        }
+    }
+    Ok(())
 }
 
 /// Implementation of the `mikmik models` subcommand.

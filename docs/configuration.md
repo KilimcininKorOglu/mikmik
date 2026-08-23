@@ -1009,14 +1009,47 @@ conversation does not unsay them either: the rule reached the model once.
 | Key              | Type      | Default | Description                                       |
 |------------------|-----------|---------|---------------------------------------------------|
 | `rules_enabled`  | boolean   | true    | Whether conditional rules run at all.             |
+| `rules_builtin`  | boolean   | true    | Whether the rules that ship with the binary run.  |
 | `rules_disabled` | string[]  | []      | File stems of rules that must not run.            |
 
-Both come from your own settings alone. A project may **add** a rule, because a
-rule only restricts what the model writes; it cannot switch off or drop a rule
-you set for yourself. The settings screen carries a **Conditional rules** row.
+All three come from your own settings alone. A project may **add** a rule,
+because a rule only restricts what the model writes; it cannot switch off or
+drop a rule you set for yourself. The settings screen carries **Conditional
+rules** and **Built-in rules** rows.
 
 A condition that does not compile is reported in the log and skipped, and the
 session starts. A rule left with no usable condition is dropped.
+
+### The rules that ship with the binary
+
+Twenty-nine rules cover the mistakes a pattern can catch. They are on by
+default. A rule of the same name in your own directories **replaces** the
+built-in one, so disagreeing with one means rewriting it rather than only
+switching it off.
+
+| Group | Rules |
+|-------|-------|
+| Git   | `git-add-all`, `git-destructive`. Both **block**: they refuse the command rather than comment on it afterwards, because by then the work is gone. |
+| Rust  | `rs-no-unwrap`, `rs-unsafe-safety`, `rs-box-leak`, `rs-lazylock`, `rs-parking-lot`, `rs-match-ergonomics`, `rs-future-prelude`, `rs-result-type` |
+| Go    | `go-add-cleanup`, `go-exp-promoted`, `go-ioutil`, `go-join-hostport`, `go-rand-v2` |
+| TypeScript | `ts-no-any`, `ts-bare-catch`, `ts-import-type`, `ts-no-deprecated-leftovers`, `ts-no-dynamic-import`, `ts-no-local-is-record`, `ts-no-return-type`, `ts-no-test-timers`, `ts-no-tiny-functions`, `ts-promise-with-resolvers`, `ts-set-map` |
+| Any language | `no-secrets`, `sql-parameterize`, `web-no-localstorage` |
+
+Most of them are adapted from the `oh-my-pi` project under the MIT License; the
+notice is in `crates/core/assets/rules/NOTICE.md`.
+
+### Seeing what a rule would do
+
+```bash
+mikmik rules list                                    # every rule this directory loads
+mikmik rules test Edit src/a.rs 'let x = y.unwrap();' # would anything fire?
+mikmik rules test Bash '' 'git add -A'
+```
+
+`test` runs the real matcher, so what it prints is what a session would do. The
+text may also come from stdin. A rule that never fires and a rule that fires on
+everything look the same from the outside, and this is how to tell them apart
+before shipping the file.
 
 ### @include directives
 

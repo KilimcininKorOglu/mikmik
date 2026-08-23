@@ -174,6 +174,71 @@ pub(crate) async fn run_pre_tool_hooks(
     None
 }
 
+/// What the project's conditional rules say about one tool call.
+#[derive(Debug)]
+pub(crate) enum RuleOutcome {
+    /// No rule matched, or none of the matching ones may speak again.
+    Silent,
+    /// Run the call, then put this text on top of its result.
+    Remind(String),
+    /// Refuse the call and answer with this instead.
+    Block(mikmik_tools::ToolResult),
+}
+
+/// Check one tool call against the project's conditional rules.
+///
+/// Runs where the arguments are complete JSON and the tool has not started, so
+/// a rule can refuse the call rather than comment on what it already did.
+pub(crate) fn check_rules(
+    tool_ctx: &mikmik_tools::ToolContext,
+    name: &str,
+    input: &serde_json::Value,
+) -> RuleOutcome {
+    if !tool_ctx.config.effective_rules_enabled() {
+        return RuleOutcome::Silent;
+    }
+
+    let project_root = mikmik_core::session_storage::transcript_root_for(&tool_ctx.working_dir);
+    let filenames = mikmik_core::claudemd::MemoryFilenames::from_config(&tool_ctx.config);
+    let rules =
+        mikmik_core::rules::rules_for(&project_root, filenames, &tool_ctx.config.rules_disabled);
+    if rules.is_empty() {
+        return RuleOutcome::Silent;
+    }
+
+    let turn = tool_ctx
+        .current_turn
+        .load(std::sync::atomic::Ordering::Relaxed) as u64;
+    let matched = rules.match_tool(name, input);
+
+    // A blocking rule wins over a reminding one: the call it refuses cannot
+    // also carry a note on the result it never produces.
+    let mut reminders: Vec<String> = Vec::new();
+    let mut blocks: Vec<String> = Vec::new();
+    for rule in matched {
+        if !mikmik_core::rules::claim(&tool_ctx.session_id, rule, turn) {
+            continue;
+        }
+        tracing::info!(tool = %name, rule = %rule.name, "conditional rule matched");
+        let rendered = mikmik_core::rules::render_rule(rule);
+        match rule.action {
+            mikmik_core::rules::RuleAction::Block => blocks.push(rendered),
+            mikmik_core::rules::RuleAction::Remind => reminders.push(rendered),
+        }
+    }
+
+    if !blocks.is_empty() {
+        // A reminder that matched the same call belongs in the refusal too,
+        // because the call is not going to produce a result to carry it.
+        blocks.extend(reminders);
+        return RuleOutcome::Block(mikmik_tools::ToolResult::error(blocks.join("\n\n")));
+    }
+    if reminders.is_empty() {
+        return RuleOutcome::Silent;
+    }
+    RuleOutcome::Remind(reminders.join("\n\n"))
+}
+
 /// Run every `PostToolUse` hook, from settings and from plugins, for one tool.
 pub(crate) async fn run_post_tool_hooks(
     tool_ctx: &mikmik_tools::ToolContext,

@@ -88,6 +88,7 @@ pub struct SettingsScreen {
     pub auto_memory: bool,
     pub agents_md: bool,
     pub claude_md: bool,
+    pub rules_enabled: bool,
     pub lsp_auto_detect: bool,
     pub lsp_warmup_on_start: bool,
     pub lsp_diagnostics_on_write: bool,
@@ -148,6 +149,7 @@ impl SettingsScreen {
             auto_memory: false,
             agents_md: true,
             claude_md: false,
+            rules_enabled: true,
             lsp_auto_detect: true,
             lsp_warmup_on_start: false,
             lsp_diagnostics_on_write: true,
@@ -201,6 +203,7 @@ impl SettingsScreen {
         );
         self.agents_md = filenames.agents_md;
         self.claude_md = filenames.claude_md;
+        self.rules_enabled = self.settings_snapshot.config.effective_rules_enabled();
         self.lsp_auto_detect = self.settings_snapshot.config.effective_lsp_auto_detect();
         self.lsp_warmup_on_start = self
             .settings_snapshot
@@ -557,6 +560,15 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             description: "Automatically compact turns at threshold.".into(),
             kind: SettingKind::Bool,
             value: if screen.auto_compact { "true" } else { "false" }.to_string(),
+        },
+        SettingsEntry {
+            key: "rules_enabled".into(),
+            label: "Conditional rules".into(),
+            description: "Let a rule file with a condition speak when the model writes something \
+                          it matches."
+                .into(),
+            kind: SettingKind::Bool,
+            value: if screen.rules_enabled { "true" } else { "false" }.to_string(),
         },
         SettingsEntry {
             key: "lsp_auto_detect".into(),
@@ -1351,6 +1363,10 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                         // The query loop reads the nested key, so write both or
                         // the toggle saves somewhere the session never looks.
                         screen.settings_snapshot.config.auto_compact = Some(new_value);
+                    }
+                    "rules_enabled" => {
+                        screen.rules_enabled = new_value;
+                        screen.settings_snapshot.config.rules_enabled = Some(new_value);
                     }
                     "lsp_auto_detect" => {
                         screen.lsp_auto_detect = new_value;

@@ -1969,6 +1969,9 @@ async fn run_query_loop_inner(
                     input: Value,
                     /// None means the pre-hook blocked execution; the String is the error reason.
                     blocked_result: Option<ToolResult>,
+                    /// A conditional rule this call matched. Put on top of the
+                    /// result once the tool has run.
+                    reminder: Option<String>,
                 }
 
                 // Phase 1: sequential pre-hook pass.
@@ -1991,13 +1994,27 @@ async fn run_query_loop_inner(
                             });
                         }
 
-                        let blocked_result = run_pre_tool_hooks(tool_ctx, &name, &input).await;
+                        let mut blocked_result = run_pre_tool_hooks(tool_ctx, &name, &input).await;
+
+                        // The project's own rules, checked where the arguments
+                        // are complete and the tool has not started. A hook
+                        // that already refused the call is left alone: it said
+                        // its piece and the rule has nothing to add.
+                        let mut reminder = None;
+                        if blocked_result.is_none() {
+                            match check_rules(tool_ctx, &name, &input) {
+                                RuleOutcome::Silent => {}
+                                RuleOutcome::Remind(text) => reminder = Some(text),
+                                RuleOutcome::Block(result) => blocked_result = Some(result),
+                            }
+                        }
 
                         prepared.push(PreparedTool {
                             id,
                             name,
                             input,
                             blocked_result,
+                            reminder,
                         });
                     }
                 }
@@ -2038,9 +2055,15 @@ async fn run_query_loop_inner(
                 // returning promptly) but still emit ToolEnd + build every result
                 // block so the conversation and TUI stay consistent.
                 let mut result_blocks: Vec<ContentBlock> = Vec::with_capacity(prepared.len());
-                for (p, result) in prepared.iter().zip(exec_results) {
+                for (p, mut result) in prepared.iter().zip(exec_results) {
                     if !batch_cancelled {
                         run_post_tool_hooks(tool_ctx, &p.name, &p.input, &result).await;
+                    }
+
+                    // A rule this call matched rides on top of the result, so
+                    // the model reads it while it is still on this file.
+                    if let Some(ref reminder) = p.reminder {
+                        result.content = format!("{reminder}\n\n{}", result.content);
                     }
 
                     if let Some(ref tx) = event_tx {
@@ -3675,5 +3698,182 @@ mod tests {
         let msgs = vec![Message::user("rocky, review this function")];
         let (_style, prompt) = effective_output_style_for_turn(&cfg, &msgs);
         assert!(prompt.unwrap().contains("Project Hail Mary"));
+    }
+}
+
+#[cfg(test)]
+mod conditional_rule_tests {
+    use super::*;
+    use crate::runner::{check_rules, RuleOutcome};
+    use mikmik_tools::ToolContext;
+
+    /// `MIKMIK_HOME` is process-global, so these run one at a time.
+    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Points the config root at a temporary directory, so a rule file the
+    /// developer keeps in their real `rules/` directory cannot reach the test.
+    struct HomeGuard {
+        saved: Option<std::ffi::OsString>,
+        _dir: tempfile::TempDir,
+    }
+
+    impl HomeGuard {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let saved = std::env::var_os("MIKMIK_HOME");
+            std::env::set_var("MIKMIK_HOME", dir.path());
+            Self { saved, _dir: dir }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match &self.saved {
+                Some(value) => std::env::set_var("MIKMIK_HOME", value),
+                None => std::env::remove_var("MIKMIK_HOME"),
+            }
+        }
+    }
+
+    struct AllowAll;
+
+    impl mikmik_core::permissions::PermissionHandler for AllowAll {
+        fn check_permission(
+            &self,
+            _request: &mikmik_core::permissions::PermissionRequest,
+        ) -> mikmik_core::permissions::PermissionDecision {
+            mikmik_core::permissions::PermissionDecision::Allow
+        }
+        fn request_permission(
+            &self,
+            request: &mikmik_core::permissions::PermissionRequest,
+        ) -> mikmik_core::permissions::PermissionDecision {
+            self.check_permission(request)
+        }
+    }
+
+    fn context_in(dir: &std::path::Path, session: &str) -> ToolContext {
+        ToolContext {
+            working_dir: dir.to_path_buf(),
+            permission_mode: mikmik_core::config::PermissionMode::Default,
+            permission_handler: Arc::new(AllowAll),
+            cost_tracker: mikmik_core::cost::CostTracker::new(),
+            session_id: session.to_string(),
+            file_history: Arc::new(parking_lot::Mutex::new(
+                mikmik_core::file_history::FileHistory::new(),
+            )),
+            current_turn: Arc::new(std::sync::atomic::AtomicUsize::new(1)),
+            non_interactive: true,
+            mcp_manager: None,
+            config: mikmik_core::config::Config::default(),
+            managed_agent_config: None,
+            completion_notifier: None,
+            pending_permissions: None,
+            permission_manager: None,
+            user_question_tx: None,
+            plan_approval_tx: None,
+            tool_output_tx: None,
+            plan_mode_tx: None,
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+            current_call: None,
+            editor: None,
+        }
+    }
+
+    fn write_rule(dir: &std::path::Path, name: &str, body: &str) {
+        let path = dir.join(".mikmik/rules").join(format!("{name}.md"));
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(path, body).expect("write");
+    }
+
+    fn writing_unwrap() -> serde_json::Value {
+        serde_json::json!({
+            "file_path": "src/a.rs",
+            "old_string": "let x = 1;",
+            "new_string": "let x = y.unwrap();"
+        })
+    }
+
+    #[test]
+    fn a_matching_rule_rides_on_the_result() {
+        let _lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _home = HomeGuard::new();
+        let project = tempfile::tempdir().expect("tempdir");
+        write_rule(
+            project.path(),
+            "no-unwrap",
+            "---\ncondition: \"\\\\.unwrap\\\\(\\\\)\"\nscope: \"tool:Edit(*.rs)\"\n---\nNO-UNWRAP-BODY\n",
+        );
+        mikmik_core::rules::reload();
+
+        let ctx = context_in(project.path(), "rules-remind");
+        mikmik_core::rules::forget_session(&ctx.session_id);
+        match check_rules(&ctx, "Edit", &writing_unwrap()) {
+            RuleOutcome::Remind(text) => {
+                assert!(text.contains("NO-UNWRAP-BODY"), "{text}");
+                assert!(text.contains("rule=\"no-unwrap\""), "{text}");
+            }
+            other => panic!("expected a reminder, got {other:?}"),
+        }
+
+        // `repeat` defaults to once, so the same rule stays quiet after that.
+        assert!(matches!(
+            check_rules(&ctx, "Edit", &writing_unwrap()),
+            RuleOutcome::Silent
+        ));
+        mikmik_core::rules::forget_session(&ctx.session_id);
+        mikmik_core::rules::reload();
+    }
+
+    #[test]
+    fn a_blocking_rule_answers_instead_of_the_tool() {
+        let _lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _home = HomeGuard::new();
+        let project = tempfile::tempdir().expect("tempdir");
+        write_rule(
+            project.path(),
+            "no-unwrap",
+            "---\ncondition: \"\\\\.unwrap\\\\(\\\\)\"\non_match: block\n---\nREFUSED-BODY\n",
+        );
+        mikmik_core::rules::reload();
+
+        let ctx = context_in(project.path(), "rules-block");
+        mikmik_core::rules::forget_session(&ctx.session_id);
+        match check_rules(&ctx, "Edit", &writing_unwrap()) {
+            RuleOutcome::Block(result) => {
+                assert!(result.is_error);
+                assert!(
+                    result.content.contains("REFUSED-BODY"),
+                    "{}",
+                    result.content
+                );
+            }
+            other => panic!("expected a block, got {other:?}"),
+        }
+        mikmik_core::rules::forget_session(&ctx.session_id);
+        mikmik_core::rules::reload();
+    }
+
+    #[test]
+    fn the_switch_silences_every_rule() {
+        let _lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _home = HomeGuard::new();
+        let project = tempfile::tempdir().expect("tempdir");
+        write_rule(
+            project.path(),
+            "no-unwrap",
+            "---\ncondition: \"\\\\.unwrap\\\\(\\\\)\"\n---\nBODY\n",
+        );
+        mikmik_core::rules::reload();
+
+        let mut ctx = context_in(project.path(), "rules-off");
+        ctx.config.rules_enabled = Some(false);
+        mikmik_core::rules::forget_session(&ctx.session_id);
+        assert!(matches!(
+            check_rules(&ctx, "Edit", &writing_unwrap()),
+            RuleOutcome::Silent
+        ));
+        mikmik_core::rules::forget_session(&ctx.session_id);
+        mikmik_core::rules::reload();
     }
 }

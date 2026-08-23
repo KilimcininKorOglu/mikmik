@@ -54,6 +54,9 @@ pub mod remote_session;
 // AGENTS.md hierarchical memory loading (T4-1).
 pub mod claudemd;
 
+// Conditional rules: memory that waits for the model to break it.
+pub mod rules;
+
 // Message manipulation utilities (T4-2).
 pub mod message_utils;
 
@@ -1402,6 +1405,19 @@ pub mod config {
         /// [`Config::effective_lsp_auto_detect`].
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub lsp_auto_detect: Option<bool>,
+        /// Whether conditional rules run. Defaults to on.
+        ///
+        /// A conditional rule is a memory file with a `condition`. It stays out
+        /// of the prompt and speaks only when the model writes something the
+        /// condition matches. Switching this off leaves those files silent;
+        /// memory files without a condition are unaffected.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub rules_enabled: Option<bool>,
+        /// Names of conditional rules that must not run.
+        ///
+        /// The file stem, so `no-unwrap` for `no-unwrap.md`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub rules_disabled: Vec<String>,
         /// Start the project's language servers when the session opens,
         /// instead of when something first asks. Defaults to off.
         ///
@@ -2418,6 +2434,13 @@ pub mod config {
             self.lsp_auto_detect.unwrap_or(true)
         }
 
+        /// Whether conditional rules run. Unset means yes: a rule only speaks
+        /// when the model writes something its condition matches, so a session
+        /// that breaks none of them never hears one.
+        pub fn effective_rules_enabled(&self) -> bool {
+            self.rules_enabled.unwrap_or(true)
+        }
+
         /// Whether the project's servers start with the session. Unset means
         /// no: a session that never touches code would pay for a process it
         /// does not use.
@@ -3322,6 +3345,11 @@ pub mod config {
                 // before anything asks for it.
                 lsp_idle_timeout_ms: base.config.lsp_idle_timeout_ms,
                 lsp_warmup_on_start: base.config.lsp_warmup_on_start,
+                // SECURITY: taken from `base` alone. A project may add rules,
+                // because a rule only restricts what the model writes. It must
+                // not switch off or drop a rule the user set for themselves.
+                rules_enabled: base.config.rules_enabled,
+                rules_disabled: base.config.rules_disabled,
                 // These two only change what a tool reports and whether a
                 // formatter runs, so a project may set them.
                 lsp_diagnostics_on_write: over
@@ -3873,6 +3901,25 @@ pub mod config {
             };
             let merged = Settings::merge_with(Settings::default(), project, ProjectRunnables::Deny);
             assert!(merged.config.acp_agents.is_empty());
+        }
+
+        #[test]
+        fn a_project_cannot_switch_off_conditional_rules() {
+            // A project may add a rule, because a rule only restricts what the
+            // model writes. Switching the machinery off would let a repository
+            // silence a rule the user set for themselves.
+            let project = Settings {
+                config: Config {
+                    rules_enabled: Some(false),
+                    rules_disabled: vec!["no-unwrap".to_string()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let merged =
+                Settings::merge_with(Settings::default(), project, ProjectRunnables::Allow);
+            assert!(merged.config.effective_rules_enabled());
+            assert!(merged.config.rules_disabled.is_empty());
         }
 
         #[test]

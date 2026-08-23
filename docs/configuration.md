@@ -880,6 +880,7 @@ The four locations are processed in this order, each appended below the last:
 | User    | `~/.config/mikmik/AGENTS.md`              | Your personal preferences and instructions, applied to all projects.                                       |
 | Project | `<project-root>/AGENTS.md`          | Project-level context: architecture notes, conventions, workflows. Typically committed to version control. |
 | Local   | `<project-root>/.mikmik/AGENTS.md` | Local overrides not committed to version control (add `.mikmik/` to `.gitignore`).                        |
+| Local   | `<project-root>/.mikmik/rules/*.md` | The project's own rule files, loaded in alphabetical order. Usually [conditional rules](#conditional-rules). |
 
 Files from all four locations are concatenated into a single system-prompt
 fragment, each under a `# Memory (<scope>, from <path>)` heading so the model
@@ -929,9 +930,89 @@ Frontmatter fields:
 |---------------|----------------------------------------------------------------------------------|
 | `memory_type` | Informal label. Read but not acted on.                                           |
 | `priority`    | Integer sort order within one scope. Lower numbers come first; a file that sets no priority sorts after every file that does. |
-| `scope`       | Informal label. Read but not acted on.                                           |
+| `description` | One line saying what the file is about. Shown by `mikmik rules list`.            |
+| `condition`   | Makes the file a [conditional rule](#conditional-rules).                          |
+| `scope`, `globs`, `on_match`, `repeat` | Only read on a conditional rule. See below.             |
 
 The frontmatter block itself is stripped before the file reaches the model.
+
+A value may be quoted or bare, and a list may be written on one line or as a
+block:
+
+```yaml
+condition: "Box::leak"
+globs: *.rs, *.toml
+scope:
+  - text
+  - thinking
+```
+
+A quoted value loses its quotes and its escapes, so `"\\.unwrap\\(\\)"` reaches
+the regex engine as `\.unwrap\(\)`. A single-quoted value keeps its backslashes,
+so `'runtime\.SetFinalizer'` needs no doubling.
+
+### Conditional rules
+
+A memory file with a `condition` is a **rule**. It leaves the system prompt and
+waits. When the model writes something one of its regular expressions matches,
+the rule is put in front of it, at that moment and only then. A rule you never
+break costs nothing.
+
+```markdown
+---
+description: Never use Box::leak, it intentionally leaks memory
+condition: "Box::leak"
+scope: "tool:Edit(*.rs), tool:Write(*.rs)"
+---
+
+Never use `Box::leak` to satisfy a lifetime. Use `Arc<T>` for shared data, or
+`LazyLock<T>` for lazy global state.
+```
+
+| Field       | Meaning                                                                            | Default |
+|-------------|------------------------------------------------------------------------------------|---------|
+| `condition` | One regular expression, or a list of them. Any match wakes the rule.                | required |
+| `scope`     | `text`, `thinking`, `tool`, `tool:Edit`, `tool:Edit(*.rs)`; comma-separated.        | `tool` |
+| `globs`     | A second file-path gate, applied on top of `scope`.                                 | none |
+| `on_match`  | `remind` runs the call and puts the rule on top of its result. `block` refuses the call and answers with the rule. | `remind` |
+| `repeat`    | `once`, `always`, or a number of turns to wait before speaking again.               | `once` |
+
+**What a rule reads.** Not the whole tool call, only the text it would
+introduce. An `Edit` that **removes** a `.unwrap()` does not trip the rule that
+forbids writing one, because only `new_string` is matched.
+
+| Tool           | Read                                | Path used for `scope` and `globs` |
+|----------------|-------------------------------------|-----------------------------------|
+| `Write`        | `content`                           | `file_path`                       |
+| `Edit`         | `new_string`                        | `file_path`                       |
+| `BatchEdit`    | each edit's `new_string`            | each edit's `file_path`           |
+| `NotebookEdit` | `new_source`                        | `notebook_path`                   |
+| `ApplyPatch`   | the lines the patch adds            | the paths the patch writes        |
+| `Bash`         | `command`                           | none                              |
+| anything else  | every string argument, and only when a rule names that tool in its `scope` | none |
+
+A tool name is matched without regard to case, so a rule file written for
+another agent (`tool:edit`) still works. A pattern such as `*.rs` matches a
+nested path: writing `**/*.rs` is not required. Brace groups (`*.{ts,tsx}`) are
+expanded.
+
+**Repeat.** A rule speaks once per session by default, because a rule that
+repeats on every turn becomes noise and noise is ignored. `repeat: always` says
+it every time, and `repeat: 10` says it again after ten turns.
+
+**Switches.**
+
+| Key              | Type      | Default | Description                                       |
+|------------------|-----------|---------|---------------------------------------------------|
+| `rules_enabled`  | boolean   | true    | Whether conditional rules run at all.             |
+| `rules_disabled` | string[]  | []      | File stems of rules that must not run.            |
+
+Both come from your own settings alone. A project may **add** a rule, because a
+rule only restricts what the model writes; it cannot switch off or drop a rule
+you set for yourself. The settings screen carries a **Conditional rules** row.
+
+A condition that does not compile is reported in the log and skipped, and the
+session starts. A rule left with no usable condition is dropped.
 
 ### @include directives
 

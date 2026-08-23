@@ -46,8 +46,30 @@ pub struct MemoryFrontmatter {
     pub memory_type: Option<String>,
     #[serde(default)]
     pub priority: Option<u32>,
+    /// Where a conditional rule watches: `text`, `thinking`, `tool`,
+    /// `tool:Edit`, `tool:Edit(*.rs)`, comma-separated.
     #[serde(default)]
     pub scope: Option<String>,
+    /// One line saying what the rule is about.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Regular expressions that wake the rule.
+    ///
+    /// A file that carries one is a **conditional rule**: it leaves the prompt
+    /// and speaks only when one of these matches. A file without one keeps
+    /// today's behaviour and is always in the prompt.
+    #[serde(default)]
+    pub condition: Vec<String>,
+    /// File-path gate. A rule with globs only matches a call that names a file
+    /// one of them covers.
+    #[serde(default)]
+    pub globs: Vec<String>,
+    /// `remind` (default) or `block`.
+    #[serde(default)]
+    pub on_match: Option<String>,
+    /// `once` (default), `always`, or a number of turns.
+    #[serde(default)]
+    pub repeat: Option<String>,
 }
 
 /// Loaded memory file with metadata.
@@ -64,33 +86,137 @@ pub struct MemoryFileInfo {
 // YAML frontmatter parsing
 // ---------------------------------------------------------------------------
 
+/// Read one scalar YAML value.
+///
+/// A quoted value keeps neither its quotes nor its escapes. This matters for a
+/// rule's regular expression: `"\\.unwrap\\(\\)"` is the YAML spelling of
+/// `\.unwrap\(\)`, and handing the regex engine the doubled backslashes would
+/// compile a pattern that matches a literal backslash.
+///
+/// Only the two escapes YAML gives a double-quoted scalar are read, plus the
+/// one a single-quoted scalar has. Anything else is left alone, so an unknown
+/// escape reaches the regex engine as written.
+fn read_scalar(value: &str) -> String {
+    let trimmed = value.trim();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() < 2 {
+        return trimmed.to_string();
+    }
+    let first = bytes[0];
+    let last = bytes[bytes.len() - 1];
+    let inner = &trimmed[1..trimmed.len() - 1];
+
+    if first == b'\'' && last == b'\'' {
+        // A single-quoted scalar has exactly one escape: a doubled quote.
+        return inner.replace("''", "'");
+    }
+    if first != b'"' || last != b'"' {
+        return trimmed.to_string();
+    }
+
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => out.push('\\'),
+            Some('"') => out.push('"'),
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            // Not an escape this reader knows. Both characters are kept, so a
+            // regex escape such as `\d` survives.
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// Split an inline list such as `*.rs, *.toml` on commas.
+fn split_inline_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(read_scalar)
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
 /// Strip YAML frontmatter (--- ... ---) from content and parse it.
 /// Returns (frontmatter, body_without_frontmatter).
+///
+/// A minimal reader, not a YAML parser: `key: value` on one line, and the block
+/// list form where a key with no inline value is followed by `- item` lines.
+/// Those two shapes are what a memory file and a rule file use.
 pub fn parse_frontmatter(content: &str) -> (MemoryFrontmatter, &str) {
     if !content.starts_with("---") {
         return (MemoryFrontmatter::default(), content);
     }
     let after_first = &content[3..];
-    if let Some(end) = after_first.find("\n---") {
-        let yaml = after_first[..end].trim();
-        let body = &after_first[end + 4..];
-        // Minimal YAML key-value parse (no external dependency).
-        let mut fm = MemoryFrontmatter::default();
-        for line in yaml.lines() {
-            let line = line.trim();
-            if let Some((key, val)) = line.split_once(':') {
-                let val = val.trim().to_string();
-                match key.trim() {
-                    "memory_type" => fm.memory_type = Some(val),
-                    "priority" => fm.priority = val.parse().ok(),
-                    "scope" => fm.scope = Some(val),
-                    _ => {}
+    let Some(end) = after_first.find("\n---") else {
+        return (MemoryFrontmatter::default(), content);
+    };
+    let yaml = after_first[..end].trim();
+    let body = &after_first[end + 4..];
+
+    let mut fm = MemoryFrontmatter::default();
+    let lines: Vec<&str> = yaml.lines().collect();
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index].trim();
+        index += 1;
+        // A stray list item belongs to no key; a comment belongs to nobody.
+        if line.is_empty() || line.starts_with('#') || line.starts_with('-') {
+            continue;
+        }
+        let Some((key, inline)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+
+        let mut values: Vec<String> = Vec::new();
+        if inline.trim().is_empty() {
+            while index < lines.len() {
+                let Some(item) = lines[index].trim().strip_prefix('-') else {
+                    break;
+                };
+                index += 1;
+                let item = read_scalar(item);
+                if !item.is_empty() {
+                    values.push(item);
                 }
             }
+        } else {
+            values.push(read_scalar(inline));
         }
-        return (fm, body.trim_start_matches('\n'));
+
+        match key {
+            "memory_type" => fm.memory_type = values.into_iter().next(),
+            "priority" => fm.priority = values.first().and_then(|v| v.parse().ok()),
+            "scope" => fm.scope = values.into_iter().next(),
+            "description" => fm.description = values.into_iter().next(),
+            "on_match" => fm.on_match = values.into_iter().next(),
+            "repeat" => fm.repeat = values.into_iter().next(),
+            // Never split a condition on commas: a regular expression carries
+            // them, `fmt\.Sprintf\("%s:%d", host` for one.
+            "condition" => fm.condition = values,
+            // A glob list also accepts the inline comma-separated form.
+            "globs" => {
+                fm.globs = match values.as_slice() {
+                    [single] => split_inline_list(single),
+                    _ => values,
+                }
+            }
+            _ => {}
+        }
     }
-    (MemoryFrontmatter::default(), content)
+
+    (fm, body.trim_start_matches('\n'))
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +374,27 @@ fn load_scope_files(
     }
 }
 
+/// Load every `*.md` in a rules directory, in filename order.
+///
+/// Filename order rather than directory order, so two machines that read the
+/// same directory produce the same prompt.
+fn load_rules_dir(dir: &Path, scope: MemoryScope, files: &mut Vec<MemoryFileInfo>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "md"))
+        .collect();
+    paths.sort();
+    for path in paths {
+        if let Some(f) = load_memory_file(&path, scope) {
+            files.push(f);
+        }
+    }
+}
+
 /// Load all memory files for the given project root, in prompt order.
 ///
 /// At each scope `AGENTS.md` is loaded first (universal standard), followed by
@@ -268,26 +415,7 @@ pub fn load_all_memory_files(
     // 1. Managed: <mikmik home>/rules/*.md
     {
         let mikmik = crate::config::Settings::config_dir();
-        let rules_dir = mikmik.join("rules");
-        if let Ok(entries) = std::fs::read_dir(&rules_dir) {
-            let mut paths: Vec<PathBuf> = entries
-                .flatten()
-                .filter_map(|e| {
-                    let p = e.path();
-                    if p.extension().is_some_and(|x| x == "md") {
-                        Some(p)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            paths.sort();
-            for p in paths {
-                if let Some(f) = load_memory_file(&p, MemoryScope::Managed) {
-                    files.push(f);
-                }
-            }
-        }
+        load_rules_dir(&mikmik.join("rules"), MemoryScope::Managed, &mut files);
 
         // 2. User: <mikmik home>/AGENTS.md then <mikmik home>/CLAUDE.md
         load_scope_files(&mikmik, MemoryScope::User, filenames, &mut files);
@@ -296,13 +424,11 @@ pub fn load_all_memory_files(
     // 3. Project: {project_root}/AGENTS.md then {project_root}/CLAUDE.md
     load_scope_files(project_root, MemoryScope::Project, filenames, &mut files);
 
-    // 4. Local: {project_root}/.mikmik/AGENTS.md then {project_root}/.mikmik/CLAUDE.md
-    load_scope_files(
-        &project_root.join(".mikmik"),
-        MemoryScope::Local,
-        filenames,
-        &mut files,
-    );
+    // 4. Local: {project_root}/.mikmik/AGENTS.md, then CLAUDE.md, then the
+    //    project's own rules directory.
+    let local_dir = project_root.join(".mikmik");
+    load_scope_files(&local_dir, MemoryScope::Local, filenames, &mut files);
+    load_rules_dir(&local_dir.join("rules"), MemoryScope::Local, &mut files);
 
     // Stable, and keyed on the scope first: the push order above is already
     // the scope order, so this only reorders within a scope. A file with no
@@ -314,14 +440,26 @@ pub fn load_all_memory_files(
     files
 }
 
+/// Whether this file is a conditional rule rather than plain memory.
+///
+/// A conditional rule waits for its `condition` to match something the model
+/// writes. Putting it in the prompt as well would pay for it on every turn,
+/// which is the cost the condition exists to avoid.
+pub fn is_conditional_rule(file: &MemoryFileInfo) -> bool {
+    !file.frontmatter.condition.is_empty()
+}
+
 /// Concatenate all memory file contents into a single system-prompt fragment.
 ///
 /// Each file is headed with its scope and path. The model is told where an
 /// instruction came from, which is what lets it say "your project's AGENTS.md
 /// says X" rather than asserting X with no provenance.
+///
+/// A conditional rule is left out. See [`is_conditional_rule`].
 pub fn build_memory_prompt(files: &[MemoryFileInfo]) -> String {
     files
         .iter()
+        .filter(|f| !is_conditional_rule(f))
         .filter(|f| !f.content.trim().is_empty())
         .map(|f| {
             format!(
@@ -611,6 +749,88 @@ mod tests {
             !prompt.contains("priority:"),
             "frontmatter leaked:\n{prompt}"
         );
+    }
+
+    #[test]
+    fn a_conditional_rule_stays_out_of_the_prompt() {
+        // The whole point of a condition: the rule costs nothing until the
+        // model writes something that matches it.
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        let project = tempfile::tempdir().unwrap();
+        write(
+            &home.path().join("rules/no-unwrap.md"),
+            "---\ncondition: \"\\\\.unwrap\\\\(\\\\)\"\n---\nDO-NOT-UNWRAP\n",
+        );
+        write(
+            &home.path().join("rules/always.md"),
+            "---\ndescription: plain memory\n---\nALWAYS-PRESENT\n",
+        );
+
+        let files = load_all_memory_files(project.path(), both());
+        let prompt = build_memory_prompt(&files);
+
+        assert!(prompt.contains("ALWAYS-PRESENT"));
+        assert!(
+            !prompt.contains("DO-NOT-UNWRAP"),
+            "a conditional rule reached the prompt:\n{prompt}"
+        );
+        assert_eq!(files.iter().filter(|f| is_conditional_rule(f)).count(), 1);
+    }
+
+    #[test]
+    fn a_projects_own_rules_directory_is_read() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _home = HomeGuard::new();
+        let project = tempfile::tempdir().unwrap();
+        write(
+            &project.path().join(".mikmik/rules/house-style.md"),
+            "---\ndescription: x\n---\nPROJECT-RULE-BODY\n",
+        );
+
+        let prompt = build_memory_prompt(&load_all_memory_files(project.path(), both()));
+        assert!(prompt.contains("PROJECT-RULE-BODY"), "{prompt}");
+    }
+
+    #[test]
+    fn a_quoted_value_loses_its_quotes_and_its_escapes() {
+        // `"\\.unwrap\\(\\)"` is the YAML spelling of `\.unwrap\(\)`. Handing
+        // the doubled backslashes to the regex engine compiles a pattern that
+        // matches a literal backslash and nothing a rule cares about.
+        let (fm, _) = parse_frontmatter("---\ncondition: \"\\\\.unwrap\\\\(\\\\)\"\n---\nbody\n");
+        assert_eq!(fm.condition, vec![r"\.unwrap\(\)".to_string()]);
+    }
+
+    #[test]
+    fn a_single_quoted_value_keeps_its_backslashes() {
+        let (fm, _) = parse_frontmatter("---\ncondition: 'runtime\\.SetFinalizer'\n---\nbody\n");
+        assert_eq!(fm.condition, vec![r"runtime\.SetFinalizer".to_string()]);
+    }
+
+    #[test]
+    fn a_block_list_gives_one_entry_per_line() {
+        let (fm, body) = parse_frontmatter(
+            "---\ncondition:\n  - \"once_cell::\"\n  - \"OnceLock::new\"\nscope: \"tool:Edit\"\n---\nbody\n",
+        );
+        assert_eq!(fm.condition.len(), 2, "{:?}", fm.condition);
+        assert_eq!(fm.condition[1], "OnceLock::new");
+        assert_eq!(fm.scope.as_deref(), Some("tool:Edit"));
+        assert_eq!(body.trim(), "body");
+    }
+
+    #[test]
+    fn a_condition_holding_a_comma_is_one_regex() {
+        // Splitting on commas would cut `fmt\.Sprintf\("%s:%d", host` in half
+        // and compile two patterns that match nothing.
+        let (fm, _) =
+            parse_frontmatter("---\ncondition: 'fmt\\.Sprintf\\(\"%s:%d\", host'\n---\nbody\n");
+        assert_eq!(fm.condition.len(), 1, "{:?}", fm.condition);
+    }
+
+    #[test]
+    fn globs_accept_the_inline_comma_form() {
+        let (fm, _) = parse_frontmatter("---\nglobs: *.rs, *.toml\n---\nbody\n");
+        assert_eq!(fm.globs, vec!["*.rs".to_string(), "*.toml".to_string()]);
     }
 
     #[test]

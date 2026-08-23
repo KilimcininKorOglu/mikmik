@@ -81,6 +81,7 @@ than dropping them silently.
   "hasCompletedOnboarding": false,
   "showMessageTimestamps": false,
   "advisorModel": "claude-opus-4-6",
+  "advisorMode": "tool",
   "companion": { ... },
   "remoteControl": { ... },
   "acpAgents": { ... }
@@ -174,12 +175,81 @@ silent.
 
 ### Advisor
 
-| Key            | Type   | Default | Description                                                                                                                                       |
-|----------------|--------|---------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `advisorModel` | string | unset   | Second model consulted for a review. A bare ID runs against the active provider; `provider/model` targets a specific one; `provider:account/model` also targets a specific stored login. Unset disables the advisor. |
+| Key                   | Type   | Default | Description                                                                                                                                       |
+|-----------------------|--------|---------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `advisorModel`        | string | unset   | Second model consulted for a review. A bare ID runs against the active provider; `provider/model` targets a specific one; `provider:account/model` also targets a specific stored login. Unset disables the advisor. |
+| `advisorMode`         | string | `tool`  | `tool`, `runtime`, `both` or `off`. See below.                                                                                                   |
+| `advisorSyncBacklog`  | number | 3       | How many reviews the watcher may be behind before the agent waits for it at the end of a turn. `0` never waits. The wait is capped at 30 seconds, and a watcher that is failing releases the agent at once. |
+| `advisorImmuneTurns`  | number | 3       | How many turns a delivered interruption silences the next `concern` for. A `blocker` is exempt.                                                   |
 
-Set it with [`/advisor <model>`](commands.md#advisor) rather than by hand. When
-unset, the `Advisor` tool is not offered to the model at all.
+Set them with [`/advisor`](commands.md#advisor) or from the settings screen
+rather than by hand. When `advisorModel` is unset, no advisor runs at all,
+whatever the mode says. A project's `settings.json` cannot change any of these
+four keys: each decides that a second model runs, or which one, and that is the
+user's call.
+
+#### The four modes
+
+| Mode      | Behaviour                                                                                                            |
+|-----------|----------------------------------------------------------------------------------------------------------------------|
+| `tool`    | The default. The main model consults the advisor through the [`Advisor`](tools.md#advisor) tool when it decides to.  |
+| `runtime` | A watcher reads every turn on its own and speaks unasked. The `Advisor` tool is not offered.                          |
+| `both`    | Both at once.                                                                                                        |
+| `off`     | Neither, even with `advisorModel` set.                                                                               |
+
+#### The watcher
+
+In `runtime` mode a second model reads each turn as it happens: what the agent
+wrote, what it called, and what came back. It has its own read-only tools
+(`Read`, `Grep`, `Glob`) to check a suspicion before raising it, and it answers
+with the [`Advise`](tools.md#advise) tool or with silence.
+
+A note carries one of three severities:
+
+| Severity  | While a turn is streaming | After the turn ended                    |
+|-----------|---------------------------|-----------------------------------------|
+| `nit`     | Waits for the next turn boundary | Waits for the next turn boundary  |
+| `concern` | Stops the turn            | Stays in the conversation for next time |
+| `blocker` | Stops the turn            | Wakes the finished turn                 |
+
+A repeated note never gets through twice, and content-free notes ("looks good",
+"continue") are dropped. The watcher reads tool output, which is untrusted, and
+what it writes goes into the agent's context, so every note is scanned for
+destructive shell directives and instruction-override patterns before it
+crosses that line.
+
+The watcher keeps its own JSONL transcript beside the session's, so its tokens
+never count against the session's context and its turns never appear in
+`/resume`. Its spend is a separate line in `/cost`, at its own model's rates.
+
+#### The roster
+
+Without a roster one unnamed watcher runs on `advisorModel`. To run several,
+each with its own brief, put a markdown file in `<config root>/advisors/` or
+`<project root>/.mikmik/advisors/`:
+
+```markdown
+---
+name: Architecture
+enabled: true
+model: anthropic/claude-sonnet-5
+tools: Read, Grep, Glob
+---
+
+Watch cross-module coupling and public-API growth.
+```
+
+A **project** entry gives only `name`, `enabled` and its body. Its `model` and
+`tools` are ignored and replaced with the default model and the read-only tool
+set: a repository cannot decide which endpoint costs you money, or what runs on
+your machine. A **user** entry sets both.
+
+#### ADVISOR.md
+
+Guidance for the watcher only, never for the main model: the traps in this
+project, the dangerous APIs, the boundaries worth watching. Read from
+`<config root>/ADVISOR.md`, `<project root>/ADVISOR.md` and
+`<project root>/.mikmik/ADVISOR.md`, in that order.
 
 ### Companion
 

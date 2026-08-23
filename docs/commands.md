@@ -351,9 +351,9 @@ Only `low`, `high` and `normal` also move the output token limit, to 4096,
 
 ### /advisor
 
-Set the second model that reviews a decision on request. The advisor is a critic: it is asked a specific question and answers with the problems it sees, rather than continuing the work.
+Set the second model that reviews the work, and how it reviews it. The advisor is a critic: it says what is wrong rather than continuing the work.
 
-There are two ways to reach it. The main model calls the [`Advisor`](tools.md#advisor) tool itself when it judges a decision hard to reverse or a call genuinely close. You can also run it yourself over the last reply with `review`.
+There are three ways to reach it. The main model calls the [`Advisor`](tools.md#advisor) tool itself when it judges a decision hard to reverse or a call genuinely close. In `runtime` mode a watcher reads every turn on its own and speaks unasked. You can also run it yourself over the last reply with `review`.
 
 ```
 /advisor                            show the current setting
@@ -361,9 +361,18 @@ There are two ways to reach it. The main model calls the [`Advisor`](tools.md#ad
 /advisor openai/gpt-4o              set a model on another provider
 /advisor anthropic:personal/sonnet  run the advisor on another account
 /advisor review                     have the advisor review the last reply
+/advisor mode runtime               let it read every turn on its own
+/advisor status                     show the mode, the roster and the spend
+/advisor dump                       show what the watching advisor read
 /advisor off                        disable the advisor
 /advisor unset                      disable the advisor
 ```
+
+#### Modes
+
+`mode` takes `tool` (the default: the model consults the advisor when it decides to), `runtime` (a watcher reads every turn and interrupts), `both`, or `off`. A new mode takes effect on the next session, because the roster and the tool list are assembled at startup. [Advisor configuration](configuration.md#advisor) covers what the watcher does with what it finds, how to run several at once, and how to tell them what to watch for.
+
+`status` reports the mode, the model and the account it resolves to, the roster entries with their files, any `ADVISOR.md` in force, and what the advisor's model has spent so far. `dump` reads back what a watcher saw and said in this session, from the watcher's own transcript.
 
 Any non-empty model ID is accepted. The advisor runs client-side, so it works on every configured provider, not only Anthropic. A bare ID runs against the session's active provider; `provider/model` targets a specific one.
 
@@ -385,7 +394,7 @@ A colon inside a model ID is not read as an account: `ollama/llama3:8b` still na
 
 The setting persists to `~/.config/mikmik/settings.json` under `advisorModel`. `/advisor review` uses a new model immediately; the `Advisor` tool is offered to the main model from the next session, because the tool list is assembled at startup.
 
-Advisor calls are capped at two per turn and their tokens are added to the session cost.
+Advisor calls are capped at two per turn. Their tokens are added to the session cost on their own model's line, at that model's rates.
 
 ---
 

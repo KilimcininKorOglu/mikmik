@@ -697,11 +697,28 @@ Ask a second, independent model to review a decision before acting on it. The mo
 
 The advisor has no access to the conversation, so the caller must include everything it needs to judge. Its reply comes back as an ordinary tool result and the transcript shows a single status line rather than repeating the question.
 
-The tool is only registered when `advisorModel` is configured (see [`/advisor`](commands.md#advisor)), so a session without an advisor pays neither the schema cost nor the system-prompt guideline. Calls are capped at two per turn; beyond that the tool returns an error telling the model to decide with what it has.
+The tool is only registered when `advisorModel` is configured (see [`/advisor`](commands.md#advisor)) and `advisorMode` is `tool` or `both`, so a session without an advisor pays neither the schema cost nor the system-prompt guideline, and a session running a watcher instead is not also asked to consult one. Calls are capped at two per turn; beyond that the tool returns an error telling the model to decide with what it has.
 
 Which credentials the call uses follows `advisorModel`. By default it is the same provider and account as the session. When the setting names an account (`anthropic:personal/sonnet`), the advisor authenticates as that stored login instead, leaving the session on its own.
 
-Advisor tokens are added to the session cost. `CostTracker` prices every token at the session model's rate, so the figure drifts when the advisor model is priced differently.
+Advisor tokens are added to the session cost, on their own model's line at that model's rates.
+
+---
+
+### Advise
+
+**Permission level:** None
+
+How a watching advisor puts a note in front of the agent it is watching. Registered only on a watcher's own tool list, in `advisorMode: runtime` or `both`, so no agent can ever advise itself.
+
+| Parameter  | Type   | Required | Description                                                             |
+|------------|--------|----------|-------------------------------------------------------------------------|
+| `note`     | string | yes      | One concrete piece of advice                                            |
+| `severity` | string | no       | `nit` (the default), `concern`, or `blocker`                            |
+
+The severity decides delivery: a `nit` waits for the next turn boundary, a `concern` stops the turn it arrives during, and a `blocker` stops the turn and wakes one that already ended. See [Advisor configuration](configuration.md#advisor) for the full table.
+
+The call always answers `Recorded.`, whatever happens downstream. A repeated note, a content-free one, or a second note in the same review is dropped silently; telling the model its note was dropped only teaches it to rephrase the same note until one gets through.
 
 ---
 

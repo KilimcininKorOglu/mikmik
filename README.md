@@ -129,6 +129,8 @@ mikmik -p "explain this codebase"
 
 MikMik stores everything it persists under one directory: `$MIKMIK_HOME` if set, otherwise `$XDG_CONFIG_HOME/mikmik` (`~/.config/mikmik`). Settings, sessions, credentials and memory all live there.
 
+A second model can review the work: consulted by the main model when it decides to, or reading every turn on its own and interrupting when it sees a problem. See [`/advisor`](docs/commands.md#advisor).
+
 ## Devcontainer setup
 
 After cloning this repository, open it in VS Code and use Reopen in Container to start the development environment.

@@ -175,7 +175,7 @@ Inside the interactive TUI, type `/` to see all available commands. Common ones:
 | `/export`           | Save session transcript                                                  |
 | `/think-back`       | View thinking traces from previous responses                             |
 | `/ultrareview`      | Exhaustive multi-dimensional code review                                 |
-| `/advisor <model>`  | Set a secondary advisor model                                            |
+| `/advisor <model>`  | Set a secondary advisor model, or let one watch every turn               |
 | `/sandbox-toggle`   | Toggle sandboxed shell execution                                         |
 | `/update`           | Check for and download updates                                           |
 | `/exit`             | Quit                                                                     |

@@ -4188,6 +4188,32 @@ pub mod config {
             assert_eq!(merged.config.memory_model.as_deref(), Some("cheap/model"));
         }
 
+        /// Both spellings the documentation offers have to work, because a
+        /// user pastes one of them. `Config` carries no `rename_all`, so most
+        /// of its keys are snake_case on the wire while the top-level twin is
+        /// camelCase, and a camelCase key in the wrong block is dropped with
+        /// no error at all.
+        #[test]
+        fn both_documented_spellings_turn_auto_memory_on() {
+            let top_level: Settings =
+                serde_json::from_str(r#"{"version":1,"autoMemoryEnabled":true}"#)
+                    .expect("the settings file must parse");
+            assert_eq!(
+                top_level.effective_config().auto_memory_enabled,
+                Some(true),
+                "the documented top-level spelling did nothing"
+            );
+
+            let nested: Settings =
+                serde_json::from_str(r#"{"version":1,"config":{"auto_memory_enabled":true}}"#)
+                    .expect("the settings file must parse");
+            assert_eq!(
+                nested.effective_config().auto_memory_enabled,
+                Some(true),
+                "the documented nested spelling did nothing"
+            );
+        }
+
         /// The nested `config` block wins over the top-level twin, the same way
         /// every other paired key resolves.
         #[test]

@@ -8674,6 +8674,23 @@ impl App {
                     _ => {}
                 }
             }
+            QueryEvent::Advisory {
+                advisor,
+                severity,
+                note,
+            } => {
+                // The note is already in the model's conversation as an
+                // injected message, but the conversation pane is built from
+                // events, so without this the user watches the agent change
+                // direction with no visible reason.
+                let who = advisor.as_deref().unwrap_or("advisor");
+                let style = if severity == "nit" {
+                    SystemMessageStyle::Info
+                } else {
+                    SystemMessageStyle::Warning
+                };
+                self.push_system_message(format!("{who} ({severity}): {note}"), style);
+            }
         }
 
         // Update token count from tracker.

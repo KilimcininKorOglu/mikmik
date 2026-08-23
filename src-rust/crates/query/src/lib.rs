@@ -12,6 +12,7 @@
 // thread many parameters by design; splitting would obscure the control flow.
 #![allow(clippy::too_many_arguments)]
 
+pub mod advisor_runtime;
 pub mod agent_tool;
 pub mod auto_dream;
 pub mod command_queue;
@@ -341,6 +342,19 @@ pub enum QueryEvent {
         /// Estimated size of the conversation now, in tokens.
         tokens_after: u64,
     },
+    /// A watching advisor said something about the work.
+    ///
+    /// The note is already in the conversation by the time this is sent; this
+    /// is so the front end can draw it as the advisor's own remark rather than
+    /// as another user message.
+    Advisory {
+        /// The roster entry that raised it, when the session runs more than the
+        /// single default watcher.
+        advisor: Option<String>,
+        /// `nit`, `concern` or `blocker`.
+        severity: String,
+        note: String,
+    },
     /// An error.
     Error(String),
     /// Token usage has crossed a warning threshold.
@@ -589,6 +603,16 @@ async fn run_query_loop_inner(
     // is a query-wide one: an interrupt does not count against `max_turns`, so
     // a per-turn budget would let a `repeat: always` rule loop forever.
     let mut prose_watch = runner::hooks::ProseWatch::new(tool_ctx);
+    // The watching advisor, when the mode runs one. It reviews each turn on its
+    // own model in a background task; the loop hands it deltas and drains its
+    // notes. `None` for every session that did not ask for one, which is every
+    // session by default.
+    let mut advisor = crate::advisor_runtime::AdvisorSession::start(
+        tool_ctx,
+        config,
+        cost_tracker.clone(),
+        cancel_token.clone(),
+    );
     // How many automatic retries remain when a stream stalls (no data for 45s).
     let mut retries_left: u32 = 2;
     // Max-steps graceful degradation (issue #230 / MI-3): set once the final
@@ -634,6 +658,25 @@ async fn run_query_loop_inner(
         tool_ctx
             .current_turn
             .store(turn as usize, std::sync::atomic::Ordering::Relaxed);
+
+        // Anything the watcher said while the last turn ran, or held back
+        // because a recent interruption had not cooled down. A note that waited
+        // for a boundary reaches the model here, before the request is built.
+        if let Some(session) = advisor.as_mut() {
+            let notes = session.take_pending();
+            if !notes.is_empty() {
+                for note in &notes {
+                    if let Some(ref tx) = event_tx {
+                        let _ = tx.send(QueryEvent::Advisory {
+                            advisor: note.advisor.clone(),
+                            severity: note.severity.as_str().to_string(),
+                            note: note.note.clone(),
+                        });
+                    }
+                }
+                messages.push(crate::advisor_runtime::AdvisorSession::message_for(&notes));
+            }
+        }
         // Max-steps graceful degradation (issue #230 / MI-3). Rather than
         // returning cold when the turn cap is hit, run ONE final turn with tools
         // disabled that asks the model to summarize progress and its stopping
@@ -711,6 +754,37 @@ async fn run_query_loop_inner(
                         message: $assistant_msg,
                         usage: $usage,
                     };
+                }
+
+                // Hand the watcher the finished turn, wait for it to catch up
+                // if the setting says to, and read what it said. A blocker
+                // wakes the turn: it means work was handed off that does not
+                // run, and deferring that to the next user message is the bug.
+                // A concern or a nit stays in the conversation and reaches the
+                // model when the user speaks again.
+                if let Some(session) = advisor.as_mut() {
+                    session.push_delta(messages, false);
+                    session.wait_for_catchup().await;
+                    let notes = session.take_pending();
+                    if !notes.is_empty() {
+                        let wake = notes.iter().any(|note| {
+                            note.severity == mikmik_core::advisor::AdvisorSeverity::Blocker
+                        });
+                        if let Some(ref tx) = event_tx {
+                            for note in &notes {
+                                let _ = tx.send(QueryEvent::Advisory {
+                                    advisor: note.advisor.clone(),
+                                    severity: note.severity.as_str().to_string(),
+                                    note: note.note.clone(),
+                                });
+                            }
+                        }
+                        messages.push(crate::advisor_runtime::AdvisorSession::message_for(&notes));
+                        if wake {
+                            turn -= 1;
+                            continue;
+                        }
+                    }
                 }
                 let decision = continuation_policy.decide(&crate::continuation::TurnEndContext {
                     session_id: &tool_ctx.session_id,
@@ -869,6 +943,12 @@ async fn run_query_loop_inner(
                     messages_after: context_pass.after,
                     tokens_after: context_pass.tokens_after,
                 });
+            }
+            // Compaction replaces the history the watcher was reading. Its
+            // cursor points into a transcript that no longer exists, so drop
+            // it and let the next delta start from the summary.
+            if let Some(session) = advisor.as_mut() {
+                session.reset(messages);
             }
         }
 
@@ -1248,6 +1328,10 @@ async fn run_query_loop_inner(
                     // a stall: the assistant message is built after this loop,
                     // so there is nothing to unwind.
                     let mut prose_interrupt = false;
+                    // Set when the watching advisor raised a concern or a
+                    // blocker while this turn was streaming. Same unwind as a
+                    // rule: the half-written turn goes and is written again.
+                    let mut advisor_interrupt: Vec<mikmik_core::advisor::AdvisorNote> = Vec::new();
                     prose_watch.start_turn();
 
                     loop {
@@ -1273,6 +1357,19 @@ async fn run_query_loop_inner(
                                         if let Some(ref tx) = event_tx {
                                             if let Some(ae) = map_to_anthropic_event(&evt) {
                                                 let _ = tx.send(QueryEvent::Stream(ae));
+                                            }
+                                        }
+
+                                        // Checked per event rather than in the
+                                        // select above: `poll_interrupt` never
+                                        // blocks, and a stream with no events is
+                                        // a turn with nothing to interrupt.
+                                        if let Some(session) = advisor.as_mut() {
+                                            if let crate::advisor_runtime::Interrupt::Stop(notes) =
+                                                session.poll_interrupt(turn)
+                                            {
+                                                advisor_interrupt = notes;
+                                                break;
                                             }
                                         }
 
@@ -1335,6 +1432,26 @@ async fn run_query_loop_inner(
                                 }
                             }
                         }
+                    }
+
+                    // The watcher raised something worth stopping for. Same
+                    // unwind as a rule, and the cooldown it just started is
+                    // what stops a watcher from holding the turn open.
+                    if !advisor_interrupt.is_empty() {
+                        if let Some(ref tx) = event_tx {
+                            for note in &advisor_interrupt {
+                                let _ = tx.send(QueryEvent::Advisory {
+                                    advisor: note.advisor.clone(),
+                                    severity: note.severity.as_str().to_string(),
+                                    note: note.note.clone(),
+                                });
+                            }
+                        }
+                        messages.push(crate::advisor_runtime::AdvisorSession::message_for(
+                            &advisor_interrupt,
+                        ));
+                        turn -= 1;
+                        continue;
                     }
 
                     // A rule spoke about what was being written. Drop the half
@@ -1585,6 +1702,12 @@ async fn run_query_loop_inner(
                             snapshot_patch: None,
                             timestamp: Some(chrono::Utc::now().to_rfc3339()),
                         });
+                        // Hand the watcher the round that just ran. The primary
+                        // is mid-turn here, so a note that comes back can still
+                        // stop the work before the next tool goes out.
+                        if let Some(session) = advisor.as_mut() {
+                            session.push_delta(messages, true);
+                        }
                         continue; // loop for next turn
                     }
 
@@ -1675,6 +1798,7 @@ async fn run_query_loop_inner(
         // message, and `finish()` is only called after this loop, so breaking
         // out early leaves nothing behind.
         let mut prose_interrupt = false;
+        let mut advisor_interrupt: Vec<mikmik_core::advisor::AdvisorNote> = Vec::new();
         prose_watch.start_turn();
 
         let stream_stalled = loop {
@@ -1692,6 +1816,17 @@ async fn run_query_loop_inner(
                     match event {
                         Some(evt) => {
                             accumulator.on_event(&evt);
+
+                            // Same per-event poll as the provider arm.
+                            if let Some(session) = advisor.as_mut() {
+                                if let crate::advisor_runtime::Interrupt::Stop(notes) =
+                                    session.poll_interrupt(turn)
+                                {
+                                    advisor_interrupt = notes;
+                                    break false;
+                                }
+                            }
+
                             match &evt {
                                 AnthropicStreamEvent::ContentBlockDelta { delta, .. } => {
                                     let written = match delta {
@@ -1725,6 +1860,23 @@ async fn run_query_loop_inner(
                 }
             }
         };
+
+        if !advisor_interrupt.is_empty() {
+            if let Some(ref tx) = event_tx {
+                for note in &advisor_interrupt {
+                    let _ = tx.send(QueryEvent::Advisory {
+                        advisor: note.advisor.clone(),
+                        severity: note.severity.as_str().to_string(),
+                        note: note.note.clone(),
+                    });
+                }
+            }
+            messages.push(crate::advisor_runtime::AdvisorSession::message_for(
+                &advisor_interrupt,
+            ));
+            turn -= 1;
+            continue;
+        }
 
         if prose_interrupt {
             if let Some(msg) = prose_watch.take_message().await {
@@ -2033,6 +2185,13 @@ async fn run_query_loop_inner(
                 // now rather than sending the (cancelled) results back to the model.
                 if batch_cancelled {
                     return QueryOutcome::Cancelled;
+                }
+
+                // Hand the watcher the round that just ran. The primary is
+                // mid-turn here, so a note that comes back can still stop the
+                // work before the next tool goes out.
+                if let Some(session) = advisor.as_mut() {
+                    session.push_delta(messages, true);
                 }
 
                 // Continue the loop to send results back to the model

@@ -5483,6 +5483,19 @@ async fn run_interactive(
                             }),
                         }
                     }
+                    QueryEvent::Advisory {
+                        advisor,
+                        severity,
+                        note,
+                    } => {
+                        // A remote client has no advisory frame, so it goes out
+                        // as status text. Without this the agent changes
+                        // direction on screen with nothing to explain it.
+                        let who = advisor.as_deref().unwrap_or("advisor");
+                        Some(BridgeOutbound::Status {
+                            message: format!("{who} ({severity}): {note}"),
+                        })
+                    }
                     _ => None,
                 };
                 if let Some(ob) = outbound {

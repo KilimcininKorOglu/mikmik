@@ -955,6 +955,174 @@ pub fn render_rule(rule: &Rule) -> String {
     )
 }
 
+// ---------------------------------------------------------------------------
+// Lifting a rule out of an AGENTS.md
+// ---------------------------------------------------------------------------
+
+/// One rule file that could be written from one line of an `AGENTS.md`.
+///
+/// A proposal, not a rule. The condition and the scope are guessed from the
+/// text, so nothing is written until the author has read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleProposal {
+    pub name: String,
+    /// The memory file the line came from.
+    pub source: PathBuf,
+    /// Where the file would be written.
+    pub target: PathBuf,
+    /// The line as written, without its bullet marker.
+    pub text: String,
+    /// One condition per code span on the line. A line that names two forbidden
+    /// calls must match on both, or the rule says more than it enforces.
+    pub conditions: Vec<String>,
+    pub scope: String,
+    pub action: RuleAction,
+}
+
+/// Commands whose name in a rule makes it a rule about what gets run.
+const SHELL_COMMANDS: &[&str] = &[
+    "git", "rm", "mv", "cp", "curl", "wget", "chmod", "chown", "kill", "sudo", "docker", "npm",
+    "npx", "yarn", "pnpm", "cargo", "make", "pip", "python", "node", "go", "kubectl", "ssh", "dd",
+    "eval", "find", "sed", "awk", "tar", "psql", "mysql",
+];
+
+/// The text between each pair of backticks on one line.
+fn code_spans(line: &str) -> Vec<String> {
+    let mut spans = Vec::new();
+    let mut rest = line;
+    while let Some(open) = rest.find('`') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('`') else { break };
+        let span = after[..close].trim();
+        if !span.is_empty() {
+            spans.push(span.to_string());
+        }
+        rest = &after[close + 1..];
+    }
+    spans
+}
+
+/// Turn a sentence into a file stem.
+fn slugify(text: &str, max_words: usize) -> String {
+    let mut words = Vec::new();
+    for word in text.split_whitespace() {
+        let cleaned: String = word
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if cleaned.is_empty() {
+            continue;
+        }
+        words.push(cleaned);
+        if words.len() == max_words {
+            break;
+        }
+    }
+    words.join("-")
+}
+
+/// Guess which tools a rule about `span` should watch.
+///
+/// Only the shell case is guessable with any confidence: a span that starts
+/// with a command name is about what gets run. Anything else could belong to
+/// any language, so the scope stays open and the author narrows it.
+fn guess_scope(span: &str) -> String {
+    let first = span.split_whitespace().next().unwrap_or_default();
+    let first = first.trim_start_matches('$').trim();
+    if SHELL_COMMANDS.contains(&first) {
+        return "tool:Bash".to_string();
+    }
+    "tool".to_string()
+}
+
+/// Read one memory file and propose a rule for each line worth one.
+///
+/// A line qualifies when it carries an inline code span: that span is the only
+/// part a regular expression can match on. A line of pure prose is left where
+/// it is, because a rule that matches nothing costs the same as no rule and
+/// reads as one that works.
+pub fn propose_rules(file: &MemoryFileInfo, project_root: &Path) -> Vec<RuleProposal> {
+    let target_dir = match file.scope {
+        crate::agentsmd::MemoryScope::Managed | crate::agentsmd::MemoryScope::User => {
+            crate::config::Settings::config_dir().join("rules")
+        }
+        crate::agentsmd::MemoryScope::Project | crate::agentsmd::MemoryScope::Local => {
+            project_root.join(".mikmik").join("rules")
+        }
+    };
+
+    let mut proposals: Vec<RuleProposal> = Vec::new();
+    for line in file.content.lines() {
+        let trimmed = line.trim();
+        let Some(text) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+        else {
+            continue;
+        };
+        let text = text.trim();
+
+        // A span of one or two characters matches far too much to be a
+        // condition. Every span that survives becomes one, because a line
+        // naming two forbidden calls has to match on both.
+        let spans: Vec<String> = code_spans(text)
+            .into_iter()
+            .filter(|s| s.chars().count() >= 3)
+            .collect();
+        let Some(longest) = spans.iter().max_by_key(|s| s.len()) else {
+            continue;
+        };
+
+        let name = slugify(text, 5);
+        if name.is_empty() || proposals.iter().any(|p| p.name == name) {
+            continue;
+        }
+
+        let scope = guess_scope(longest);
+        // Refusing a command is worth it only where the damage is done by the
+        // time a reminder could arrive, which is the shell.
+        let action = if scope == "tool:Bash"
+            && (text.to_ascii_lowercase().contains("never")
+                || text.to_ascii_lowercase().contains("forbidden"))
+        {
+            RuleAction::Block
+        } else {
+            RuleAction::Remind
+        };
+
+        proposals.push(RuleProposal {
+            target: target_dir.join(format!("{name}.md")),
+            name,
+            source: file.path.clone(),
+            text: text.to_string(),
+            conditions: spans.iter().map(|s| regex::escape(s)).collect(),
+            scope,
+            action,
+        });
+    }
+    proposals
+}
+
+/// The file a proposal would write.
+pub fn render_proposal(proposal: &RuleProposal) -> String {
+    let action = match proposal.action {
+        RuleAction::Block => "\non_match: block",
+        RuleAction::Remind => "",
+    };
+    // The reader turns `\\` back into `\`, so a backslash written singly is
+    // eaten and a `\d` in the source would become a digit class.
+    let conditions: String = proposal
+        .conditions
+        .iter()
+        .map(|c| format!("\n  - \"{}\"", c.replace('\\', "\\\\").replace('"', "\\\"")))
+        .collect();
+    format!(
+        "---\ndescription: {}\ncondition:{}\nscope: \"{}\"{}\n---\n\n{}\n",
+        proposal.text, conditions, proposal.scope, action, proposal.text
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1014,6 +1182,133 @@ mod tests {
     }
 
     // ---- Scope -----------------------------------------------------------
+
+    fn memory_file(scope: MemoryScope, path: &str, content: &str) -> MemoryFileInfo {
+        MemoryFileInfo {
+            path: PathBuf::from(path),
+            scope,
+            content: content.to_string(),
+            frontmatter: crate::agentsmd::MemoryFrontmatter::default(),
+            mtime: None,
+        }
+    }
+
+    #[test]
+    fn a_line_with_a_code_span_becomes_a_proposal_and_a_line_without_one_does_not() {
+        let file = memory_file(
+            MemoryScope::Project,
+            "/p/AGENTS.md",
+            "# Rules\n\n\
+             - Never use `.unwrap()` or `.expect()` outside tests\n\
+             - Write clearly and think before you act\n\
+             - Never run `git add -A`, stage files by name\n\
+             - Prefer `x` over y\n",
+        );
+        let proposals = propose_rules(&file, Path::new("/p"));
+
+        let names: Vec<&str> = proposals.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["never-use-unwrap-or-expect", "never-run-git-add-a"],
+            "prose with no code span, and a span of one character, are left alone"
+        );
+
+        let unwrap = &proposals[0];
+        assert_eq!(
+            unwrap.conditions,
+            vec![regex::escape(".unwrap()"), regex::escape(".expect()")],
+            "a line naming two calls has to match on both"
+        );
+        assert_eq!(unwrap.scope, "tool", "the language is not guessable");
+        assert_eq!(unwrap.action, RuleAction::Remind);
+        assert_eq!(
+            unwrap.target,
+            PathBuf::from("/p/.mikmik/rules").join("never-use-unwrap-or-expect.md")
+        );
+
+        let git = &proposals[1];
+        assert_eq!(
+            git.scope, "tool:Bash",
+            "a span starting with a command name"
+        );
+        assert_eq!(
+            git.action,
+            RuleAction::Block,
+            "a shell command is already done by the time a reminder arrives"
+        );
+    }
+
+    #[test]
+    fn a_proposal_renders_as_a_file_the_loader_reads_back() {
+        let file = memory_file(
+            MemoryScope::Project,
+            "/p/AGENTS.md",
+            "- Never use `.unwrap()` outside tests\n",
+        );
+        let proposals = propose_rules(&file, Path::new("/p"));
+        let rendered = render_proposal(&proposals[0]);
+
+        let (frontmatter, body) = crate::agentsmd::parse_frontmatter(&rendered);
+        assert_eq!(frontmatter.condition.len(), 1);
+        assert!(body.contains(".unwrap()"));
+
+        // The round trip is the point: what the command prints has to load.
+        let written = MemoryFileInfo {
+            path: PathBuf::from("/p/.mikmik/rules/never-use-unwrap-outside-tests.md"),
+            scope: MemoryScope::Local,
+            content: body.to_string(),
+            frontmatter,
+            mtime: None,
+        };
+        let rule = rule_from_file(&written).expect("the rendered file is a rule");
+        assert!(rule.conditions[0].is_match("let x = y.unwrap();"));
+        assert!(!rule.conditions[0].is_match("let x = y?;"));
+    }
+
+    /// A span may itself hold a backslash or a quote.
+    ///
+    /// The condition is written into a double-quoted YAML value, and the reader
+    /// turns `\\` back into `\`. A backslash that reaches the file singly is
+    /// therefore eaten, and `\\d` in the span becomes `\d`, which matches a
+    /// digit instead of the two characters the author wrote.
+    #[test]
+    fn a_span_holding_a_backslash_or_a_quote_survives_the_round_trip() {
+        for span in ["\\d escape", "say \"no\"", "a\\\\b"] {
+            let file = memory_file(
+                MemoryScope::Project,
+                "/p/AGENTS.md",
+                &format!("- Never write `{span}` here\n"),
+            );
+            let proposals = propose_rules(&file, Path::new("/p"));
+            let rendered = render_proposal(&proposals[0]);
+
+            let (frontmatter, _) = crate::agentsmd::parse_frontmatter(&rendered);
+            assert_eq!(
+                frontmatter.condition,
+                vec![regex::escape(span)],
+                "the condition read back differs from the one written for {span:?}"
+            );
+
+            let compiled = Regex::new(&frontmatter.condition[0]).expect("a usable regex");
+            assert!(compiled.is_match(span), "it no longer matches {span:?}");
+        }
+    }
+
+    #[test]
+    fn a_user_scope_line_proposes_a_user_scope_file() {
+        let file = memory_file(
+            MemoryScope::User,
+            "/home/u/AGENTS.md",
+            "- Never run `git add -A`\n",
+        );
+        let proposals = propose_rules(&file, Path::new("/p"));
+        assert!(
+            proposals[0]
+                .target
+                .starts_with(crate::config::Settings::config_dir()),
+            "a rule the user set globally must not land in one repository"
+        );
+    }
 
     #[test]
     fn the_default_scope_watches_tools_and_not_prose() {

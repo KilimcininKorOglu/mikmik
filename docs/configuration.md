@@ -1092,6 +1092,38 @@ text may also come from stdin. A rule that never fires and a rule that fires on
 everything look the same from the outside, and this is how to tell them apart
 before shipping the file.
 
+### Lifting a rule out of an AGENTS.md
+
+Rules you already wrote as bullets in an `AGENTS.md` sit in the prompt on every
+turn, whether or not they are about to be broken. `extract` proposes a rule file
+for each bullet that a pattern can match:
+
+```bash
+mikmik rules extract                    # print the proposals, write nothing
+mikmik rules extract --write            # write all of them
+mikmik rules extract --write <name>...  # write the named ones
+```
+
+A bullet qualifies when it carries an inline code span, because that span is the
+only part a regular expression can match on. Every span of three characters or
+more becomes a condition, so a bullet naming two forbidden calls matches on
+both. A bullet of pure prose is left where it is.
+
+**The condition and the scope are guesses.** The command reads no code and
+consults no model: it escapes the spans it found, and it names `tool:Bash` only
+when a span starts with a command it recognises. Everything else gets
+`scope: "tool"`, which watches every tool, and you narrow it. A bullet that
+says "never" about a shell command is proposed as `on_match: block`, because a
+command is already run by the time a reminder could arrive.
+
+Read the proposals, then write the ones you want. A file that already exists is
+skipped, never overwritten. A bullet from your own `AGENTS.md` proposes a file
+under your config root, and a bullet from a repository's proposes one under
+`.mikmik/rules/`, so a rule you set globally does not land in one project.
+
+The bullet stays in the memory file. Remove it there once the rule is written,
+or it costs context on every turn as well as speaking when it is broken.
+
 ### @include directives
 
 AGENTS.md files support `@include` to pull in content from other files:

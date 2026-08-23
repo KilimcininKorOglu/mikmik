@@ -1420,10 +1420,12 @@ async fn run_rules_command(args: &[String]) -> anyhow::Result<()> {
     const USAGE: &str = "Usage:\n  \
         mikmik rules list\n  \
         mikmik rules test <tool> <file> [text]\n  \
-        mikmik rules test text|thinking [prose]\n\n\
+        mikmik rules test text|thinking [prose]\n  \
+        mikmik rules extract [--write] [name...]\n\n\
         `test` reads the text from stdin when it is not given on the command line.\n\
         Example: mikmik rules test Edit src/a.rs 'let x = y.unwrap();'\n\
-        Example: mikmik rules test text 'I will just cast it to any'";
+        Example: mikmik rules test text 'I will just cast it to any'\n\
+        Example: mikmik rules extract --write never-use-unwrap-outside-tests";
 
     let settings = Settings::load().await.unwrap_or_default();
     let config = settings.effective_config();
@@ -1537,6 +1539,76 @@ async fn run_rules_command(args: &[String]) -> anyhow::Result<()> {
                 if let Some(description) = &rule.description {
                     println!("  {description}");
                 }
+            }
+        }
+        Some("extract") => {
+            let write = args.iter().any(|a| a == "--write");
+            let wanted: Vec<&str> = args[1..]
+                .iter()
+                .filter(|a| !a.starts_with('-'))
+                .map(|a| a.as_str())
+                .collect();
+
+            let filenames = mikmik_core::agentsmd::MemoryFilenames::from_config(&config);
+            let files = mikmik_core::agentsmd::load_all_memory_files(&project_root, filenames);
+            let proposals: Vec<_> = files
+                .iter()
+                // A rules directory already holds rules. Only the memory files
+                // a person writes as prose have anything to lift out.
+                .filter(|file| !mikmik_core::agentsmd::is_conditional_rule(file))
+                .flat_map(|file| mikmik_core::rules::propose_rules(file, &project_root))
+                .filter(|p| wanted.is_empty() || wanted.contains(&p.name.as_str()))
+                .collect();
+
+            if proposals.is_empty() {
+                println!("Nothing to lift out of the memory files here.");
+                println!(
+                    "A line becomes a rule when it carries an inline code span, \
+                     because that span is what a regular expression can match."
+                );
+                return Ok(());
+            }
+
+            if !write {
+                println!(
+                    "{} proposal(s). Each condition and scope is a guess from the \
+                     text: read them, then write the ones you want.\n",
+                    proposals.len()
+                );
+                for proposal in &proposals {
+                    println!("# {}", proposal.target.display());
+                    println!("# from {}\n", proposal.source.display());
+                    println!("{}", mikmik_core::rules::render_proposal(proposal));
+                }
+                println!(
+                    "Write them with: mikmik rules extract --write [name...]\n\
+                     Without a name, every proposal above is written."
+                );
+                return Ok(());
+            }
+
+            let mut written = 0usize;
+            for proposal in &proposals {
+                if proposal.target.exists() {
+                    println!("skipped {} (already there)", proposal.target.display());
+                    continue;
+                }
+                if let Some(parent) = proposal.target.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(
+                    &proposal.target,
+                    mikmik_core::rules::render_proposal(proposal),
+                )?;
+                println!("wrote {}", proposal.target.display());
+                written += 1;
+            }
+            if written > 0 {
+                println!(
+                    "\nThe line each rule came from is still in its memory file. \
+                     Remove it there if you want the rule to speak only when it \
+                     is broken."
+                );
             }
         }
         Some(other) => {

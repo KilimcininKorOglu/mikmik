@@ -71,6 +71,12 @@ pub enum TranscriptEntry {
     /// (identical linear behavior) — see [`active_branch_messages`].
     #[serde(rename = "leaf")]
     Leaf(LeafEntry),
+    /// Conditional rules that already spoke in this session.
+    ///
+    /// A rule speaks once by default. Without this, resuming a session would
+    /// say the same thing again about work that is already done.
+    #[serde(rename = "rule-fired")]
+    RuleFired(RuleFiredEntry),
     /// Any other entry type we do not need to inspect — round-tripped verbatim.
     #[serde(other, skip_serializing)]
     Unknown,
@@ -220,6 +226,46 @@ pub struct LeafEntry {
     /// message — mirroring pi's nullable leaf pointer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leaf_uuid: Option<String>,
+}
+
+/// The conditional rules that spoke during a session.
+///
+/// Appended, never rewritten. Every entry is read back on resume, so a rule
+/// named by any of them stays quiet.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleFiredEntry {
+    /// Rule names, the file stem of each.
+    pub rules: Vec<String>,
+}
+
+/// Record that these rules spoke.
+pub async fn append_rules_fired(path: &Path, rules: &[String]) -> crate::Result<()> {
+    if rules.is_empty() {
+        return Ok(());
+    }
+    let entry = TranscriptEntry::RuleFired(RuleFiredEntry {
+        rules: rules.to_vec(),
+    });
+    write_transcript_entry(path, &entry).await
+}
+
+/// Every rule that spoke in the transcript at `path`.
+///
+/// The whole file rather than the active branch: a rule said its piece to the
+/// model once, and rewinding the conversation does not unsay it.
+pub async fn rules_fired_in(path: &Path) -> crate::Result<Vec<String>> {
+    let mut names: Vec<String> = Vec::new();
+    for entry in load_transcript(path).await? {
+        if let TranscriptEntry::RuleFired(fired) = entry {
+            for name in fired.rules {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+    }
+    Ok(names)
 }
 
 // ---------------------------------------------------------------------------
@@ -1438,6 +1484,44 @@ mod tests {
             write_transcript_entry(&path, &entry).await.unwrap();
         }
         path
+    }
+
+    #[tokio::test]
+    async fn the_rules_that_spoke_are_read_back() {
+        // A rule speaks once. A resumed session that forgot which ones already
+        // did would repeat every one of them.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        append_rules_fired(&path, &["no-unwrap".to_string()])
+            .await
+            .unwrap();
+        append_rules_fired(&path, &["no-unwrap".to_string(), "git-add-all".to_string()])
+            .await
+            .unwrap();
+
+        let names = rules_fired_in(&path).await.unwrap();
+        assert_eq!(names, vec!["no-unwrap", "git-add-all"], "no repeats");
+    }
+
+    #[tokio::test]
+    async fn an_empty_list_writes_nothing() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        append_rules_fired(&path, &[]).await.unwrap();
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn a_rule_entry_does_not_disturb_the_conversation() {
+        // The entry rides in the same file as the turns; a reader that chokes
+        // on it would lose the transcript.
+        let dir = tempdir().unwrap();
+        let path = write_chain(dir.path(), true).await;
+        append_rules_fired(&path, &["no-unwrap".to_string()])
+            .await
+            .unwrap();
+        let entries = load_transcript(&path).await.unwrap();
+        assert!(!active_branch_messages(&entries).is_empty());
     }
 
     #[tokio::test]

@@ -1000,6 +1000,10 @@ expanded.
 repeats on every turn becomes noise and noise is ignored. `repeat: always` says
 it every time, and `repeat: 10` says it again after ten turns.
 
+Which rules spoke is written to the session's transcript, so resuming a session
+does not repeat them about work that is already done. Rewinding the
+conversation does not unsay them either: the rule reached the model once.
+
 **Switches.**
 
 | Key              | Type      | Default | Description                                       |

@@ -2002,7 +2002,7 @@ async fn run_query_loop_inner(
                         // its piece and the rule has nothing to add.
                         let mut reminder = None;
                         if blocked_result.is_none() {
-                            match check_rules(tool_ctx, &name, &input) {
+                            match check_rules(tool_ctx, &name, &input).await {
                                 RuleOutcome::Silent => {}
                                 RuleOutcome::Remind(text) => reminder = Some(text),
                                 RuleOutcome::Block(result) => blocked_result = Some(result),
@@ -3708,7 +3708,9 @@ mod conditional_rule_tests {
     use mikmik_tools::ToolContext;
 
     /// `MIKMIK_HOME` is process-global, so these run one at a time.
-    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    ///
+    /// Async-aware, because each test holds it across an await.
+    static HOME_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// Points the config root at a temporary directory, so a rule file the
     /// developer keeps in their real `rules/` directory cannot reach the test.
@@ -3794,9 +3796,9 @@ mod conditional_rule_tests {
         })
     }
 
-    #[test]
-    fn a_matching_rule_rides_on_the_result() {
-        let _lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    #[tokio::test]
+    async fn a_matching_rule_rides_on_the_result() {
+        let _lock = HOME_LOCK.lock().await;
         let _home = HomeGuard::new();
         let project = tempfile::tempdir().expect("tempdir");
         write_rule(
@@ -3808,7 +3810,7 @@ mod conditional_rule_tests {
 
         let ctx = context_in(project.path(), "rules-remind");
         mikmik_core::rules::forget_session(&ctx.session_id);
-        match check_rules(&ctx, "Edit", &writing_unwrap()) {
+        match check_rules(&ctx, "Edit", &writing_unwrap()).await {
             RuleOutcome::Remind(text) => {
                 assert!(text.contains("NO-UNWRAP-BODY"), "{text}");
                 assert!(text.contains("rule=\"no-unwrap\""), "{text}");
@@ -3818,16 +3820,16 @@ mod conditional_rule_tests {
 
         // `repeat` defaults to once, so the same rule stays quiet after that.
         assert!(matches!(
-            check_rules(&ctx, "Edit", &writing_unwrap()),
+            check_rules(&ctx, "Edit", &writing_unwrap()).await,
             RuleOutcome::Silent
         ));
         mikmik_core::rules::forget_session(&ctx.session_id);
         mikmik_core::rules::reload();
     }
 
-    #[test]
-    fn a_blocking_rule_answers_instead_of_the_tool() {
-        let _lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    #[tokio::test]
+    async fn a_blocking_rule_answers_instead_of_the_tool() {
+        let _lock = HOME_LOCK.lock().await;
         let _home = HomeGuard::new();
         let project = tempfile::tempdir().expect("tempdir");
         write_rule(
@@ -3839,7 +3841,7 @@ mod conditional_rule_tests {
 
         let ctx = context_in(project.path(), "rules-block");
         mikmik_core::rules::forget_session(&ctx.session_id);
-        match check_rules(&ctx, "Edit", &writing_unwrap()) {
+        match check_rules(&ctx, "Edit", &writing_unwrap()).await {
             RuleOutcome::Block(result) => {
                 assert!(result.is_error);
                 assert!(
@@ -3854,9 +3856,9 @@ mod conditional_rule_tests {
         mikmik_core::rules::reload();
     }
 
-    #[test]
-    fn the_switch_silences_every_rule() {
-        let _lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    #[tokio::test]
+    async fn the_switch_silences_every_rule() {
+        let _lock = HOME_LOCK.lock().await;
         let _home = HomeGuard::new();
         let project = tempfile::tempdir().expect("tempdir");
         write_rule(
@@ -3870,7 +3872,7 @@ mod conditional_rule_tests {
         ctx.config.rules_enabled = Some(false);
         mikmik_core::rules::forget_session(&ctx.session_id);
         assert!(matches!(
-            check_rules(&ctx, "Edit", &writing_unwrap()),
+            check_rules(&ctx, "Edit", &writing_unwrap()).await,
             RuleOutcome::Silent
         ));
         mikmik_core::rules::forget_session(&ctx.session_id);

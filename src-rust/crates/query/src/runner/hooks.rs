@@ -189,7 +189,7 @@ pub(crate) enum RuleOutcome {
 ///
 /// Runs where the arguments are complete JSON and the tool has not started, so
 /// a rule can refuse the call rather than comment on what it already did.
-pub(crate) fn check_rules(
+pub(crate) async fn check_rules(
     tool_ctx: &mikmik_tools::ToolContext,
     name: &str,
     input: &serde_json::Value,
@@ -215,15 +215,33 @@ pub(crate) fn check_rules(
     // also carry a note on the result it never produces.
     let mut reminders: Vec<String> = Vec::new();
     let mut blocks: Vec<String> = Vec::new();
+    let mut spoke: Vec<String> = Vec::new();
     for rule in matched {
         if !mikmik_core::rules::claim(&tool_ctx.session_id, rule, turn) {
             continue;
         }
         tracing::info!(tool = %name, rule = %rule.name, "conditional rule matched");
+        spoke.push(rule.name.clone());
         let rendered = mikmik_core::rules::render_rule(rule);
         match rule.action {
             mikmik_core::rules::RuleAction::Block => blocks.push(rendered),
             mikmik_core::rules::RuleAction::Remind => reminders.push(rendered),
+        }
+    }
+
+    // On disk, so a resumed session does not say the same thing again about
+    // work that is already done. A transcript that cannot be written is worth
+    // a log line and nothing more: the rule still reached the model.
+    if !spoke.is_empty() {
+        match mikmik_core::session_storage::transcript_path(&project_root, &tool_ctx.session_id) {
+            Ok(path) => {
+                if let Err(e) =
+                    mikmik_core::session_storage::append_rules_fired(&path, &spoke).await
+                {
+                    tracing::debug!("could not record which rules spoke: {e}");
+                }
+            }
+            Err(e) => tracing::debug!("could not record which rules spoke: {e}"),
         }
     }
 

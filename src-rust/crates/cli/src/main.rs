@@ -3218,10 +3218,21 @@ async fn run_interactive(
 
     // Appends each completed turn to the session's JSONL transcript, which
     // the welcome screen's recent activity, `/stats` and `/rewind` read.
+    let transcript_root = mikmik_core::session_storage::transcript_root_for(&tool_ctx.working_dir);
     let mut transcript = mikmik_core::session_storage::TranscriptRecorder::new(
-        mikmik_core::session_storage::transcript_root_for(&tool_ctx.working_dir),
+        transcript_root.clone(),
         session.id.clone(),
     );
+
+    // A conditional rule speaks once. A resumed session has to know which ones
+    // already did, or every one of them says its piece again about work that
+    // is already finished.
+    if let Ok(path) = mikmik_core::session_storage::transcript_path(&transcript_root, &session.id) {
+        match mikmik_core::session_storage::rules_fired_in(&path).await {
+            Ok(names) => mikmik_core::rules::mark_fired(&session.id, &names),
+            Err(e) => tracing::debug!("could not read which rules already spoke: {e}"),
+        }
+    }
 
     // Set up terminal
     let mut terminal = setup_terminal(live_config.mouse_capture_enabled())?;

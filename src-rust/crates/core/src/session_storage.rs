@@ -344,6 +344,39 @@ pub fn transcript_path(project_root: &Path, session_id: &str) -> crate::Result<P
     Ok(transcript_dir(project_root).join(format!("{}.jsonl", session_id)))
 }
 
+/// What separates a session id from the watcher whose transcript a file holds.
+///
+/// A watching advisor's transcript sits in the same directory as the session's
+/// own, so this is what keeps it out of the session list.
+pub const ADVISOR_TRANSCRIPT_MARKER: &str = "__advisor.";
+
+/// Returns the path to a watching advisor's own JSONL transcript.
+///
+/// Beside the session transcript, never inside it. The watcher runs a second
+/// model on a budget of its own, and folding its turns into the session file
+/// would put them in `/resume`, in the context count, and in every export.
+///
+/// # Errors
+/// Returns `crate::ClaudeError::Other` if either `session_id` or `advisor`
+/// contains path components, on the same grounds as [`transcript_path`].
+pub fn advisor_transcript_path(
+    project_root: &Path,
+    session_id: &str,
+    advisor: &str,
+) -> crate::Result<PathBuf> {
+    let illegal = |value: &str| {
+        value.contains('/') || value.contains('\\') || value.contains("..") || value.is_empty()
+    };
+    if illegal(session_id) || illegal(advisor) {
+        return Err(crate::ClaudeError::Other(
+            "session_id or advisor name contains illegal characters".into(),
+        ));
+    }
+    Ok(transcript_dir(project_root).join(format!(
+        "{session_id}{ADVISOR_TRANSCRIPT_MARKER}{advisor}.jsonl"
+    )))
+}
+
 /// Returns a session's plan directory: `<config dir>/plans/<id>/`.
 ///
 /// One directory per session holding one file per plan, because a session that
@@ -529,6 +562,13 @@ pub async fn list_sessions_in(
             Some(s) => s.to_string(),
             None => continue,
         };
+
+        // A watching advisor's transcript lives here too. It is not a session:
+        // listing it would offer a resume that replays a reviewer's notes
+        // instead of the conversation the user actually had.
+        if session_id.contains(ADVISOR_TRANSCRIPT_MARKER) {
+            continue;
+        }
 
         let meta = match tokio::fs::metadata(&path).await {
             Ok(m) => m,
@@ -1281,6 +1321,51 @@ mod tests {
         // Newest first.
         assert_eq!(sessions[0].session_id, "bbbb");
         assert_eq!(sessions[1].session_id, "aaaa");
+    }
+
+    /// A watching advisor writes its own transcript into the same directory.
+    /// It is a reviewer's notebook, not a conversation, so resuming it would
+    /// replace the user's session with a stream of critique.
+    #[tokio::test]
+    async fn an_advisor_transcript_is_not_offered_as_a_session() {
+        let tmp = tempdir().unwrap();
+        let project_root = tmp.path().join("myproject");
+        tokio::fs::create_dir_all(&project_root).await.unwrap();
+
+        let tdir = transcript_dir_in(tmp.path(), &project_root);
+        tokio::fs::create_dir_all(&tdir).await.unwrap();
+
+        let entry = make_user_entry(
+            make_msg(Role::User),
+            &uuid::Uuid::new_v4().to_string(),
+            None,
+            "aaaa",
+            "/proj",
+        );
+        write_transcript_entry(&tdir.join("aaaa.jsonl"), &entry)
+            .await
+            .unwrap();
+        write_transcript_entry(
+            &tdir.join(format!("aaaa{ADVISOR_TRANSCRIPT_MARKER}architecture.jsonl")),
+            &entry,
+        )
+        .await
+        .unwrap();
+
+        let sessions = list_sessions_in(tmp.path(), &project_root).await.unwrap();
+        let ids: Vec<_> = sessions.iter().map(|s| s.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["aaaa"], "the advisor file was listed too");
+    }
+
+    /// The advisor name reaches this from a roster file's frontmatter, so it is
+    /// project data and cannot be trusted to stay inside the directory.
+    #[test]
+    fn an_advisor_transcript_path_refuses_to_walk_out_of_its_directory() {
+        let root = std::path::Path::new("/tmp/project");
+        assert!(advisor_transcript_path(root, "aaaa", "architecture").is_ok());
+        assert!(advisor_transcript_path(root, "aaaa", "../../etc/passwd").is_err());
+        assert!(advisor_transcript_path(root, "../aaaa", "architecture").is_err());
+        assert!(advisor_transcript_path(root, "aaaa", "").is_err());
     }
 
     // -----------------------------------------------------------------------

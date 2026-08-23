@@ -491,6 +491,9 @@ impl Watcher {
         // turn loop reads one, so a prefixed id means the same thing here.
         let route = base_ctx.config.resolve_route(&self.model);
         self.reprime_if_full(&config, &route.account);
+        // Everything from here on is this review, and is what gets written to
+        // the watcher's own transcript once the turn succeeds.
+        let first_new = self.messages.len();
         self.messages.push(Message::user(delta.to_string()));
         self.guard.begin_update();
 
@@ -533,7 +536,68 @@ impl Watcher {
             _ => self.failures = 0,
         }
 
+        self.record(base_ctx, first_new).await;
         self.deliver(&mut raw_rx, note_tx);
+    }
+
+    /// Append this review to the watcher's own transcript.
+    ///
+    /// Its own file, because the watcher spends its own tokens on a model of
+    /// its own: written into the session transcript, its turns would come back
+    /// on `/resume`, count against the context, and appear in every export.
+    ///
+    /// Best-effort. A watcher that cannot write its notebook still reviews.
+    async fn record(&self, base_ctx: &mikmik_tools::ToolContext, from: usize) {
+        let project_root = mikmik_core::session_storage::transcript_root_for(&base_ctx.working_dir);
+        let path = match mikmik_core::session_storage::advisor_transcript_path(
+            &project_root,
+            &base_ctx.session_id,
+            &self.name,
+        ) {
+            Ok(path) => path,
+            Err(e) => {
+                tracing::debug!(advisor = %self.name, error = %e, "no advisor transcript path");
+                return;
+            }
+        };
+
+        let cwd = base_ctx.working_dir.display().to_string();
+        for message in &self.messages[from..] {
+            let entry = mikmik_core::session_storage::TranscriptMessage {
+                uuid: message.uuid.clone(),
+                parent_uuid: None,
+                timestamp: message
+                    .timestamp
+                    .clone()
+                    .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+                session_id: base_ctx.session_id.clone(),
+                cwd: cwd.clone(),
+                message: message.clone(),
+                // The watcher is a side conversation by definition, and the
+                // flag is what tells a reader these turns are not the session's.
+                is_sidechain: true,
+                user_type: "internal".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                git_branch: None,
+                agent_role: None,
+                managed_session_id: None,
+                extra: Default::default(),
+            };
+            let entry = match message.role {
+                mikmik_core::types::Role::Assistant => {
+                    mikmik_core::session_storage::TranscriptEntry::Assistant(entry)
+                }
+                mikmik_core::types::Role::User => {
+                    mikmik_core::session_storage::TranscriptEntry::User(entry)
+                }
+            };
+            if let Err(e) =
+                mikmik_core::session_storage::write_transcript_entry(&path, &entry).await
+            {
+                tracing::debug!(advisor = %self.name, error = %e, "advisor transcript not written");
+                return;
+            }
+        }
     }
 
     /// Pass the watcher's notes through the guard and the quarantine.

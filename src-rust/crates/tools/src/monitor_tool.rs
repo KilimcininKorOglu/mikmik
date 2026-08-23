@@ -287,6 +287,7 @@ mod tests {
             cancel_token: tokio_util::sync::CancellationToken::new(),
             current_call: None,
             editor: None,
+            inbox: Default::default(),
         }
     }
     /// Cancelling a task used to reach the recorded pid alone, which for a

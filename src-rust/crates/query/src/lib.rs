@@ -557,6 +557,64 @@ pub async fn run_query_loop(
     outcome
 }
 
+/// How much inbox text one turn may carry, across every message in it.
+const MAX_INBOX_RENDER_CHARS: usize = 16_000;
+
+/// Give a context an address unless it arrived with one.
+///
+/// A sub-agent is addressed by `AgentTool` before its loop starts; anything
+/// else is a top-level session, which answers to its bare session id under the
+/// reserved name `main`. Returning the guard hands the caller the lifetime:
+/// the address lasts exactly as long as the loop does.
+fn bind_address(ctx: &mut ToolContext) -> Option<mikmik_tools::InboxGuard> {
+    if !ctx.inbox.own.is_empty() {
+        return None;
+    }
+    ctx.inbox.own = ctx.session_id.clone();
+    ctx.inbox.name = Some(mikmik_tools::MAIN_NAME.to_string());
+    Some(mikmik_tools::register_main(&ctx.session_id))
+}
+
+/// Move anything another agent sent into this turn's conversation.
+fn deliver_inbox(address: &str, messages: &mut Vec<Message>) {
+    let inbox = mikmik_tools::drain_inbox(address);
+    if inbox.is_empty() {
+        return;
+    }
+    debug!(count = inbox.len(), "Delivering agent messages");
+    messages.push(Message::user(render_inbox(&inbox)));
+}
+
+/// Turn collected messages into the one user turn that delivers them.
+///
+/// Each is framed as a system notice naming its sender, because the text was
+/// written by another agent and must not read as something the user typed.
+fn render_inbox(messages: &[mikmik_tools::AgentMessage]) -> String {
+    let mut out = String::new();
+    let mut dropped = 0usize;
+
+    for message in messages {
+        let block = format!(
+            "[System]: Message from '{}':\n{}\n\n",
+            message.from, message.content
+        );
+        if out.len() + block.len() > MAX_INBOX_RENDER_CHARS {
+            dropped += 1;
+            continue;
+        }
+        out.push_str(&block);
+    }
+
+    if dropped > 0 {
+        out.push_str(&format!(
+            "[System]: {} further message(s) were dropped; this turn had no room for them.\n",
+            dropped
+        ));
+    }
+
+    out
+}
+
 async fn run_query_loop_inner(
     client: &mikmik_api::AnthropicClient,
     messages: &mut Vec<Message>,
@@ -575,6 +633,9 @@ async fn run_query_loop_inner(
     // making the loop authoritative here means a parent cancel reaches tools.
     let mut loop_ctx = tool_ctx.clone();
     loop_ctx.cancel_token = cancel_token.clone();
+    // Binding here rather than at each frontend means the TUI, ACP and
+    // headless paths all become addressable at once.
+    let _inbox_guard = bind_address(&mut loop_ctx);
     let tool_ctx = &loop_ctx;
 
     let mut turn = 0u32;
@@ -827,6 +888,11 @@ async fn run_query_loop_inner(
                 messages.push(Message::user(text));
             }
         }
+
+        // Collect anything another agent sent this one. This sits before the
+        // two dispatch arms split, so both the provider arm and the raw
+        // Anthropic arm deliver.
+        deliver_inbox(&tool_ctx.inbox.own, messages);
 
         // T1-4: Drain the priority command queue (if wired up) and prepend any
         // resulting messages to the conversation before the API call.
@@ -2239,6 +2305,169 @@ mod tests {
     use super::*;
     use mikmik_api::SystemPrompt;
 
+    /// Every field spelled out because `ToolContext` has no `Default`; the
+    /// address is what these tests are actually about.
+    fn addressed_context(session: &str, inbox: mikmik_tools::AgentAddress) -> ToolContext {
+        struct AllowAll;
+        impl mikmik_core::permissions::PermissionHandler for AllowAll {
+            fn check_permission(
+                &self,
+                _request: &mikmik_core::permissions::PermissionRequest,
+            ) -> mikmik_core::permissions::PermissionDecision {
+                mikmik_core::permissions::PermissionDecision::Allow
+            }
+            fn request_permission(
+                &self,
+                _request: &mikmik_core::permissions::PermissionRequest,
+            ) -> mikmik_core::permissions::PermissionDecision {
+                mikmik_core::permissions::PermissionDecision::Allow
+            }
+        }
+
+        ToolContext {
+            working_dir: std::path::PathBuf::from("/workspace"),
+            permission_mode: mikmik_core::config::PermissionMode::Default,
+            permission_handler: Arc::new(AllowAll),
+            cost_tracker: mikmik_core::cost::CostTracker::new(),
+            session_id: session.to_string(),
+            file_history: Arc::new(parking_lot::Mutex::new(
+                mikmik_core::file_history::FileHistory::new(),
+            )),
+            file_snapshots: Arc::new(parking_lot::Mutex::new(
+                mikmik_core::file_snapshot::FileSnapshotStore::new(),
+            )),
+            current_turn: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            non_interactive: true,
+            mcp_manager: None,
+            config: mikmik_core::config::Config::default(),
+            managed_agent_config: None,
+            completion_notifier: None,
+            pending_permissions: None,
+            permission_manager: None,
+            user_question_tx: None,
+            plan_approval_tx: None,
+            tool_output_tx: None,
+            plan_mode_tx: None,
+            advisor_note_tx: None,
+            advisor_name: None,
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+            current_call: None,
+            editor: None,
+            inbox,
+        }
+    }
+
+    fn text_of(message: &Message) -> String {
+        match &message.content {
+            mikmik_core::types::MessageContent::Text(text) => text.clone(),
+            other => panic!("expected a text message, got {other:?}"),
+        }
+    }
+
+    /// An address of its own is what lets a sub-agent and its parent, which
+    /// share a session id, drain two different inboxes.
+    #[test]
+    fn a_context_without_an_address_becomes_the_session() {
+        let mut ctx = addressed_context("sess-bind-address", Default::default());
+        let guard = bind_address(&mut ctx);
+
+        assert!(guard.is_some(), "the session was never registered");
+        assert_eq!(ctx.inbox.own, "sess-bind-address");
+        assert_eq!(ctx.inbox.name.as_deref(), Some(mikmik_tools::MAIN_NAME));
+    }
+
+    #[test]
+    fn a_context_that_already_has_an_address_keeps_it() {
+        let mut ctx = addressed_context(
+            "sess-keep-address",
+            mikmik_tools::AgentAddress {
+                own: "sess-keep-address:scout".to_string(),
+                parent: Some("sess-keep-address".to_string()),
+                name: Some("scout".to_string()),
+                parent_blocked: false,
+            },
+        );
+
+        let guard = bind_address(&mut ctx);
+
+        assert!(
+            guard.is_none(),
+            "a sub-agent was re-registered as the session"
+        );
+        assert_eq!(ctx.inbox.own, "sess-keep-address:scout");
+        assert_eq!(ctx.inbox.name.as_deref(), Some("scout"));
+    }
+
+    /// The text was written by another agent. Without the frame it reads as
+    /// something the user typed, which is how a sub-agent would put words in
+    /// the user's mouth.
+    #[tokio::test]
+    async fn a_delivered_message_names_its_sender() {
+        use mikmik_tools::Tool as _;
+
+        let session = "sess-deliver-framing";
+        let _main = mikmik_tools::register_main(session);
+        let (name, guard) = mikmik_tools::register_named(session, Some("scout"), "look");
+
+        let sender = addressed_context(
+            session,
+            mikmik_tools::AgentAddress {
+                own: session.to_string(),
+                parent: None,
+                name: Some(mikmik_tools::MAIN_NAME.to_string()),
+                parent_blocked: false,
+            },
+        );
+        let sent = mikmik_tools::SendMessageTool
+            .execute(
+                serde_json::json!({ "to": name, "message": "check the logs" }),
+                &sender,
+            )
+            .await;
+        assert!(!sent.is_error, "{}", sent.content);
+
+        let mut messages = Vec::new();
+        deliver_inbox(guard.key(), &mut messages);
+
+        assert_eq!(messages.len(), 1);
+        let text = text_of(&messages[0]);
+        assert!(text.contains("[System]"), "{text}");
+        assert!(text.contains(mikmik_tools::MAIN_NAME), "{text}");
+        assert!(text.contains("check the logs"), "{text}");
+    }
+
+    #[test]
+    fn an_empty_inbox_adds_nothing() {
+        let mut messages = Vec::new();
+        deliver_inbox("sess-empty-inbox", &mut messages);
+        assert!(messages.is_empty());
+    }
+
+    /// One agent must not be able to spend another's whole context window.
+    #[test]
+    fn the_rendered_inbox_stays_within_its_budget() {
+        let flood: Vec<mikmik_tools::AgentMessage> = (0..40)
+            .map(|i| mikmik_tools::AgentMessage {
+                from: "scout".to_string(),
+                to: "main".to_string(),
+                content: format!("{i}").repeat(1_000),
+                timestamp: 0,
+            })
+            .collect();
+
+        let rendered = render_inbox(&flood);
+
+        assert!(
+            rendered.len() <= MAX_INBOX_RENDER_CHARS + 200,
+            "rendered {} chars",
+            rendered.len()
+        );
+        assert!(
+            rendered.contains("were dropped"),
+            "the dropped messages were not reported: {rendered}"
+        );
+    }
+
     #[test]
     fn a_configured_effort_reaches_the_turn() {
         // Nothing else reads `config.effort`, so if this arm goes missing the
@@ -3034,6 +3263,7 @@ mod tests {
             cancel_token: tokio_util::sync::CancellationToken::new(),
             current_call: None,
             editor: None,
+            inbox: Default::default(),
         }
     }
 
@@ -3967,6 +4197,7 @@ mod conditional_rule_tests {
             cancel_token: tokio_util::sync::CancellationToken::new(),
             current_call: None,
             editor: None,
+            inbox: Default::default(),
         }
     }
 

@@ -103,7 +103,10 @@ pub use notebook_edit::NotebookEditTool;
 pub use powershell::PowerShellTool;
 pub use pty_bash::PtyBashTool;
 pub use repl_tool::ReplTool;
-pub use send_message::{drain_inbox, peek_inbox, SendMessageTool};
+pub use send_message::{
+    drain_inbox, peek_inbox, register_main, register_named, AgentAddress, AgentMessage, InboxGuard,
+    SendMessageTool, MAIN_NAME,
+};
 pub use skill_tool::SkillTool;
 pub use sleep::SleepTool;
 pub use synthetic_output::SyntheticOutputTool;
@@ -484,6 +487,10 @@ pub struct ToolContext {
     /// The client hosting this session's files and shell, when one does.
     /// `None` in a terminal, where the agent owns both.
     pub editor: Option<Arc<dyn editor_host::EditorHost>>,
+    /// Where `SendMessage` reaches this agent, and who it may reach.
+    /// Default-built contexts are unaddressable; `run_query_loop` fills this
+    /// in for a top-level session and `AgentTool` for a sub-agent.
+    pub inbox: send_message::AgentAddress,
 }
 
 impl ToolContext {
@@ -955,6 +962,7 @@ mod tests {
             cancel_token: tokio_util::sync::CancellationToken::new(),
             current_call: None,
             editor: None,
+            inbox: Default::default(),
         }
     }
 

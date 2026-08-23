@@ -62,10 +62,10 @@ Each tool declares one permission level:
 
 | Level         | Description                            | Examples                            |
 |---------------|----------------------------------------|-------------------------------------|
-| **None**      | No external effects; purely passive    | `Sleep`                             |
+| **None**      | No external effects; purely passive    | `Sleep`, `SendMessage`              |
 | **ReadOnly**  | Reads data; no writes or execution     | `Read`, `Glob`, `WebFetch`          |
 | **Write**     | Creates or modifies data               | `Write`, `Edit`, `Config`           |
-| **Execute**   | Runs code or spawns processes          | `Bash`, `TaskCreate`, `SendMessage` |
+| **Execute**   | Runs code or spawns processes          | `Bash`, `TaskCreate`                |
 | **Dangerous** | Broad system access; high blast radius | `computer`                          |
 | **Forbidden** | Never executed, in any mode            | A `Critical`-risk bash command      |
 
@@ -544,6 +544,7 @@ Run a sub-agent on a task of its own. The sub-agent gets a fresh context and rep
 | Parameter           | Type    | Required | Description                                                          |
 |---------------------|---------|----------|----------------------------------------------------------------------|
 | `description`       | string  | yes      | Three to five words naming the task                                  |
+| `name`              | string  | no       | The name `SendMessage` addresses this agent by. Derived from `description` when absent |
 | `prompt`            | string  | yes      | The complete task for the agent                                      |
 | `tools`             | array   | no       | Tool names the agent may use. Defaults to all of them                |
 | `system_prompt`     | string  | no       | Replaces the sub-agent's system prompt                               |
@@ -552,7 +553,7 @@ Run a sub-agent on a task of its own. The sub-agent gets a fresh context and rep
 | `isolation`         | string  | no       | `worktree` runs the agent in its own git worktree                    |
 | `run_in_background` | boolean | no       | Return an `agent_id` at once instead of waiting                      |
 
-An agent never receives the `Agent` tool, so it cannot spawn further agents. `isolation: worktree` is what keeps parallel agents from writing over each other. A background agent is polled through `monitor` with `action=status` or `action=output` and `task_id` set to the returned `agent_id`.
+An agent never receives the `Agent` tool, so it cannot spawn further agents. `isolation: worktree` is what keeps parallel agents from writing over each other. A background agent is polled through `monitor` with `action=status` or `action=output` and `task_id` set to the returned `agent_id`, and reached with [`SendMessage`](#sendmessage) using the `agent_name` the call returns.
 
 ---
 
@@ -595,15 +596,43 @@ Use `Write` instead when the memory is a whole document rather than a sentence. 
 
 ### SendMessage
 
-**Permission level:** Execute
+**Permission level:** None
 
-Send a message to another agent (sub-agent or coordinator). Used for inter-agent communication in multi-agent workflows.
+Send a message to another agent in this process. The recipient reads it at the start of its next turn, framed as a system notice naming the sender, so text written by an agent never reads as something the user typed.
 
-| Parameter | Type   | Required | Description                                       |
-|-----------|--------|----------|---------------------------------------------------|
-| `to`      | string | yes      | Target agent name, or `main` for the main session |
-| `message` | string | yes      | Message content                                   |
-| `summary` | string | no       | A short preview line shown in the UI              |
+| Parameter | Type   | Required | Description                                                        |
+|-----------|--------|----------|--------------------------------------------------------------------|
+| `to`      | string | yes      | A sub-agent's name, `parent`, `main`, or `*` (see below)           |
+| `message` | string | yes      | Message content, kept to 4000 characters                           |
+| `summary` | string | no       | A short preview line shown in the UI                               |
+
+#### Addressing
+
+A sub-agent shares its parent's session id, so the session id alone names a pair of agents rather than one. An agent is addressed by a **name** instead:
+
+| `to`      | Reaches                                                              |
+|-----------|----------------------------------------------------------------------|
+| a name    | The sub-agent that claimed it, in this session only                  |
+| `parent`  | Whatever spawned this agent                                          |
+| `main`    | The top-level session                                                 |
+| `*`       | Every other agent in this session                                     |
+
+`Agent` takes a `name` parameter and reports back the name actually assigned; `TeamCreate` uses each member's `name`. A name already held by a running agent gets a numeric suffix. A name is released the moment its agent finishes, along with anything it never collected, so it can be claimed again.
+
+An unknown name is refused and the live names are listed. Nothing crosses a session boundary: another session's name, its key, and its session id all fail to resolve.
+
+#### What actually gets through
+
+Only agents running at the same time can reach each other, because a message is collected at a turn boundary:
+
+| Sender and recipient                     | Result                                                                 |
+|------------------------------------------|------------------------------------------------------------------------|
+| Background sub-agent and its parent       | Both directions, on the recipient's next turn                          |
+| `TeamCreate` members running in parallel  | Both directions                                                        |
+| Foreground sub-agent to its parent        | Delivered, but only after the sub-agent finishes: the parent is waiting inside the call that started it and takes no turn until then. The tool result says so, so the sub-agent does not spend its remaining turns waiting for a reply |
+| A parent to its foreground sub-agent      | Never sent: the parent cannot call a tool while it waits              |
+
+An inbox holds 32 undelivered messages. A send to a full inbox is refused rather than dropped. One turn carries at most 16000 characters of inbox text, and anything past that is reported as dropped rather than silently discarded.
 
 ---
 

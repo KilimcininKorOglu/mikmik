@@ -112,6 +112,9 @@ pub async fn handle(
         // Filled in per call by the tool dispatcher.
         current_call: None,
         editor,
+        // Filled in by `run_query_loop`, which is the only place that knows
+        // whether this context drives a session or a sub-agent.
+        inbox: Default::default(),
     };
 
     // Spawn the permission drainer for this turn.

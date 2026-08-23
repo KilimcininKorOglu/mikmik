@@ -625,6 +625,7 @@ mod tests {
             cancel_token: tokio_util::sync::CancellationToken::new(),
             current_call: None,
             editor: None,
+            inbox: Default::default(),
         }
     }
 

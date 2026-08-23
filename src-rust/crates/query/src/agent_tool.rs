@@ -105,9 +105,12 @@ fn build_model_registry() -> ModelRegistry {
 /// the main session's permission mode on a plan the user never asked for. So
 /// the plan approval channel does not come along, which leaves `ExitPlanMode`
 /// on its non-blocking path there.
-fn subagent_context(parent: &ToolContext) -> ToolContext {
+fn subagent_context(parent: &ToolContext, inbox: mikmik_tools::AgentAddress) -> ToolContext {
     let mut ctx = parent.clone();
     ctx.plan_approval_tx = None;
+    // A sub-agent shares its parent's session id, so it needs an address of
+    // its own or the two would drain the same inbox.
+    ctx.inbox = inbox;
     ctx
 }
 
@@ -191,6 +194,10 @@ fn plugin_agent_definitions(dirs: &[PathBuf]) -> String {
 struct AgentInput {
     /// Short description of the agent's task (used for logging).
     description: String,
+    /// Optional: the name other agents address this one by with `SendMessage`.
+    /// Derived from `description` when absent.
+    #[serde(default)]
+    name: Option<String>,
     /// The complete task prompt to send as the first user message.
     prompt: String,
     /// Optional: which tools to make available (defaults to all minus AgentTool).
@@ -240,6 +247,13 @@ impl Tool for AgentTool {
                 "description": {
                     "type": "string",
                     "description": "Short description of the agent's task (3-5 words)"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "The name this agent answers to when another agent sends it a \
+                                    message. Defaults to a name derived from the description. A \
+                                    name already taken in this session gets a numeric suffix, and \
+                                    the name actually assigned comes back in the result."
                 },
                 "prompt": {
                     "type": "string",
@@ -370,6 +384,23 @@ impl Tool for AgentTool {
         let use_isolation = resolved_isolation.as_deref() == Some("worktree");
         let agent_id = uuid::Uuid::new_v4().to_string();
 
+        // Claim an address before the loop starts, so a message sent to this
+        // agent on its first turn already has somewhere to land. The guard
+        // outlives the run and takes the inbox with it when it drops.
+        let (agent_name, inbox_guard) = mikmik_tools::register_named(
+            &ctx.session_id,
+            params.name.as_deref(),
+            &params.description,
+        );
+        let sub_address = mikmik_tools::AgentAddress {
+            own: inbox_guard.key().to_string(),
+            parent: Some(ctx.inbox.own.clone()),
+            name: Some(agent_name.clone()),
+            // A foreground sub-agent is awaited by its parent, which therefore
+            // takes no turn while this one runs.
+            parent_blocked: !params.run_in_background,
+        };
+
         let (working_dir_str, worktree_path, git_root): (String, Option<PathBuf>, Option<PathBuf>) =
             if use_isolation {
                 let git_root = find_git_root(&ctx.working_dir);
@@ -477,7 +508,7 @@ impl Tool for AgentTool {
                 .collect();
 
             let client_bg = client.clone();
-            let ctx_bg = subagent_context(ctx);
+            let ctx_bg = subagent_context(ctx, sub_address);
             let config_bg = query_config.clone();
             let cost_tracker_bg = ctx.cost_tracker.clone();
             let description_bg = params.description.clone();
@@ -485,6 +516,9 @@ impl Tool for AgentTool {
             let agent_id_bg = agent_id.clone();
 
             tokio::spawn(async move {
+                // Moved in so the address stays claimed for the whole run and
+                // is released the moment the task ends, however it ends.
+                let _inbox_guard = inbox_guard;
                 let mut messages = vec![Message::user(prompt_bg)];
                 let outcome = run_query_loop(
                     client_bg.as_ref(),
@@ -536,10 +570,12 @@ impl Tool for AgentTool {
             return ToolResult::success(
                 serde_json::json!({
                     "agent_id": agent_id,
+                    "agent_name": agent_name,
                     "status": "running",
                     "message": format!(
-                        "Agent '{}' started in background. Use monitor with action=status/output and task_id='{}'.",
-                        params.description, agent_id
+                        "Agent '{}' started in background. Use monitor with action=status/output \
+                         and task_id='{}'. Send it a message with SendMessage to='{}'.",
+                        params.description, agent_id, agent_name
                     )
                 })
                 .to_string(),
@@ -565,7 +601,9 @@ impl Tool for AgentTool {
         )
         .await;
 
-        let sub_ctx = subagent_context(ctx);
+        // Held until the run returns; dropping it releases the address.
+        let _inbox_guard = inbox_guard;
+        let sub_ctx = subagent_context(ctx, sub_address);
         let outcome = run_query_loop(
             client.as_ref(),
             &mut messages,
@@ -667,6 +705,7 @@ fn format_outcome(outcome: QueryOutcome) -> String {
 pub fn init_team_swarm_runner() {
     let runner: mikmik_tools::AgentRunFn = Arc::new(
         |description: String,
+         name: String,
          prompt: String,
          tools: Option<Vec<String>>,
          system: Option<String>,
@@ -674,6 +713,11 @@ pub fn init_team_swarm_runner() {
          ctx: Arc<mikmik_tools::ToolContext>| {
             // We must return a Pin<Box<dyn Future<...> + Send>>.
             Box::pin(async move {
+                // The team gave this agent a name, so claim it as an address
+                // before the loop starts. Teammates run at the same time, which
+                // is exactly the case messaging is for.
+                let (agent_name, inbox_guard) =
+                    mikmik_tools::register_named(&ctx.session_id, Some(&name), &description);
                 let anthropic_key = ctx.config.resolve_anthropic_api_key().unwrap_or_default();
                 let anthropic_base = ctx.config.resolve_anthropic_api_base();
                 let client =
@@ -717,6 +761,7 @@ pub fn init_team_swarm_runner() {
                 let model = resolve_subagent_model(
                     &AgentInput {
                         description: description.clone(),
+                        name: Some(agent_name.clone()),
                         prompt: prompt.clone(),
                         tools: tools.clone(),
                         system_prompt: system.clone(),
@@ -754,7 +799,18 @@ pub fn init_team_swarm_runner() {
                 // this team sub-agent as well (issue #218).
                 let cancel = ctx.cancel_token.child_token();
                 let mut messages = vec![mikmik_core::types::Message::user(prompt)];
-                let sub_ctx = subagent_context(&ctx);
+                let sub_ctx = subagent_context(
+                    &ctx,
+                    mikmik_tools::AgentAddress {
+                        own: inbox_guard.key().to_string(),
+                        parent: Some(ctx.inbox.own.clone()),
+                        name: Some(agent_name),
+                        // TeamCreate awaits every agent it started, so the
+                        // session that spawned this team cannot answer until
+                        // the whole team has finished.
+                        parent_blocked: true,
+                    },
+                );
                 let outcome = crate::run_query_loop(
                     client.as_ref(),
                     &mut messages,
@@ -846,6 +902,7 @@ pub(crate) mod tests {
             cancel_token: tokio_util::sync::CancellationToken::new(),
             current_call: None,
             editor: None,
+            inbox: Default::default(),
         }
     }
 
@@ -858,13 +915,47 @@ pub(crate) mod tests {
         let mut parent = parent_context();
         parent.plan_approval_tx = Some(tx);
 
-        let child = subagent_context(&parent);
+        let child = subagent_context(
+            &parent,
+            mikmik_tools::AgentAddress {
+                own: format!("{}:scout", parent.session_id),
+                parent: Some(parent.inbox.own.clone()),
+                name: Some("scout".to_string()),
+                parent_blocked: true,
+            },
+        );
 
         assert!(child.plan_approval_tx.is_none());
         // Everything else still comes along, including the session id, which is
         // what the plan file's own numbering has to survive.
         assert_eq!(child.session_id, parent.session_id);
         assert!(parent.plan_approval_tx.is_some(), "the parent kept its own");
+    }
+
+    /// The session id is shared, so the address is what tells parent and child
+    /// apart. Sharing that too would have them draining one inbox.
+    #[test]
+    fn a_sub_agent_gets_an_address_of_its_own() {
+        let mut parent = parent_context();
+        parent.inbox.own = parent.session_id.clone();
+        parent.inbox.name = Some(mikmik_tools::MAIN_NAME.to_string());
+
+        let child = subagent_context(
+            &parent,
+            mikmik_tools::AgentAddress {
+                own: format!("{}:scout", parent.session_id),
+                parent: Some(parent.inbox.own.clone()),
+                name: Some("scout".to_string()),
+                parent_blocked: false,
+            },
+        );
+
+        assert_ne!(child.inbox.own, parent.inbox.own);
+        assert_eq!(
+            child.inbox.parent.as_deref(),
+            Some(parent.inbox.own.as_str())
+        );
+        assert_eq!(child.inbox.name.as_deref(), Some("scout"));
     }
 
     fn config_on(account: &str) -> mikmik_core::Config {

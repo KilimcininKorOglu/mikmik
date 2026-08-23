@@ -47,6 +47,7 @@ use uuid::Uuid;
 pub type AgentRunFn = Arc<
     dyn Fn(
             String,              // description
+            String,              // name other agents address it by
             String,              // prompt
             Option<Vec<String>>, // tools allowlist
             Option<String>,      // system prompt
@@ -73,8 +74,10 @@ pub fn register_agent_runner(f: AgentRunFn) {
 ///
 /// Falls back to a stub result when no runner has been registered (e.g., in
 /// unit tests that don't initialise cc-query).
+#[allow(clippy::too_many_arguments)]
 async fn run_agent(
     description: String,
+    name: String,
     prompt: String,
     tools: Option<Vec<String>>,
     system: Option<String>,
@@ -82,7 +85,7 @@ async fn run_agent(
     ctx: Arc<ToolContext>,
 ) -> String {
     if let Some(runner) = AGENT_RUNNER.get() {
-        runner(description, prompt, tools, system, max_turns, ctx).await
+        runner(description, name, prompt, tools, system, max_turns, ctx).await
     } else {
         "[No agent runner registered — cc-query not initialised]".to_string()
     }
@@ -411,6 +414,7 @@ impl Tool for TeamCreateTool {
                     let result = tokio::select! {
                         out = run_agent(
                             description,
+                            agent_name.clone(),
                             agent_task,
                             tools,
                             Some(system_prompt),

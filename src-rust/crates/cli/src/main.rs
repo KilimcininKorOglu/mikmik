@@ -1094,6 +1094,7 @@ async fn main() -> anyhow::Result<()> {
         // Filled in per call by the tool dispatcher.
         current_call: None,
         editor: None,
+        inbox: Default::default(),
     };
 
     // Hourly shadow-snapshot GC loop: only runs when snapshot is explicitly enabled.
@@ -8934,6 +8935,7 @@ mod bang_command_tests {
             cancel_token: tokio_util::sync::CancellationToken::new(),
             current_call: None,
             editor: None,
+            inbox: Default::default(),
         }
     }
 

@@ -54,7 +54,6 @@ pub mod monitor_tool;
 pub mod notebook_edit;
 pub mod powershell;
 pub mod pty_bash;
-pub mod remote_trigger;
 pub mod repl_tool;
 pub mod send_message;
 pub mod skill_tool;
@@ -103,7 +102,6 @@ pub use monitor_tool::MonitorTool;
 pub use notebook_edit::NotebookEditTool;
 pub use powershell::PowerShellTool;
 pub use pty_bash::PtyBashTool;
-pub use remote_trigger::RemoteTriggerTool;
 pub use repl_tool::ReplTool;
 pub use send_message::{drain_inbox, peek_inbox, SendMessageTool};
 pub use skill_tool::SkillTool;
@@ -880,7 +878,6 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(TeamDeleteTool),
         Box::new(SyntheticOutputTool),
         Box::new(McpAuthTool),
-        Box::new(RemoteTriggerTool),
         Box::new(MonitorTool),
         Box::new(GoalCompleteTool),
         // Computer Use is only available when compiled with the feature flag.

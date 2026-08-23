@@ -676,20 +676,6 @@ The turn is bounded: cancelling the session, or ten minutes elapsing, kills the 
 
 ---
 
-### RemoteTrigger
-
-**Permission level:** Execute
-
-Send an event to another session, so work finishing here can wake something waiting there.
-
-| Parameter    | Type   | Required | Description                                              |
-|--------------|--------|----------|----------------------------------------------------------|
-| `session_id` | string | yes      | The session to trigger                                   |
-| `event_name` | string | yes      | The event name, such as `task_complete` or `result_ready`|
-| `payload`    | object | no       | JSON delivered with the event                            |
-
----
-
 ### Skill
 
 **Permission level:** Execute

@@ -396,8 +396,10 @@ impl AdvisorSession {
 
 /// A single roster entry, with the state it carries between reviews.
 struct Watcher {
+    /// The slug, which is what the watcher's session id is built from.
     name: String,
-    /// `None` for the single default watcher, so its notes carry no name.
+    /// The name a note is signed with. `None` for the single default watcher,
+    /// so its notes carry no name.
     label: Option<String>,
     model: String,
     tools: Vec<String>,
@@ -423,7 +425,12 @@ impl Watcher {
         }
 
         Self {
-            name: definition.name.clone(),
+            // SECURITY: the slug, not the name. A roster entry's name comes out
+            // of a file's frontmatter, and this goes into the watcher's
+            // session id, which is what file history and snapshot paths are
+            // built from. `slug` maps every character that is not
+            // ASCII-alphanumeric to `-`, so `../../etc` cannot survive it.
+            name: definition.slug(),
             // The built-in watcher is the only one, so naming it in every note
             // says nothing the reader does not know.
             label: (definition.path != std::path::Path::new("<built-in>"))
@@ -629,6 +636,38 @@ pub fn watcher_configured(config: &mikmik_core::Config) -> bool {
 mod tests {
     use super::*;
     use mikmik_core::types::{ContentBlock, MessageContent, Role};
+
+    /// The watcher's session id is built from its roster name, and a session id
+    /// is what transcript, file-history and snapshot paths are built from. A
+    /// roster file is project data, so its name has to be unable to reach out
+    /// of the directory those paths live in.
+    #[test]
+    fn a_roster_name_cannot_walk_out_of_the_session_directory() {
+        let definition = AdvisorDefinition {
+            name: "../../../etc/passwd".to_string(),
+            enabled: true,
+            model: None,
+            tools: Vec::new(),
+            instructions: String::new(),
+            path: std::path::PathBuf::from("/tmp/advisors/evil.md"),
+            scope: mikmik_core::advisor::AdvisorScope::Project,
+        };
+        let watcher = Watcher::new(&definition, "", "anthropic/claude-haiku-4-5");
+        let session_id = format!("session-advisor-{}", watcher.name);
+
+        assert!(
+            !session_id.contains('/') && !session_id.contains('\\') && !session_id.contains(".."),
+            "a session id must stay inside its own directory, got {session_id}"
+        );
+        assert!(
+            mikmik_core::session_storage::transcript_path(
+                std::path::Path::new("/tmp/project"),
+                &session_id
+            )
+            .is_ok(),
+            "and it must still be a usable session id"
+        );
+    }
 
     fn note(severity: AdvisorSeverity, text: &str) -> AdvisorNote {
         AdvisorNote {

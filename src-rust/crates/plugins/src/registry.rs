@@ -42,8 +42,9 @@ fn lsp_config_for(server: &crate::manifest::PluginLspServer) -> mikmik_core::lsp
         workspace_ready_timings: None,
         // A plugin declares language servers. A command-line linter is
         // configured in an `lsp.json` instead, where the report format can be
-        // named.
+        // named, and so is an address to connect to instead of a binary.
         lint_output: None,
+        tcp: None,
     }
 }
 

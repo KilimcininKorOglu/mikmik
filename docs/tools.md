@@ -1025,8 +1025,9 @@ indexing answers "nothing found" rather than "not ready".
 | Field                     | Type            | Required | Description                                                                                              |
 |---------------------------|-----------------|----------|----------------------------------------------------------------------------------------------------------|
 | `name`                    | string          | yes      | The server's identity. A later entry of the same name replaces the earlier one.                          |
-| `command`                 | string          | yes      | The binary to run, by name or by absolute path.                                                          |
-| `args`                    | string[]        | yes      | Arguments passed to the binary.                                                                          |
+| `command`                 | string          | yes*     | The binary to run, by name or by absolute path. Not needed when `tcp` is set.                            |
+| `args`                    | string[]        | no       | Arguments passed to the binary.                                                                          |
+| `tcp`                     | string          | no       | Connect to a server already listening on this address instead of starting one. `command` is then unused. |
 | `file_patterns`           | string[]        | yes      | `*.ext` selects an extension. A pattern without `*.` matches a whole file name, such as `Dockerfile`.    |
 | `root_markers`            | string[]        | no       | Files or directories that mark a project this server serves.                                             |
 | `disabled`                | boolean         | no       | Switch the server off without deleting the entry. Default `false`.                                       |
@@ -1050,6 +1051,22 @@ that serves one language needs no extension map.
 **Routing.** Every enabled server whose `file_patterns` match the file answers
 `diagnostics`. Navigation actions go to the first matching server that is not a
 linter.
+
+**A shared server.** An entry with `tcp` connects to a server that is already
+listening, such as a multiplexer (`ra-multiplex` listens on `127.0.0.1:27631`).
+That is one server process for every editor and session on the machine, which
+for a large project is the difference between one index in memory and one per
+session. Nothing is started, so `command` and `args` are unused, and nothing is
+stopped either: the connection is closed at the end of the session and the
+server is left running for whoever else is on it.
+
+```json
+{
+  "servers": {
+    "rust-analyzer": { "tcp": "127.0.0.1:27631" }
+  }
+}
+```
 
 **Command-line linters.** Some tools report problems but speak no LSP. An entry
 with `lint_output` is one of those. It is run over the file and its report is

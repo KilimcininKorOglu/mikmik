@@ -572,9 +572,9 @@ keeps its root markers, settings and everything else. `settings` and
 `initialization_options` are replaced as a whole rather than merged key by key,
 because a server reads each as one document.
 
-A name that matches no known server is a new server, and needs `command`,
-`file_patterns` and `root_markers`. An entry that lacks them is reported in the
-log and dropped. A file that cannot be parsed is skipped the same way: refusing
+A name that matches no known server is a new server, and needs `file_patterns`,
+`root_markers`, and either `command` or a `tcp` address. An entry that lacks
+them is reported in the log and dropped. A file that cannot be parsed is skipped the same way: refusing
 to start over a stray comma in an optional file would be worse than running
 without it.
 
@@ -611,7 +611,10 @@ every request pays the same startup timeout again and one missing binary makes
 the whole session slow.
 
 One server runs per working directory, not per name, because a server is
-initialized for one workspace root and answers against it.
+initialized for one workspace root and answers against it. An entry with a `tcp`
+address is different: nothing is started and nothing is stopped, because the
+server was already running and other sessions may be on it. See
+[tools.md#lsp](tools.md#lsp).
 
 An entry that carries `lint_output` is a command-line linter rather than a
 server. It has no lifetime: it is run over one file, its report is read, and it

@@ -88,9 +88,13 @@ impl Default for WorkspaceReadyTimings {
 pub struct LspServerConfig {
     /// Display name, e.g. "rust-analyzer"
     pub name: String,
-    /// Path or name of the server binary, e.g. "rust-analyzer"
+    /// Path or name of the server binary, e.g. "rust-analyzer".
+    ///
+    /// Empty only when `tcp` names a server that is already running.
+    #[serde(default)]
     pub command: String,
     /// Command-line arguments passed to the server binary
+    #[serde(default)]
     pub args: Vec<String>,
     /// Glob patterns that activate this server, e.g. `["*.rs", "*.toml"]`
     pub file_patterns: Vec<String>,
@@ -155,6 +159,15 @@ pub struct LspServerConfig {
     /// server hangs: it prints its report and waits for nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lint_output: Option<LintOutputFormat>,
+    /// Connect to a server already listening on this address, such as
+    /// `127.0.0.1:27631`, instead of starting one.
+    ///
+    /// A multiplexer is one server process for every editor and session on the
+    /// machine. For a large project that is the difference between one index
+    /// in memory and one per session. `command` and `args` are not used when
+    /// this is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tcp: Option<String>,
 }
 
 /// The report format a command-line linter prints.
@@ -600,6 +613,14 @@ pub fn apply_config_overrides(
                         .or_insert_with(|| serde_json::Value::String(name.clone()));
                 }
                 match serde_json::from_value::<LspServerConfig>(value) {
+                    Ok(server) if server.command.is_empty() && server.tcp.is_none() => {
+                        // `command` is optional in the shape, because a `tcp`
+                        // entry has nothing to start. An entry with neither
+                        // names no server at all.
+                        tracing::warn!(
+                            "ignoring '{name}': a new server needs a command or a tcp address"
+                        );
+                    }
                     Ok(server) => servers.push(server),
                     Err(e) => tracing::warn!(
                         "ignoring '{name}': a new server needs a command and file patterns ({e})"
@@ -910,6 +931,22 @@ impl LspClient {
     /// The directory decides both where the server runs and which copy of the
     /// binary is used, because a project's own bin directory comes first.
     pub async fn start_in(config: LspServerConfig, cwd: &Path) -> anyhow::Result<Self> {
+        // An address instead of a binary means the server is already running,
+        // shared by whoever else connects to it. A multiplexer such as
+        // ra-multiplex is one process for every editor and session on the
+        // machine, which for a large project is the difference between one
+        // index in memory and one per session.
+        if let Some(address) = &config.tcp {
+            let stream = tokio::net::TcpStream::connect(address).await.map_err(|e| {
+                anyhow::anyhow!(
+                    "language server '{}' is not listening on {address}: {e}",
+                    config.name
+                )
+            })?;
+            let (reader, writer) = tokio::io::split(stream);
+            return Ok(Self::connect(config, Box::new(reader), Box::new(writer)));
+        }
+
         let program = resolve_command(&config.command, cwd).ok_or_else(|| {
             anyhow::anyhow!(
                 "language server '{}' is not installed ({} not found)",
@@ -1809,6 +1846,14 @@ impl LspClient {
     /// Gracefully shut down the server.
     pub async fn shutdown(&mut self) -> anyhow::Result<()> {
         if !self.is_initialized {
+            return Ok(());
+        }
+        // A server reached over a socket is not ours to stop: it was already
+        // running and other sessions may still be using it. Closing the
+        // connection is the whole of our side.
+        if self.server_config.tcp.is_some() {
+            self.shared.writer.lock().await.take();
+            self.is_initialized = false;
             return Ok(());
         }
         // Attempt graceful shutdown; ignore errors since we kill anyway. Its
@@ -4488,6 +4533,7 @@ mod tests {
             capabilities: LspServerCapabilities::default(),
             workspace_ready_timings: None,
             lint_output: None,
+            tcp: None,
         }
     }
 
@@ -5737,6 +5783,70 @@ mod tests {
             elapsed < wait * 2,
             "three files took {elapsed:?}, which is more than one wait of {wait:?}"
         );
+    }
+
+    // ---- A server reached over a socket -----------------------------------
+
+    #[tokio::test]
+    async fn a_server_on_a_socket_is_connected_to_rather_than_started() {
+        // The point of a multiplexer: one index in memory for every session on
+        // the machine, instead of one each.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("addr").to_string();
+        let accepted = tokio::spawn(async move { listener.accept().await.map(|(s, _)| s) });
+
+        let mut config = make_config("shared");
+        // Deliberately not installed: an address means nothing is started.
+        config.command = "no-such-binary-anywhere".to_string();
+        config.tcp = Some(address);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let client = LspClient::start_in(config, dir.path())
+            .await
+            .expect("connect");
+        assert!(
+            accepted.await.expect("join").is_ok(),
+            "the client never connected"
+        );
+        drop(client);
+    }
+
+    #[tokio::test]
+    async fn an_address_nothing_listens_on_says_so() {
+        let mut config = make_config("shared");
+        config.tcp = Some("127.0.0.1:1".to_string());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let error = error_of(LspClient::start_in(config, dir.path()).await);
+        assert!(error.contains("is not listening on"), "{error}");
+    }
+
+    #[test]
+    fn a_new_server_with_neither_a_command_nor_an_address_is_dropped() {
+        let mut servers = Vec::new();
+        let overrides = HashMap::from([(
+            "nowhere".to_string(),
+            json!({ "file_patterns": ["*.rs"], "root_markers": [".git"] }),
+        )]);
+        apply_config_overrides(&mut servers, &overrides);
+        assert!(servers.is_empty());
+    }
+
+    #[test]
+    fn a_new_server_needs_no_command_when_it_names_an_address() {
+        let mut servers = Vec::new();
+        let overrides = HashMap::from([(
+            "shared".to_string(),
+            json!({
+                "tcp": "127.0.0.1:27631",
+                "file_patterns": ["*.rs"],
+                "root_markers": ["Cargo.toml"]
+            }),
+        )]);
+        apply_config_overrides(&mut servers, &overrides);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].tcp.as_deref(), Some("127.0.0.1:27631"));
     }
 
     // ---- Command-line linters --------------------------------------------

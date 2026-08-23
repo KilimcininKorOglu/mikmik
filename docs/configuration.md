@@ -629,6 +629,11 @@ for the answer, and a missing or slow server never turns a successful write into
 a failed one. A `BatchEdit` spends that wait once for the whole batch, not once
 per file.
 
+A server that is slow, or busy with another file, answers after that wait is
+over. Its answer is not thrown away: the next write reports it, under a heading
+that says the file was written earlier. Only an answer published after the file
+was last written counts, because an older one describes content that is gone.
+
 `lsp_format_on_write` is off by default because it rewrites the file: a server
 configured differently from the project's own formatter would reformat every
 file the session touches. The [`formatter`](#tool-behaviour) setting runs the

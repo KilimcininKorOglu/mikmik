@@ -25,8 +25,17 @@ const REPORT_LIMIT: usize = 10;
 /// The LSP `FileChangeType` for a file whose content changed.
 const FILE_CHANGED: u8 = 2;
 
-/// What each session has already reported, so a problem is announced once.
-type Ledgers = HashMap<String, lsp::DiagnosticsLedger>;
+/// What one session has reported, and when it wrote each file.
+#[derive(Default)]
+struct SessionState {
+    /// So a problem is announced once.
+    ledger: lsp::DiagnosticsLedger,
+    /// When each file was last written, so an answer that arrives after the
+    /// write's own budget can still be recognised as being about that write.
+    written: HashMap<String, std::time::Instant>,
+}
+
+type Ledgers = HashMap<String, SessionState>;
 
 static LEDGERS: Lazy<Arc<Mutex<Ledgers>>> = Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
@@ -111,6 +120,17 @@ pub async fn report_after_batch(file_paths: &[String], ctx: &ToolContext) -> Opt
     }
 
     if diagnose {
+        // What a server said about an earlier write, after that write had
+        // stopped waiting. A slow server has an answer nobody read yet, and
+        // reading it costs nothing: it is already in memory.
+        let late = late_report(ctx, &served).await;
+        if !late.is_empty() {
+            notes.push(format_problems(
+                &late,
+                "The language server has since reported {} problem(s) in a file written earlier:",
+            ));
+        }
+
         let diagnostics = {
             let mut manager = manager_arc.lock().await;
             manager
@@ -120,7 +140,7 @@ pub async fn report_after_batch(file_paths: &[String], ctx: &ToolContext) -> Opt
 
         let fresh = {
             let mut ledgers = LEDGERS.lock().await;
-            let ledger = ledgers.entry(ctx.session_id.clone()).or_default();
+            let state = ledgers.entry(ctx.session_id.clone()).or_default();
             let mut fresh = Vec::new();
             // The ledger remembers per file, so the batch is split back apart.
             // A server may answer with a different spelling of the path, so
@@ -133,26 +153,83 @@ pub async fn report_after_batch(file_paths: &[String], ctx: &ToolContext) -> Opt
                     .filter(|d| lsp::path_to_uri(&d.file) == uri)
                     .cloned()
                     .collect();
-                fresh.extend(ledger.only_new(file_path, mine));
+                fresh.extend(state.ledger.only_new(file_path, mine));
+                state
+                    .written
+                    .insert(file_path.clone(), std::time::Instant::now());
             }
             fresh
         };
 
         if !fresh.is_empty() {
-            let shown = fresh.len().min(REPORT_LIMIT);
-            let mut lines = vec![format!(
+            notes.push(format_problems(
+                &fresh,
                 "The language server reports {} new problem(s):",
-                fresh.len()
-            )];
-            lines.push(lsp::LspManager::format_diagnostics(&fresh[..shown]));
-            if fresh.len() > shown {
-                lines.push(format!("... and {} more", fresh.len() - shown));
-            }
-            notes.push(lines.join("\n"));
+            ));
         }
     }
 
     (!notes.is_empty()).then(|| notes.join("\n"))
+}
+
+/// One block of problems under a heading, capped.
+fn format_problems(problems: &[lsp::LspDiagnostic], heading: &str) -> String {
+    let shown = problems.len().min(REPORT_LIMIT);
+    let mut lines = vec![heading.replace("{}", &problems.len().to_string())];
+    lines.push(lsp::LspManager::format_diagnostics(&problems[..shown]));
+    if problems.len() > shown {
+        lines.push(format!("... and {} more", problems.len() - shown));
+    }
+    lines.join("\n")
+}
+
+/// Problems a server published for an earlier write, after that write had
+/// stopped waiting.
+///
+/// The files in this batch are excluded: they are about to be asked properly.
+/// A publish from before the file was written is left out, because it describes
+/// content that is gone.
+async fn late_report(ctx: &ToolContext, current: &[String]) -> Vec<lsp::LspDiagnostic> {
+    // The two locks are taken one after the other rather than one inside the
+    // other, so no order between them can ever be established.
+    let earlier: Vec<(String, std::time::Instant)> = {
+        let ledgers = LEDGERS.lock().await;
+        let Some(state) = ledgers.get(&ctx.session_id) else {
+            return Vec::new();
+        };
+        state
+            .written
+            .iter()
+            .filter(|(file, _)| !current.contains(file))
+            .map(|(file, at)| (file.clone(), *at))
+            .collect()
+    };
+    if earlier.is_empty() {
+        return Vec::new();
+    }
+
+    let published: Vec<(String, Vec<lsp::LspDiagnostic>)> = {
+        let manager = lsp::global_lsp_manager();
+        let manager = manager.lock().await;
+        earlier
+            .into_iter()
+            .map(|(file, written_at)| {
+                let found = manager.late_diagnostics(&file, written_at);
+                (file, found)
+            })
+            .filter(|(_, found)| !found.is_empty())
+            .collect()
+    };
+
+    let mut ledgers = LEDGERS.lock().await;
+    let Some(state) = ledgers.get_mut(&ctx.session_id) else {
+        return Vec::new();
+    };
+    let mut late = Vec::new();
+    for (file, found) in published {
+        late.extend(state.ledger.only_new(&file, found));
+    }
+    late
 }
 
 #[cfg(test)]

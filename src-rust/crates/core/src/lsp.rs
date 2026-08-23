@@ -818,6 +818,11 @@ struct ClientShared {
     /// Bumped every time the server publishes for a URI, so a caller can tell
     /// a fresh answer from the one it already had.
     diagnostic_versions: DashMap<String, u64>,
+    /// When the server last published for a URI.
+    ///
+    /// A cached answer is only worth reporting when it was published after the
+    /// file was last written; an older one describes content that is gone.
+    diagnostic_times: DashMap<String, std::time::Instant>,
     /// What the server said it supports, from the `initialize` response.
     server_capabilities: parking_lot::RwLock<serde_json::Value>,
     /// Work-done progress tokens the server has open.
@@ -1031,6 +1036,7 @@ impl LspClient {
             pending: DashMap::new(),
             diagnostics: DashMap::new(),
             diagnostic_versions: DashMap::new(),
+            diagnostic_times: DashMap::new(),
             server_capabilities: parking_lot::RwLock::new(serde_json::Value::Null),
             active_progress: DashMap::new(),
             last_progress: parking_lot::Mutex::new(None),
@@ -1095,6 +1101,14 @@ impl LspClient {
             .get(&normalize_uri(uri))
             .map(|v| *v)
             .unwrap_or(0)
+    }
+
+    /// When the server last published for `uri`, if it ever has.
+    pub fn last_published_at(&self, uri: &str) -> Option<std::time::Instant> {
+        self.shared
+            .diagnostic_times
+            .get(&normalize_uri(uri))
+            .map(|entry| *entry)
     }
 
     /// What the server said it supports.
@@ -2089,6 +2103,9 @@ fn handle_publish_diagnostics(params: &serde_json::Value, shared: &Arc<ClientSha
     // Bumped whether or not the list is empty. "The file is clean now" is an
     // answer, and a caller waiting for a fresh publish has to see it.
     *shared.diagnostic_versions.entry(uri.clone()).or_insert(0) += 1;
+    shared
+        .diagnostic_times
+        .insert(uri.clone(), std::time::Instant::now());
 
     let raw_diags = match params.get("diagnostics").and_then(|v| v.as_array()) {
         Some(d) => d,
@@ -4394,6 +4411,32 @@ impl LspManager {
         collected
     }
 
+    /// Cached diagnostics for `file_path` that arrived after `written_at`.
+    ///
+    /// A server that is slow, or busy with another file, publishes after the
+    /// budget a write can spend waiting. Its answer is still worth having, and
+    /// it costs nothing to read once it is there. A publish from before the
+    /// write describes content that is gone, so it is left out.
+    pub fn late_diagnostics(
+        &self,
+        file_path: &str,
+        written_at: std::time::Instant,
+    ) -> Vec<LspDiagnostic> {
+        let uri = path_to_uri(file_path);
+        let mut collected: Vec<LspDiagnostic> = self
+            .clients
+            .values()
+            .filter(|client| {
+                client
+                    .last_published_at(&uri)
+                    .is_some_and(|at| at > written_at)
+            })
+            .flat_map(|client| client.get_diagnostics(file_path))
+            .collect();
+        dedupe_and_sort(&mut collected);
+        collected
+    }
+
     /// Get cached diagnostics for `file_path` across all running servers.
     pub fn get_diagnostics_for_file(&self, file_path: &str) -> Vec<LspDiagnostic> {
         let mut collected: Vec<LspDiagnostic> = self
@@ -5783,6 +5826,70 @@ mod tests {
             elapsed < wait * 2,
             "three files took {elapsed:?}, which is more than one wait of {wait:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_arrives_late_is_still_read() {
+        // A slow server publishes after the write has stopped waiting. Its
+        // answer is already in memory by the next write, and reading it costs
+        // nothing.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("a.rs");
+        std::fs::write(&file, "fn main() {}\n").expect("write");
+        let path = file.to_string_lossy().into_owned();
+        let uri = path_to_uri(&path);
+
+        let (mut client, mut server) = connected(make_config("ls"));
+        let root_uri = path_to_uri(&dir.path().to_string_lossy());
+        let uri_for_server = uri.clone();
+        let script = tokio::spawn(async move {
+            server.accept_handshake(json!({})).await;
+            server
+        });
+        client.initialize(&root_uri).await.expect("initialize");
+        let mut server = script.await.expect("handshake");
+
+        let written_at = std::time::Instant::now();
+        // Anything published before the write describes content that is gone.
+        assert!(client.last_published_at(&uri).is_none());
+
+        server
+            .send(json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/publishDiagnostics",
+                "params": {
+                    "uri": uri_for_server,
+                    "diagnostics": [{
+                        "range": {
+                            "start": { "line": 0, "character": 3 },
+                            "end": { "line": 0, "character": 7 }
+                        },
+                        "severity": 1,
+                        "message": "late but real"
+                    }]
+                }
+            }))
+            .await;
+
+        // Wait for the pump task to take it.
+        for _ in 0..100 {
+            if client.last_published_at(&uri).is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let mut mgr = LspManager::new();
+        mgr.register_server(make_config("ls"));
+        mgr.adopt_client(dir.path(), client);
+
+        let late = mgr.late_diagnostics(&path, written_at);
+        assert_eq!(late.len(), 1, "{late:?}");
+        assert_eq!(late[0].message, "late but real");
+
+        // The same answer, judged against a later write, is stale.
+        let after = std::time::Instant::now();
+        assert!(mgr.late_diagnostics(&path, after).is_empty());
     }
 
     // ---- A server reached over a socket -----------------------------------

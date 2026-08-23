@@ -73,6 +73,19 @@ pub struct MemoryFrontmatter {
     /// `once` (default), `always`, or a number of turns.
     #[serde(default)]
     pub repeat: Option<String>,
+    /// Display name. Read by an advisor roster entry; a memory file has no use
+    /// for it and leaves it unset.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `false` pauses an advisor roster entry without deleting the file.
+    #[serde(default)]
+    pub enabled: Option<String>,
+    /// The model an advisor roster entry runs on.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The tools an advisor roster entry is granted, comma-separated.
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
 
 /// Loaded memory file with metadata.
@@ -205,6 +218,16 @@ pub fn parse_frontmatter(content: &str) -> (MemoryFrontmatter, &str) {
             "description" => fm.description = values.into_iter().next(),
             "on_match" => fm.on_match = values.into_iter().next(),
             "repeat" => fm.repeat = values.into_iter().next(),
+            "name" => fm.name = values.into_iter().next(),
+            "enabled" => fm.enabled = values.into_iter().next(),
+            "model" => fm.model = values.into_iter().next(),
+            // A tool list also accepts the inline comma-separated form.
+            "tools" => {
+                fm.tools = match values.as_slice() {
+                    [single] => split_inline_list(single),
+                    _ => values,
+                }
+            }
             // Never split a condition on commas: a regular expression carries
             // them, `fmt\.Sprintf\("%s:%d", host` for one.
             "condition" => fm.condition = values,

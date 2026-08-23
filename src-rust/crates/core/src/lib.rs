@@ -52,6 +52,7 @@ pub mod cloud_session;
 pub mod remote_session;
 
 // AGENTS.md hierarchical memory loading (T4-1).
+pub mod advisor;
 pub mod agentsmd;
 
 // Conditional rules: memory that waits for the model to break it.
@@ -1494,6 +1495,38 @@ pub mod config {
             skip_serializing_if = "Option::is_none"
         )]
         pub advisor_model: Option<String>,
+        /// Which advisor shapes run: `off`, `tool`, `runtime` or `both`.
+        ///
+        /// Unset reads as `tool`, the behaviour this tree had before the
+        /// watcher existed. See [`Config::effective_advisor_mode`].
+        #[serde(
+            default,
+            rename = "advisorMode",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub advisor_mode: Option<String>,
+        /// How far the watcher may fall behind before the primary waits for it.
+        ///
+        /// `0` never waits. Any other value is a backlog threshold; the primary
+        /// parks at the end of a turn until the backlog drops below it, for at
+        /// most [`crate::constants::ADVISOR_CATCHUP_TIMEOUT_MS`]. See
+        /// [`Config::effective_advisor_sync_backlog`].
+        #[serde(
+            default,
+            rename = "advisorSyncBacklog",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub advisor_sync_backlog: Option<u32>,
+        /// How many turns a delivered interruption silences the next one for.
+        ///
+        /// A watcher that interrupts every turn is a watcher nobody reads. See
+        /// [`Config::effective_advisor_immune_turns`].
+        #[serde(
+            default,
+            rename = "advisorImmuneTurns",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub advisor_immune_turns: Option<u32>,
         /// Live copy of [`Settings::companion`], merged in by
         /// [`Settings::effective_config`] so `/buddy on` takes effect without a
         /// restart.
@@ -1979,6 +2012,30 @@ pub mod config {
             skip_serializing_if = "Option::is_none"
         )]
         pub advisor_model: Option<String>,
+        /// Which advisor shapes run: `off`, `tool`, `runtime` or `both`.
+        /// Mirrors [`Config::advisor_mode`]; the nested block wins.
+        #[serde(
+            default,
+            rename = "advisorMode",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub advisor_mode: Option<String>,
+        /// Backlog threshold at which the primary waits for the watcher.
+        /// Mirrors [`Config::advisor_sync_backlog`].
+        #[serde(
+            default,
+            rename = "advisorSyncBacklog",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub advisor_sync_backlog: Option<u32>,
+        /// Turns one delivered interruption silences the next for.
+        /// Mirrors [`Config::advisor_immune_turns`].
+        #[serde(
+            default,
+            rename = "advisorImmuneTurns",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub advisor_immune_turns: Option<u32>,
         /// Active provider ID at the settings level (e.g. "anthropic", "openai").
         #[serde(default)]
         pub provider: Option<String>,
@@ -2452,6 +2509,28 @@ pub mod config {
         /// that breaks none of them never hears one.
         pub fn effective_rules_enabled(&self) -> bool {
             self.rules_enabled.unwrap_or(true)
+        }
+
+        /// Which advisor shapes run. Unset reads as `tool`, the behaviour this
+        /// tree had before the watcher existed.
+        pub fn effective_advisor_mode(&self) -> crate::advisor::AdvisorMode {
+            match self.advisor_mode.as_deref() {
+                Some(value) => crate::advisor::AdvisorMode::parse(value),
+                None => crate::advisor::AdvisorMode::default(),
+            }
+        }
+
+        /// How far the watcher may fall behind before the primary waits.
+        ///
+        /// Unset means 3: far enough that an ordinary turn never parks, close
+        /// enough that a watcher three turns behind is reviewing history.
+        pub fn effective_advisor_sync_backlog(&self) -> u32 {
+            self.advisor_sync_backlog.unwrap_or(3)
+        }
+
+        /// How many turns one delivered interruption silences the next for.
+        pub fn effective_advisor_immune_turns(&self) -> u32 {
+            self.advisor_immune_turns.unwrap_or(3)
         }
 
         /// Whether the project's servers start with the session. Unset means
@@ -3026,6 +3105,15 @@ pub mod config {
             if config.advisor_model.is_none() {
                 config.advisor_model = self.advisor_model.clone();
             }
+            if config.advisor_mode.is_none() {
+                config.advisor_mode = self.advisor_mode.clone();
+            }
+            if config.advisor_sync_backlog.is_none() {
+                config.advisor_sync_backlog = self.advisor_sync_backlog;
+            }
+            if config.advisor_immune_turns.is_none() {
+                config.advisor_immune_turns = self.advisor_immune_turns;
+            }
             // Same precedence again for the companion.
             if config.companion.is_none() {
                 config.companion = self.companion.clone();
@@ -3433,7 +3521,15 @@ pub mod config {
                 // endpoints decide where the conversation is sent.
                 provider: base.config.provider,
                 effort: over.config.effort.or(base.config.effort),
-                advisor_model: over.config.advisor_model.or(base.config.advisor_model),
+                // SECURITY: each of these four decides that a second model runs
+                // and how often. A repository naming the model spends the
+                // user's money at an endpoint the user did not choose, and one
+                // switching the mode to `runtime` starts a reviewer nobody
+                // asked for. The user's own settings decide, always.
+                advisor_model: base.config.advisor_model,
+                advisor_mode: base.config.advisor_mode,
+                advisor_sync_backlog: base.config.advisor_sync_backlog,
+                advisor_immune_turns: base.config.advisor_immune_turns,
                 companion: over.config.companion.or(base.config.companion),
                 provider_configs: base.config.provider_configs,
                 model_overrides: merge_map(
@@ -3641,7 +3737,13 @@ pub mod config {
                 notify_sound: base.notify_sound,
                 show_turn_duration: base.show_turn_duration,
                 show_message_timestamps: base.show_message_timestamps,
-                advisor_model: over.advisor_model.clone().or(base.advisor_model.clone()),
+                // SECURITY: the top-level twins of the `config` keys, and the
+                // same reasoning. A repository does not decide that a second
+                // model runs, which one, or how often.
+                advisor_model: base.advisor_model.clone(),
+                advisor_mode: base.advisor_mode.clone(),
+                advisor_sync_backlog: base.advisor_sync_backlog,
+                advisor_immune_turns: base.advisor_immune_turns,
                 companion: over.companion.clone().or(base.companion.clone()),
                 reduce_motion: base.reduce_motion,
                 terminal_progress_bar: base.terminal_progress_bar,
@@ -3934,6 +4036,57 @@ pub mod config {
                 Settings::merge_with(Settings::default(), project, ProjectRunnables::Allow);
             assert!(merged.config.effective_rules_enabled());
             assert!(merged.config.rules_disabled.is_empty());
+        }
+
+        #[test]
+        fn a_project_cannot_start_a_second_model_or_pick_which_one() {
+            // Every advisor key decides that a second model runs, at whose
+            // endpoint, and how often. A repository setting any of them spends
+            // the user's money on a reviewer the user did not ask for.
+            let project = Settings {
+                advisor_model: Some("expensive/model".to_string()),
+                advisor_mode: Some("runtime".to_string()),
+                advisor_sync_backlog: Some(1),
+                advisor_immune_turns: Some(0),
+                config: Config {
+                    advisor_model: Some("expensive/model".to_string()),
+                    advisor_mode: Some("runtime".to_string()),
+                    advisor_sync_backlog: Some(1),
+                    advisor_immune_turns: Some(0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let merged =
+                Settings::merge_with(Settings::default(), project, ProjectRunnables::Allow);
+
+            assert_eq!(merged.config.advisor_model, None);
+            assert_eq!(merged.advisor_model, None);
+            assert_eq!(
+                merged.config.effective_advisor_mode(),
+                crate::advisor::AdvisorMode::Tool
+            );
+            assert_eq!(merged.config.effective_advisor_sync_backlog(), 3);
+            assert_eq!(merged.config.effective_advisor_immune_turns(), 3);
+        }
+
+        #[test]
+        fn the_user_keeps_the_advisor_settings_they_wrote() {
+            let user = Settings {
+                config: Config {
+                    advisor_mode: Some("runtime".to_string()),
+                    advisor_sync_backlog: Some(1),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let merged = Settings::merge_with(user, Settings::default(), ProjectRunnables::Allow);
+
+            assert_eq!(
+                merged.config.effective_advisor_mode(),
+                crate::advisor::AdvisorMode::Runtime
+            );
+            assert_eq!(merged.config.effective_advisor_sync_backlog(), 1);
         }
 
         #[test]
@@ -4997,6 +5150,16 @@ pub mod constants {
     pub const CONTEXT_WARNING_FRACTION: f64 = 0.80;
     /// The fill fraction at which the report turns critical.
     pub const CONTEXT_CRITICAL_FRACTION: f64 = 0.95;
+    /// How long the primary may wait for the watcher to catch up.
+    ///
+    /// A ceiling rather than a promise: the primary continues when it expires,
+    /// because a session must not stall on a reviewer.
+    pub const ADVISOR_CATCHUP_TIMEOUT_MS: u64 = 30_000;
+    /// How many failed watcher turns in a row stop it until an explicit reset.
+    ///
+    /// Without a stop, a watcher whose model refuses the request re-attempts on
+    /// every delta forever and bills each attempt.
+    pub const ADVISOR_MAX_FAILURES: u32 = 3;
     pub const MAX_TURNS_DEFAULT: u32 = 10;
     /// The turn limit that means "no limit".
     ///

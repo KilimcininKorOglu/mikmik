@@ -1402,6 +1402,16 @@ pub mod config {
         /// [`Config::effective_lsp_auto_detect`].
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub lsp_auto_detect: Option<bool>,
+        /// Start the project's language servers when the session opens,
+        /// instead of when something first asks. Defaults to off.
+        ///
+        /// A server indexes the whole project before it can answer, which is
+        /// several seconds on a large one, and that wait lands on the first
+        /// request. Starting early moves it off the first request, but it also
+        /// starts a process for a session that may never touch code, so it is
+        /// asked for rather than assumed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub lsp_warmup_on_start: Option<bool>,
         /// Stop a language server after this many milliseconds without a
         /// request. Unset, zero and negative values keep every server until
         /// the session ends.
@@ -2408,6 +2418,13 @@ pub mod config {
             self.lsp_auto_detect.unwrap_or(true)
         }
 
+        /// Whether the project's servers start with the session. Unset means
+        /// no: a session that never touches code would pay for a process it
+        /// does not use.
+        pub fn effective_lsp_warmup_on_start(&self) -> bool {
+            self.lsp_warmup_on_start.unwrap_or(false)
+        }
+
         /// How long a language server may sit idle before it is stopped.
         ///
         /// `None` keeps it for the whole session, which is the default: the
@@ -3301,8 +3318,10 @@ pub mod config {
                 // decide that a process runs.
                 lsp_auto_detect: base.config.lsp_auto_detect,
                 // How long a process on the user's machine lives is theirs to
-                // decide, like the switch above.
+                // decide, like the switch above. So is whether one starts
+                // before anything asks for it.
                 lsp_idle_timeout_ms: base.config.lsp_idle_timeout_ms,
+                lsp_warmup_on_start: base.config.lsp_warmup_on_start,
                 // These two only change what a tool reports and whether a
                 // formatter runs, so a project may set them.
                 lsp_diagnostics_on_write: over
@@ -3854,6 +3873,36 @@ pub mod config {
             };
             let merged = Settings::merge_with(Settings::default(), project, ProjectRunnables::Deny);
             assert!(merged.config.acp_agents.is_empty());
+        }
+
+        #[test]
+        fn a_project_cannot_start_a_language_server_at_launch() {
+            // Warmup starts a process from the machine before anything asks
+            // for it, so the repository whose files choose which one must not
+            // also decide that it runs.
+            let project = Settings {
+                config: Config {
+                    lsp_warmup_on_start: Some(true),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let merged =
+                Settings::merge_with(Settings::default(), project, ProjectRunnables::Allow);
+            assert!(!merged.config.effective_lsp_warmup_on_start());
+        }
+
+        #[test]
+        fn the_user_may_start_language_servers_at_launch() {
+            let user = Settings {
+                config: Config {
+                    lsp_warmup_on_start: Some(true),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let merged = Settings::merge_with(user, Settings::default(), ProjectRunnables::Deny);
+            assert!(merged.config.effective_lsp_warmup_on_start());
         }
 
         #[test]

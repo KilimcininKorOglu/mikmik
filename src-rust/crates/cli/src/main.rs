@@ -3566,6 +3566,27 @@ async fn run_interactive(
         .map(|s| s.terminal_progress_bar)
         .unwrap_or(true);
     let mut progress_shown = false;
+
+    // Start the project's language servers before anything asks, when the user
+    // asked for that. A server indexes the whole project before it can answer,
+    // and that wait otherwise lands on the first request. It runs in the
+    // background: the session must not wait for it either.
+    let (lsp_warmup_tx, mut lsp_warmup_rx) = mpsc::channel::<Vec<String>>(1);
+    if app.config.effective_lsp_warmup_on_start() && app.config.effective_lsp_auto_detect() {
+        let cwd = tool_ctx.working_dir.clone();
+        let tx = lsp_warmup_tx.clone();
+        tokio::spawn(async move {
+            let started = mikmik_core::lsp::global_lsp_manager()
+                .lock()
+                .await
+                .warm_up(&cwd)
+                .await;
+            if !started.is_empty() {
+                let _ = tx.send(started).await;
+            }
+        });
+    }
+
     'main: loop {
         app.frame_count = app.frame_count.wrapping_add(1);
         app.tick_mikmik_pose();
@@ -3723,6 +3744,15 @@ async fn run_interactive(
         if want_progress != progress_shown {
             mikmik_tui::set_terminal_progress(want_progress);
             progress_shown = want_progress;
+        }
+
+        // The warmup says which servers came up, once.
+        while let Ok(started) = lsp_warmup_rx.try_recv() {
+            app.push_notification(
+                mikmik_tui::NotificationKind::Info,
+                format!("Language server ready: {}", started.join(", ")),
+                None,
+            );
         }
 
         // Poll for crossterm events (keyboard/mouse) with short timeout

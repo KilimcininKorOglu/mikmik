@@ -3351,8 +3351,8 @@ pub struct LspManager {
     last_used: HashMap<ClientKey, std::time::Instant>,
     /// When each client last failed to start.
     init_failures: HashMap<ClientKey, std::time::Instant>,
-    /// Directories already scanned for catalogue servers.
-    detected_roots: std::collections::HashSet<std::path::PathBuf>,
+    /// Directories already scanned for catalogue servers, and what was found.
+    detected_roots: HashMap<std::path::PathBuf, Vec<String>>,
     /// Directories whose `lsp.json` / `lsp.toml` have been read.
     configured_roots: std::collections::HashSet<std::path::PathBuf>,
     /// The idle timeout a configuration file asked for.
@@ -3369,7 +3369,7 @@ impl LspManager {
             clients: HashMap::new(),
             last_used: HashMap::new(),
             init_failures: HashMap::new(),
-            detected_roots: std::collections::HashSet::new(),
+            detected_roots: HashMap::new(),
             configured_roots: std::collections::HashSet::new(),
             file_idle_timeout: None,
             idle_timeout: None,
@@ -3697,18 +3697,38 @@ impl LspManager {
     ///
     /// Call this **before** [`Self::seed_from_config`]: a user entry of the
     /// same name has to replace the catalogue's, not the other way round.
-    pub fn seed_detected(&mut self, cwd: &Path) {
-        if !self.detected_roots.insert(cwd.to_path_buf()) {
-            return;
+    pub fn seed_detected(&mut self, cwd: &Path) -> Vec<String> {
+        if let Some(names) = self.detected_roots.get(cwd) {
+            return names.clone();
         }
+        let mut names = Vec::new();
         for server in detect_servers(cwd) {
             tracing::debug!(
                 "detected language server '{}' for {}",
                 server.name,
                 cwd.display()
             );
+            names.push(server.name.clone());
             self.register_server(server);
         }
+        self.detected_roots.insert(cwd.to_path_buf(), names.clone());
+        names
+    }
+
+    /// Start the servers this project needs, before anything asks for one.
+    ///
+    /// Only the detected ones: a server named in the settings but belonging to
+    /// another language has no reason to run here. Returns the names that came
+    /// up, so the caller can say so.
+    pub async fn warm_up(&mut self, cwd: &Path) -> Vec<String> {
+        let mut started = Vec::new();
+        for name in self.seed_detected(cwd) {
+            match self.ensure_client(&name, cwd).await {
+                Ok(_) => started.push(name),
+                Err(e) => tracing::debug!("{e}"),
+            }
+        }
+        started
     }
 
     /// Read `lsp.json` / `lsp.toml` for `cwd` and apply what they say.
@@ -5607,6 +5627,17 @@ mod tests {
     }
 
     // ---- Whole-project checks ---------------------------------------------
+
+    #[test]
+    fn detection_reports_what_it_registered_every_time_it_is_asked() {
+        // Warmup needs the names, and the scan runs once per directory, so a
+        // second caller has to get them from the memory of the first.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut mgr = LspManager::new();
+        let first = mgr.seed_detected(dir.path());
+        let second = mgr.seed_detected(dir.path());
+        assert_eq!(first, second);
+    }
 
     #[test]
     fn a_preview_shows_the_line_before_and_after() {

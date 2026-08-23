@@ -516,6 +516,7 @@ under `<project>/.mikmik/plugins/`) needs approval before it launches; see
 |------------------------|----------------------------|---------|--------------------------------------------------------------------------------|
 | `lsp_servers`          | array of `LspServerConfig` | []      | Language servers the LSP tool may use. Field list in [tools.md#lsp](tools.md#lsp). |
 | `lsp_auto_detect`      | boolean                    | true    | Consult the bundled catalogue of language servers.                             |
+| `lsp_warmup_on_start`  | boolean                    | false   | Start the project's servers with the session instead of on the first request.   |
 | `lsp_idle_timeout_ms`  | number                     | unset   | Stop a language server after this long without a request.                      |
 | `lsp_diagnostics_on_write` | boolean                | true    | Append the language server's new problems to the result of a write.            |
 | `lsp_format_on_write`  | boolean                    | false   | Format a file with its language server after writing it.                       |
@@ -584,6 +585,19 @@ settings file cannot switch it on, because detection starts a process and the
 markers that trigger it are files the repository itself carries.
 
 The settings screen has a **Detect language servers** row for the same key.
+
+**Starting early.** With `lsp_warmup_on_start` on, the servers detected for the
+working directory start with the session rather than on the first request. A
+server indexes the whole project before it can answer, and that wait otherwise
+lands on the first request. It is off by default because it starts a process for
+a session that may never touch code, and a large project's server holds a lot of
+memory. The warmup runs in the background, so the session never waits for it,
+and the servers that came up are named in a notification. Only detected servers
+are started: one named in `lsp_servers` for another language has no reason to
+run here. `lsp_auto_detect` has to be on as well, since that is what finds them.
+Like the two keys above, a project's settings file cannot switch it on.
+
+The settings screen has a **Start language servers early** row for the same key.
 
 **Server lifetime.** A server starts on the first request that needs it and
 runs until the session ends, when it is shut down and its process tree with it.

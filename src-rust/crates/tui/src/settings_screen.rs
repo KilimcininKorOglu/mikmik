@@ -89,6 +89,7 @@ pub struct SettingsScreen {
     pub agents_md: bool,
     pub claude_md: bool,
     pub lsp_auto_detect: bool,
+    pub lsp_warmup_on_start: bool,
     pub lsp_diagnostics_on_write: bool,
     pub lsp_format_on_write: bool,
     pub notifications: bool,
@@ -148,6 +149,7 @@ impl SettingsScreen {
             agents_md: true,
             claude_md: false,
             lsp_auto_detect: true,
+            lsp_warmup_on_start: false,
             lsp_diagnostics_on_write: true,
             lsp_format_on_write: false,
             notifications: true,
@@ -200,6 +202,10 @@ impl SettingsScreen {
         self.agents_md = filenames.agents_md;
         self.claude_md = filenames.claude_md;
         self.lsp_auto_detect = self.settings_snapshot.config.effective_lsp_auto_detect();
+        self.lsp_warmup_on_start = self
+            .settings_snapshot
+            .config
+            .effective_lsp_warmup_on_start();
         self.notifications = self.settings_snapshot.notifications;
         self.notify_on_question = self.settings_snapshot.notify_on_question;
         self.notify_on_plan_ready = self.settings_snapshot.notify_on_plan_ready;
@@ -560,6 +566,15 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
                     .into(),
             kind: SettingKind::Bool,
             value: if screen.lsp_auto_detect { "true" } else { "false" }.to_string(),
+        },
+        SettingsEntry {
+            key: "lsp_warmup_on_start".into(),
+            label: "Start language servers early".into(),
+            description: "Start the project's servers with the session, so the first request \
+                          does not wait for indexing."
+                .into(),
+            kind: SettingKind::Bool,
+            value: if screen.lsp_warmup_on_start { "true" } else { "false" }.to_string(),
         },
         SettingsEntry {
             key: "lsp_diagnostics_on_write".into(),
@@ -1342,6 +1357,10 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                         // Config-level only: the tool reads the nested key and
                         // there is no flat twin to keep in step.
                         screen.settings_snapshot.config.lsp_auto_detect = Some(new_value);
+                    }
+                    "lsp_warmup_on_start" => {
+                        screen.lsp_warmup_on_start = new_value;
+                        screen.settings_snapshot.config.lsp_warmup_on_start = Some(new_value);
                     }
                     "lsp_diagnostics_on_write" => {
                         screen.lsp_diagnostics_on_write = new_value;

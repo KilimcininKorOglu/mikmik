@@ -86,6 +86,166 @@ pub fn fire_post_sampling_hooks(
     result
 }
 
+/// What the caller must do after the `PostModelTurn` hooks ran.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PostModelTurn {
+    /// Nothing to do; the turn continues as normal.
+    Continue,
+    /// A hook exited above 1. Its messages are already in the conversation and
+    /// the loop must return.
+    Veto,
+}
+
+/// Run the `PostModelTurn` hooks for one turn and apply what they said.
+///
+/// Both dispatch arms call this. It used to live inline in the Anthropic arm
+/// alone, so a user's `PostModelTurn` hook never fired on any other account.
+pub(crate) fn apply_post_model_turn(
+    assistant_msg: &mikmik_core::types::Message,
+    tool_ctx: &mikmik_tools::ToolContext,
+    messages: &mut Vec<mikmik_core::types::Message>,
+    event_tx: Option<&tokio::sync::mpsc::UnboundedSender<crate::QueryEvent>>,
+) -> PostModelTurn {
+    let result = fire_post_sampling_hooks(assistant_msg, &tool_ctx.config);
+    if result.blocking_errors.is_empty() {
+        return PostModelTurn::Continue;
+    }
+    let veto = result.prevent_continuation;
+    for message in result.blocking_errors {
+        if !veto {
+            tracing::debug!("PostModelTurn hook injecting error message");
+        }
+        messages.push(message);
+    }
+    if veto {
+        if let Some(tx) = event_tx {
+            let _ = tx.send(crate::QueryEvent::Status(
+                "PostModelTurn hook vetoed continuation.".to_string(),
+            ));
+        }
+        return PostModelTurn::Veto;
+    }
+    PostModelTurn::Continue
+}
+
+/// Run the `Stop` hooks, blocking ones first and background ones after.
+///
+/// Every path that ends a turn calls this, on either dispatch arm.
+pub(crate) async fn fire_stop_hooks(
+    assistant_msg: &mikmik_core::types::Message,
+    tool_ctx: &mikmik_tools::ToolContext,
+) {
+    let stop_ctx = mikmik_core::hooks::HookContext {
+        event: "Stop".to_string(),
+        tool_name: None,
+        tool_input: None,
+        tool_output: Some(assistant_msg.get_all_text()),
+        is_error: None,
+        session_id: Some(tool_ctx.session_id.clone()),
+    };
+    mikmik_core::hooks::run_hooks(
+        &tool_ctx.config.hooks,
+        mikmik_core::config::HookEvent::Stop,
+        &stop_ctx,
+        &tool_ctx.working_dir,
+    )
+    .await;
+
+    // Spawns its own blocking tasks and returns an empty Vec at once.
+    let _background = stop_hooks_with_full_behavior(
+        assistant_msg,
+        &tool_ctx.config,
+        tool_ctx.working_dir.clone(),
+    );
+}
+
+/// Everything that runs once a turn has genuinely ended.
+///
+/// The `Stop` hooks, session-memory extraction, and the AutoDream
+/// consolidation check. Both dispatch arms call this; it used to live inline in
+/// the Anthropic arm alone, so on any other account no `Stop` hook fired and no
+/// memory was ever written.
+pub(crate) async fn fire_end_of_turn(
+    assistant_msg: &mikmik_core::types::Message,
+    tool_ctx: &mikmik_tools::ToolContext,
+    config: &crate::QueryConfig,
+    messages: &[mikmik_core::types::Message],
+    route: &mikmik_core::config::Route,
+) {
+    fire_stop_hooks(assistant_msg, tool_ctx).await;
+
+    if !config.auto_memory_enabled {
+        return;
+    }
+
+    if crate::session_memory::SessionMemoryExtractor::should_extract(messages) {
+        // Through the account that just served the turn, not a fresh Anthropic
+        // client built from `ANTHROPIC_API_KEY`. The provider is resolved
+        // inside the task because the extraction is detached and the loop's own
+        // handles borrow from the caller's frame.
+        let route = route.clone();
+        let config = tool_ctx.config.clone();
+        let messages = messages.to_vec();
+        let working_dir = tool_ctx.working_dir.clone();
+
+        tokio::spawn(async move {
+            let Some(provider) = mikmik_api::provider_by_id(&config, &route.account).await else {
+                tracing::debug!(
+                    account = %route.account,
+                    "Session memory extraction skipped: no usable provider"
+                );
+                return;
+            };
+            let backend = crate::compact::ProviderBackend(provider);
+            let extractor = crate::session_memory::SessionMemoryExtractor::new(route.model);
+            match extractor.extract(&messages, &working_dir, &backend).await {
+                Ok(memories) if !memories.is_empty() => {
+                    let project_root =
+                        mikmik_core::session_storage::transcript_root_for(&working_dir);
+                    let target = crate::session_memory::session_notes_path(
+                        &mikmik_core::memdir::auto_memory_path(&project_root),
+                    );
+                    if let Err(e) =
+                        crate::session_memory::SessionMemoryExtractor::persist(&memories, &target)
+                            .await
+                    {
+                        tracing::warn!(error = %e, "Failed to persist session memories");
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::debug!(error = %e, "Session memory extraction failed (non-fatal)");
+                }
+            }
+        });
+    }
+
+    // AutoDream consolidation. `maybe_trigger` checks the gates and takes the
+    // lock; the subagent runs in a detached task so the spawn does not call
+    // `run_query_loop` from inside its own future, which would make that
+    // future `!Send`.
+    let project_root = mikmik_core::session_storage::transcript_root_for(&tool_ctx.working_dir);
+    let memory_dir = mikmik_core::memdir::auto_memory_path(&project_root);
+    let conversations_dir = mikmik_core::session_storage::transcript_dir(&project_root);
+    let dreamer = crate::auto_dream::AutoDream::new(memory_dir, conversations_dir);
+    if let Ok(Some(task)) = dreamer.maybe_trigger().await {
+        let agent_input = serde_json::json!({
+            "description": "memory consolidation",
+            "prompt": task.prompt,
+            "max_turns": 20,
+            "system_prompt": "You are performing automatic memory consolidation. Complete the task and return a brief summary.",
+            "run_in_background": true,
+            "isolation": null
+        });
+        let ctx = tool_ctx.clone();
+        tokio::spawn(async move {
+            let agent = crate::agent_tool::AgentTool;
+            let _result = mikmik_tools::Tool::execute(&agent, agent_input, &ctx).await;
+            crate::auto_dream::AutoDream::finish_consolidation(&task).await;
+        });
+    }
+}
+
 /// Spawn all `Stop` hooks in fire-and-forget background tasks.
 ///
 /// Stop hooks are non-blocking by design: the caller does not wait for them.

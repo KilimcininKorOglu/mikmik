@@ -121,7 +121,9 @@ Fires after the model samples a response, before the tools in it run. This one d
 
 #### `Stop`
 
-Fires when the model finishes a turn. Fire and forget: the hook is spawned in the background, its output is discarded, and its exit code is ignored. The turn's text is passed in the `CLAUDE_HOOK_OUTPUT` environment variable rather than on stdin.
+Fires when the model finishes a turn. It runs twice: once inline, which the turn waits for, and once in the background. Either way the output is discarded and the exit code is ignored, so a `Stop` hook cannot change what happens next. The background run passes the turn's text in the `CLAUDE_HOOK_OUTPUT` environment variable rather than on stdin.
+
+Keep it short. The inline run holds the turn open for as long as the command takes, up to the hook timeout.
 
 #### `UserPromptSubmit`
 

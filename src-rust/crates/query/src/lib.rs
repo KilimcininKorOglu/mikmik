@@ -1486,6 +1486,26 @@ async fn run_query_loop_inner(
 
                     messages.push(assistant_msg.clone());
 
+                    // The same PostModelTurn hooks the Anthropic arm fires.
+                    // They used to run only there, so a user's hook was silently
+                    // skipped on every other account.
+                    if runner::apply_post_model_turn(
+                        &assistant_msg,
+                        tool_ctx,
+                        messages,
+                        event_tx.as_ref(),
+                    ) == runner::PostModelTurn::Veto
+                    {
+                        let last = messages
+                            .last()
+                            .cloned()
+                            .unwrap_or_else(|| Message::assistant("Hook blocked continuation."));
+                        return QueryOutcome::EndTurn {
+                            message: last,
+                            usage,
+                        };
+                    }
+
                     // Handle tool-use turn: execute tools and loop.
                     let tool_use_blocks: Vec<_> = content_blocks
                         .iter()
@@ -1575,6 +1595,13 @@ async fn run_query_loop_inner(
                         event_tx.as_ref(),
                         &stop_str,
                     );
+
+                    // The Stop hooks, session-memory extraction and the
+                    // AutoDream check. All three used to run only in the
+                    // Anthropic arm, so on any other account no Stop hook fired
+                    // and no memory was ever written.
+                    runner::fire_end_of_turn(&assistant_msg, tool_ctx, config, messages, &route)
+                        .await;
 
                     if let Some(ref tx) = event_tx {
                         let _ = tx.send(QueryEvent::TurnComplete {
@@ -1782,34 +1809,17 @@ async fn run_query_loop_inner(
 
         // T1-3: Fire PostModelTurn hooks after the model samples a response.
         // Hooks can inject blocking errors or veto continuation entirely.
+        if runner::apply_post_model_turn(&assistant_msg, tool_ctx, messages, event_tx.as_ref())
+            == runner::PostModelTurn::Veto
         {
-            let hook_result = fire_post_sampling_hooks(&assistant_msg, &tool_ctx.config);
-            if !hook_result.blocking_errors.is_empty() {
-                if hook_result.prevent_continuation {
-                    // Hard veto: push the errors into the conversation and abort.
-                    for err_msg in hook_result.blocking_errors {
-                        messages.push(err_msg);
-                    }
-                    if let Some(ref tx) = event_tx {
-                        let _ = tx.send(QueryEvent::Status(
-                            "PostModelTurn hook vetoed continuation.".to_string(),
-                        ));
-                    }
-                    let last = messages
-                        .last()
-                        .cloned()
-                        .unwrap_or_else(|| Message::assistant("Hook blocked continuation."));
-                    return QueryOutcome::EndTurn {
-                        message: last,
-                        usage,
-                    };
-                }
-                // Soft errors: inject them so the model can react next turn.
-                for err_msg in hook_result.blocking_errors {
-                    debug!("PostModelTurn hook injecting error message");
-                    messages.push(err_msg);
-                }
-            }
+            let last = messages
+                .last()
+                .cloned()
+                .unwrap_or_else(|| Message::assistant("Hook blocked continuation."));
+            return QueryOutcome::EndTurn {
+                message: last,
+                usage,
+            };
         }
 
         if let Some(ref tx) = event_tx {
@@ -1821,154 +1831,9 @@ async fn run_query_loop_inner(
             });
         }
 
-        // Helper closure for firing the Stop hook.
-        macro_rules! fire_stop_hook {
-            ($msg:expr) => {{
-                let stop_ctx = mikmik_core::hooks::HookContext {
-                    event: "Stop".to_string(),
-                    tool_name: None,
-                    tool_input: None,
-                    tool_output: Some($msg.get_all_text()),
-                    is_error: None,
-                    session_id: Some(tool_ctx.session_id.clone()),
-                };
-                mikmik_core::hooks::run_hooks(
-                    &tool_ctx.config.hooks,
-                    mikmik_core::config::HookEvent::Stop,
-                    &stop_ctx,
-                    &tool_ctx.working_dir,
-                )
-                .await;
-            }};
-        }
-
         match stop {
             "end_turn" => {
-                fire_stop_hook!(assistant_msg);
-
-                // T1-3: Fire Stop hooks in background (fire-and-forget).
-                // `stop_hooks_with_full_behavior` spawns blocking tasks internally
-                // and returns immediately with an empty Vec.
-                let _bg = stop_hooks_with_full_behavior(
-                    &assistant_msg,
-                    &tool_ctx.config,
-                    tool_ctx.working_dir.clone(),
-                );
-
-                // Asynchronously extract and persist session memories if warranted.
-                // Runs in a detached Tokio task so it doesn't block the query loop.
-                // Gated on the memory directory. Extraction used to run
-                // whatever the settings said and write to `.mikmik/AGENTS.md`
-                // in the checkout, which the memory loader never reads: it
-                // walks from cwd upwards, and that file sits one level down.
-                // So every run spent a model call on a file nothing opened.
-                if config.auto_memory_enabled
-                    && session_memory::SessionMemoryExtractor::should_extract(messages)
-                {
-                    // Through the account that just served the turn, not a
-                    // fresh Anthropic client built from `ANTHROPIC_API_KEY`.
-                    // That gate meant a session on any other provider
-                    // remembered nothing, and the model it asked for was
-                    // `config.model` unsplit, so a prefixed account sent
-                    // Anthropic a model id it has never heard of.
-                    //
-                    // The provider is resolved inside the task because the
-                    // extraction is detached and the loop's own handles borrow
-                    // from this frame.
-                    let route_clone = route.clone();
-                    let config_clone = tool_ctx.config.clone();
-                    let messages_clone = messages.clone();
-                    let working_dir_clone = tool_ctx.working_dir.clone();
-
-                    tokio::spawn(async move {
-                        let Some(provider) =
-                            mikmik_api::provider_by_id(&config_clone, &route_clone.account).await
-                        else {
-                            tracing::debug!(
-                                account = %route_clone.account,
-                                "Session memory extraction skipped: no usable provider"
-                            );
-                            return;
-                        };
-                        let backend = compact::ProviderBackend(provider);
-                        let extractor =
-                            session_memory::SessionMemoryExtractor::new(route_clone.model);
-                        match extractor
-                            .extract(&messages_clone, &working_dir_clone, &backend)
-                            .await
-                        {
-                            Ok(memories) if !memories.is_empty() => {
-                                let project_root =
-                                    mikmik_core::session_storage::transcript_root_for(
-                                        &working_dir_clone,
-                                    );
-                                let target = session_memory::session_notes_path(
-                                    &mikmik_core::memdir::auto_memory_path(&project_root),
-                                );
-                                if let Err(e) = session_memory::SessionMemoryExtractor::persist(
-                                    &memories, &target,
-                                )
-                                .await
-                                {
-                                    tracing::warn!(
-                                        error = %e,
-                                        "Failed to persist session memories"
-                                    );
-                                }
-                            }
-                            Ok(_) => {} // no memories extracted
-                            Err(e) => {
-                                tracing::debug!(
-                                    error = %e,
-                                    "Session memory extraction failed (non-fatal)"
-                                );
-                            }
-                        }
-                    });
-                }
-
-                // Trigger AutoDream consolidation check (non-blocking, best-effort).
-                // maybe_trigger() checks gates + acquires lock. If it returns
-                // Some(task), we spawn a background subagent via AgentTool so
-                // the spawn doesn't call run_query_loop recursively from within
-                // its own future (which would make the future !Send).
-                if config.auto_memory_enabled {
-                    // Both paths were guesses at the config root and neither
-                    // directory has ever existed: memory lives under the
-                    // project directory and transcripts are the `.jsonl` files
-                    // beside it. `session_gate_passes` returns false as soon as
-                    // the conversations directory is missing, so consolidation
-                    // never ran at all.
-                    let project_root =
-                        mikmik_core::session_storage::transcript_root_for(&tool_ctx.working_dir);
-                    let memory_dir = mikmik_core::memdir::auto_memory_path(&project_root);
-                    let conversations_dir =
-                        mikmik_core::session_storage::transcript_dir(&project_root);
-                    let dreamer = crate::auto_dream::AutoDream::new(memory_dir, conversations_dir);
-                    if let Ok(Some(task)) = dreamer.maybe_trigger().await {
-                        // Run the consolidation subagent in a background Tokio
-                        // task. We use the AgentTool execute path (via
-                        // poll_background_agent / BACKGROUND_AGENTS) to avoid
-                        // re-entering run_query_loop from within the same
-                        // future graph.
-                        let agent_input = serde_json::json!({
-                            "description": "memory consolidation",
-                            "prompt": task.prompt,
-                            "max_turns": 20,
-                            "system_prompt": "You are performing automatic memory consolidation. Complete the task and return a brief summary.",
-                            "run_in_background": true,
-                            "isolation": null
-                        });
-                        let ctx_for_dream = tool_ctx.clone();
-                        tokio::spawn(async move {
-                            let agent = crate::agent_tool::AgentTool;
-                            let _result =
-                                mikmik_tools::Tool::execute(&agent, agent_input, &ctx_for_dream)
-                                    .await;
-                            crate::auto_dream::AutoDream::finish_consolidation(&task).await;
-                        });
-                    }
-                }
+                runner::fire_end_of_turn(&assistant_msg, tool_ctx, config, messages, &route).await;
 
                 // Attach snapshot patch covering all file changes this query.
                 if let (Some(ref snap), Some(ref hash)) = (&shadow_snap, &initial_snapshot) {
@@ -2174,12 +2039,7 @@ async fn run_query_loop_inner(
                 continue;
             }
             "stop_sequence" => {
-                fire_stop_hook!(assistant_msg);
-                let _bg = stop_hooks_with_full_behavior(
-                    &assistant_msg,
-                    &tool_ctx.config,
-                    tool_ctx.working_dir.clone(),
-                );
+                runner::fire_stop_hooks(&assistant_msg, tool_ctx).await;
                 if let (Some(ref snap), Some(ref hash)) = (&shadow_snap, &initial_snapshot) {
                     let patch = snap.patch(hash).await;
                     if !patch.files.is_empty() {
@@ -2193,12 +2053,7 @@ async fn run_query_loop_inner(
                     stop_reason = other,
                     "Unknown stop reason, treating as end_turn"
                 );
-                fire_stop_hook!(assistant_msg);
-                let _bg = stop_hooks_with_full_behavior(
-                    &assistant_msg,
-                    &tool_ctx.config,
-                    tool_ctx.working_dir.clone(),
-                );
+                runner::fire_stop_hooks(&assistant_msg, tool_ctx).await;
                 if let (Some(ref snap), Some(ref hash)) = (&shadow_snap, &initial_snapshot) {
                     let patch = snap.patch(hash).await;
                     if !patch.files.is_empty() {
@@ -3417,6 +3272,29 @@ mod tests {
         continuation: crate::continuation::ContinuationMode,
         tweak: impl FnOnce(&mut QueryConfig),
     ) -> (QueryOutcome, Vec<bool>, Vec<Message>) {
+        drive_loop_with_context(
+            always_end_turn,
+            max_turns,
+            tools,
+            continuation,
+            tweak,
+            |_| {},
+        )
+        .await
+    }
+
+    /// As above, and also adjusts the session `Config` the `ToolContext` holds.
+    ///
+    /// Hooks live there rather than on `QueryConfig`, so a test about a hook
+    /// cannot reach them through the other tweak.
+    async fn drive_loop_with_context(
+        always_end_turn: bool,
+        max_turns: u32,
+        tools: Vec<Box<dyn Tool>>,
+        continuation: crate::continuation::ContinuationMode,
+        tweak: impl FnOnce(&mut QueryConfig),
+        tweak_ctx: impl FnOnce(&mut mikmik_core::config::Config),
+    ) -> (QueryOutcome, Vec<bool>, Vec<Message>) {
         let recorded = Arc::new(StdMutex::new(Vec::new()));
         let provider = Arc::new(RecordingProvider {
             id: mikmik_core::provider_id::ProviderId::new("mockprov"),
@@ -3436,6 +3314,7 @@ mod tests {
         let mut ctx = deny_all_context();
         ctx.session_id = "loop-test".to_string();
         ctx.config.provider = Some("mockprov".to_string());
+        tweak_ctx(&mut ctx.config);
 
         let mut config = make_config(None, None);
         config.model = "mock-model".to_string();
@@ -3467,6 +3346,78 @@ mod tests {
 
         let recorded = recorded.lock().unwrap().clone();
         (outcome, recorded, messages)
+    }
+
+    /// A `PostModelTurn` hook with the given command, declared as the session's
+    /// only hook.
+    fn post_model_turn_hook(
+        command: &str,
+    ) -> impl FnOnce(&mut mikmik_core::config::Config) + use<'_> {
+        move |config: &mut mikmik_core::config::Config| {
+            config.hooks.insert(
+                mikmik_core::config::HookEvent::PostModelTurn,
+                vec![mikmik_core::config::HookEntry {
+                    command: command.to_string(),
+                    ..Default::default()
+                }],
+            );
+        }
+    }
+
+    /// The `PostModelTurn` hook used to fire only in the Anthropic arm, so a
+    /// user's hook was silently skipped on every other account. This drives the
+    /// provider arm and asserts the hook's message reached the conversation.
+    #[tokio::test]
+    async fn a_post_model_turn_hook_fires_on_the_provider_arm() {
+        let (outcome, _recorded, messages) = drive_loop_with_context(
+            true,
+            3,
+            noop_tools(),
+            crate::continuation::ContinuationMode::Default,
+            |_| {},
+            post_model_turn_hook("echo HOOK-SAW-THE-TURN >&2; exit 1"),
+        )
+        .await;
+
+        assert!(
+            matches!(outcome, QueryOutcome::EndTurn { .. }),
+            "exit 1 injects a message; it does not veto the turn"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.get_all_text().contains("HOOK-SAW-THE-TURN")),
+            "the hook's output must reach the conversation: {:?}",
+            messages
+                .iter()
+                .map(|m| m.get_all_text())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Exit above 1 is a veto: the loop returns rather than sending another
+    /// request. The recording provider counts requests, so one is the proof.
+    #[tokio::test]
+    async fn a_vetoing_hook_ends_the_turn_on_the_provider_arm() {
+        let (outcome, recorded, messages) = drive_loop_with_context(
+            false,
+            5,
+            noop_tools(),
+            crate::continuation::ContinuationMode::Default,
+            |_| {},
+            post_model_turn_hook("echo HOOK-VETO >&2; exit 2"),
+        )
+        .await;
+
+        assert!(matches!(outcome, QueryOutcome::EndTurn { .. }));
+        assert_eq!(
+            recorded.len(),
+            1,
+            "the veto must stop the loop before a second request"
+        );
+        assert!(messages
+            .iter()
+            .any(|m| m.get_all_text().contains("HOOK-VETO")));
     }
 
     /// (a) A non-goal turn that ends with `end_turn` stops after exactly one

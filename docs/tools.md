@@ -567,7 +567,7 @@ Load the full text of memory files about a topic. The system prompt lists which 
 | `query`     | string  | yes      | The topic to search for                        |
 | `max_files` | integer | no       | How many files to return                       |
 
-The query is scored against each file's name, description and filename, so search by topic rather than by exact wording.
+The query is scored against each file's `name` (weight 2), `description` (1), filename (0.5) and body (0.25), so search by topic rather than by exact wording. The frontmatter outranks the body because it is what the author chose to call the file, and a body hit counts once per word however often the word occurs, so a long file that repeats a term cannot outrank a short one that names the topic. Only files scoring above zero are returned, newest first among equal scores. Defaults to 3 files, capped at 10.
 
 ---
 

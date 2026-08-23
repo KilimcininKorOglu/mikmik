@@ -559,12 +559,26 @@ pub fn ensure_memory_dir_exists(memory_dir: &Path) {
 // Simple relevance search (no LLM side-query)
 // ---------------------------------------------------------------------------
 
-/// Find and load the most relevant memory files for a query using a
-/// lightweight TF-IDF-style keyword score.
+/// What a query word is worth in each part of a memory file.
 ///
-/// The full Sonnet side-query (`findRelevantMemories` in TypeScript) lives
-/// in `cc-query`; this function provides a cheaper fallback for contexts
-/// where an API call is not available.
+/// The frontmatter outranks the body because it is what the author chose to
+/// call the file, while the body may mention a word once in passing. The body
+/// still has to count for something: a memory whose frontmatter omits the word
+/// scored zero before, so a file holding the answer was never loaded.
+const SCORE_NAME: f32 = 2.0;
+const SCORE_DESCRIPTION: f32 = 1.0;
+const SCORE_FILENAME: f32 = 0.5;
+const SCORE_BODY: f32 = 0.25;
+
+/// Find and load the most relevant memory files for a query using a
+/// lightweight keyword score.
+///
+/// The full model-backed side-query lives elsewhere; this is the cheaper
+/// fallback for contexts where an API call is not available.
+///
+/// Each candidate is read once, here. Scoring the body needs the text anyway,
+/// and the same string is handed back as the loaded content, so a file that
+/// wins is no longer read twice.
 pub fn find_relevant_memories_simple(
     memory_dir: &Path,
     query: &str,
@@ -578,25 +592,48 @@ pub fn find_relevant_memories_simple(
         return Vec::new();
     }
 
-    let mut scored: Vec<(f32, MemoryFileMeta)> = metas
+    let mut scored: Vec<(f32, MemoryFile)> = metas
         .into_iter()
         .filter_map(|meta| {
+            let content = std::fs::read_to_string(&meta.path).ok()?;
             let desc = meta.description.as_deref().unwrap_or("").to_lowercase();
             let name = meta.name.as_deref().unwrap_or("").to_lowercase();
             let filename = meta.filename.to_lowercase();
+            let body = content.to_lowercase();
 
             let score: f32 = query_words
                 .iter()
-                .map(|w| {
-                    let in_name = if name.contains(*w) { 2.0_f32 } else { 0.0 };
-                    let in_desc = if desc.contains(*w) { 1.0_f32 } else { 0.0 };
-                    let in_file = if filename.contains(*w) { 0.5_f32 } else { 0.0 };
-                    in_name + in_desc + in_file
+                .map(|word| {
+                    let in_name = if name.contains(*word) {
+                        SCORE_NAME
+                    } else {
+                        0.0
+                    };
+                    let in_desc = if desc.contains(*word) {
+                        SCORE_DESCRIPTION
+                    } else {
+                        0.0
+                    };
+                    let in_file = if filename.contains(*word) {
+                        SCORE_FILENAME
+                    } else {
+                        0.0
+                    };
+                    // Counted once per word, however often it occurs: a file
+                    // that repeats one term fifty times is not fifty times the
+                    // answer, and letting it add up would let any long file
+                    // outrank a short one that names the topic.
+                    let in_body = if body.contains(*word) {
+                        SCORE_BODY
+                    } else {
+                        0.0
+                    };
+                    in_name + in_desc + in_file + in_body
                 })
                 .sum();
 
             if score > 0.0 {
-                Some((score, meta))
+                Some((score, MemoryFile { meta, content }))
             } else {
                 None
             }
@@ -609,10 +646,7 @@ pub fn find_relevant_memories_simple(
     scored
         .into_iter()
         .take(max_files)
-        .filter_map(|(_, meta)| {
-            let content = std::fs::read_to_string(&meta.path).ok()?;
-            Some(MemoryFile { meta, content })
-        })
+        .map(|(_, file)| file)
         .collect()
 }
 
@@ -1078,5 +1112,112 @@ mod tests {
         let _bare = EnvGuard::set("MIKMIK_SIMPLE", "1");
 
         assert!(!is_auto_memory_enabled(Some(true)));
+    }
+
+    // ---- find_relevant_memories_simple -------------------------------------
+
+    /// The filenames a search returned, in rank order.
+    fn ranked(dir: &Path, query: &str) -> Vec<String> {
+        find_relevant_memories_simple(dir, query, 10)
+            .into_iter()
+            .map(|file| file.meta.filename)
+            .collect()
+    }
+
+    /// The case the frontmatter-only score got wrong: the answer is in the
+    /// body, and nothing in the frontmatter mentions the word.
+    #[test]
+    fn a_word_that_appears_only_in_the_body_still_finds_the_file() {
+        let dir = make_temp_dir();
+        write_file(
+            dir.path(),
+            "deploy.md",
+            "---\nname: Deploy\ndescription: How releases reach production\n---\n\
+             The release workflow refuses a tag lower than the highest existing one.",
+        );
+
+        assert_eq!(ranked(dir.path(), "workflow"), vec!["deploy.md"]);
+    }
+
+    /// A body hit must not outrank a file that names the topic, or a passing
+    /// mention would push the right answer out of a three-file result.
+    #[test]
+    fn the_frontmatter_still_outranks_the_body() {
+        let dir = make_temp_dir();
+        write_file(
+            dir.path(),
+            "named.md",
+            "---\nname: Cargo\ndescription: The build\n---\nNothing else here.",
+        );
+        write_file(
+            dir.path(),
+            "mentions.md",
+            "---\nname: Editors\ndescription: Which editor opens what\n---\n\
+             The cargo command runs from src-rust.",
+        );
+
+        assert_eq!(ranked(dir.path(), "cargo"), vec!["named.md", "mentions.md"]);
+    }
+
+    /// Body score is counted once per word. A file that repeats one term is
+    /// not more relevant for repeating it, and letting it add up would let any
+    /// long file outrank a short one that names the topic.
+    #[test]
+    fn repeating_a_word_does_not_raise_the_score() {
+        let dir = make_temp_dir();
+        write_file(
+            dir.path(),
+            "once.md",
+            "---\nname: One\ndescription: d\n---\nrelay",
+        );
+        write_file(
+            dir.path(),
+            "many.md",
+            "---\nname: Two\ndescription: d\n---\nrelay relay relay relay relay relay",
+        );
+
+        // Both score the same, so the newest-first order from the scan decides
+        // and both come back. What matters is that neither is dropped and the
+        // repeated one has not climbed above a frontmatter match.
+        let found = ranked(dir.path(), "relay");
+        assert_eq!(found.len(), 2, "{found:?}");
+
+        write_file(
+            dir.path(),
+            "titled.md",
+            "---\nname: Relay\ndescription: d\n---\nnothing",
+        );
+        assert_eq!(
+            ranked(dir.path(), "relay").first().map(String::as_str),
+            Some("titled.md"),
+            "a repeated body word beat a name match"
+        );
+    }
+
+    #[test]
+    fn a_file_that_matches_nowhere_is_still_left_out() {
+        let dir = make_temp_dir();
+        write_file(
+            dir.path(),
+            "deploy.md",
+            "---\nname: Deploy\ndescription: releases\n---\ntag then wait",
+        );
+
+        assert!(ranked(dir.path(), "kubernetes").is_empty());
+    }
+
+    /// The body is the loaded content, so the single read has to serve both.
+    #[test]
+    fn the_body_that_was_scored_is_the_body_that_comes_back() {
+        let dir = make_temp_dir();
+        write_file(
+            dir.path(),
+            "deploy.md",
+            "---\nname: Deploy\ndescription: releases\n---\nTag, then wait for CI.",
+        );
+
+        let found = find_relevant_memories_simple(dir.path(), "releases", 10);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].content.contains("Tag, then wait for CI."));
     }
 }

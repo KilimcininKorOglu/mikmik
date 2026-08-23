@@ -1307,9 +1307,10 @@ type: project
 Tag the commit, then wait for the release workflow.
 ```
 
-`type` is one of `user`, `feedback`, `project` or `reference`. `name` and
-`description` are what a search scores against, so a file without them is
-harder for the model to find.
+`type` is one of `user`, `feedback`, `project` or `reference`. A search scores
+`name` highest, then `description`, then the filename, then the body, so a file
+without frontmatter is still findable through its text but ranks below one that
+names the topic.
 
 Session extraction writes `session-notes.md` there on its own.
 

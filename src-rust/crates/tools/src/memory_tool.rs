@@ -37,8 +37,9 @@ impl Tool for MemoryTool {
     fn description(&self) -> &str {
         "Load the full text of memory files about a topic. The system prompt \
          lists which memory files exist; use this to read the ones that look \
-         relevant. Scored against each file's name, description and filename, \
-         so search by topic rather than by exact wording."
+         relevant. Scored against each file's name, description, filename and \
+         body, with the name weighing most, so search by topic rather than by \
+         exact wording."
     }
 
     fn permission_level(&self) -> PermissionLevel {

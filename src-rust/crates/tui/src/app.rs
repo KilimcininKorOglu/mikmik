@@ -2531,14 +2531,14 @@ impl App {
             return;
         }
 
+        let (unset_label, unset_description) = crate::settings_screen::unset_model_row(&key);
         let mut models = self.model_picker.models().to_vec();
         models.insert(
             0,
             crate::model_picker::ModelEntry {
-                id: crate::settings_screen::USE_THE_TURNS_MODEL.to_string(),
-                display_name: crate::settings_screen::USE_THE_TURNS_MODEL.to_string(),
-                description: "The summary is written by whichever model the turn is using."
-                    .to_string(),
+                id: unset_label.to_string(),
+                display_name: unset_label.to_string(),
+                description: unset_description.to_string(),
                 is_current: current.is_none(),
                 provider_id: None,
             },
@@ -2548,9 +2548,7 @@ impl App {
         // rather than on the session's own model.
         self.model_picker.open_with_title(
             "Model for this setting",
-            current
-                .as_deref()
-                .unwrap_or(crate::settings_screen::USE_THE_TURNS_MODEL),
+            current.as_deref().unwrap_or(unset_label),
             self.effort_level,
             self.fast_mode,
         );
@@ -5205,19 +5203,24 @@ impl App {
                     // and the choice belongs to that setting.
                     if let Some(setting) = self.model_picker_for_setting.take() {
                         if let Some((model_id, _effort)) = self.model_picker.confirm() {
-                            let chosen = (model_id != crate::settings_screen::USE_THE_TURNS_MODEL)
-                                .then(|| {
-                                    let route = self.config.resolve_route(&model_id);
-                                    self.config.canonical_model(&route.account, &route.model)
-                                });
+                            let (unset_label, unset_description) =
+                                crate::settings_screen::unset_model_row(&setting);
+                            let chosen = (model_id != unset_label).then(|| {
+                                let route = self.config.resolve_route(&model_id);
+                                self.config.canonical_model(&route.account, &route.model)
+                            });
+                            let label = match setting.as_str() {
+                                "advisor_model" => "Advisor model",
+                                _ => "Compact model",
+                            };
                             self.settings_screen.set_picked_model(
                                 &setting,
                                 chosen.clone(),
                                 &mut self.config,
                             );
                             self.status_message = Some(match chosen {
-                                Some(model) => format!("Compact model: {model}"),
-                                None => "Compact model: the turn's own.".to_string(),
+                                Some(model) => format!("{label}: {model}"),
+                                None => format!("{label}: {unset_description}"),
                             });
                         }
                         self.model_picker.close();
@@ -5529,6 +5532,7 @@ impl App {
             if let Some(setting) = self.settings_screen.take_pending_model_picker() {
                 let current = match setting.as_str() {
                     "compact_model" => Some(self.settings_screen.compact_model.clone()),
+                    "advisor_model" => Some(self.settings_screen.advisor_model.clone()),
                     _ => None,
                 }
                 .filter(|value| !value.is_empty());

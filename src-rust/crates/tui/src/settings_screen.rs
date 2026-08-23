@@ -45,6 +45,27 @@ pub const DEFAULT_SEARXNG_URL: &str = "http://localhost:8080";
 /// What an unset compact model reads as, and the picker row that clears it.
 pub const USE_THE_TURNS_MODEL: &str = "Use the turn's model";
 
+/// What an unset advisor model reads as, and the picker row that clears it.
+pub const NO_ADVISOR: &str = "No advisor";
+
+/// The label of the picker row that leaves a model setting unset, and what that
+/// means for the setting.
+///
+/// Both halves are per-setting: leaving the compact model unset still writes
+/// summaries, while leaving the advisor model unset means there is no advisor.
+pub fn unset_model_row(key: &str) -> (&'static str, &'static str) {
+    match key {
+        "advisor_model" => (
+            NO_ADVISOR,
+            "No second model reviews the work, whatever the advisor mode says.",
+        ),
+        _ => (
+            USE_THE_TURNS_MODEL,
+            "The summary is written by whichever model the turn is using.",
+        ),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SettingsEntry {
     pub key: String,
@@ -123,6 +144,12 @@ pub struct SettingsScreen {
     /// The model that writes every summary, or empty for "the one this turn
     /// is using". Stored canonically, so it names its account.
     pub compact_model: String,
+    /// The model the advisor runs on, or empty for no advisor at all.
+    pub advisor_model: String,
+    /// One of `off`, `tool`, `runtime`, `both`.
+    pub advisor_mode: String,
+    /// How far the watcher may fall behind before the primary waits for it.
+    pub advisor_sync_backlog: String,
     pub output_format: String,
     pub disable_claude_mds: bool,
     pub file_injection_enabled: bool,
@@ -182,6 +209,11 @@ impl SettingsScreen {
             live_tool_output: false,
             searxng_url: String::new(),
             compact_model: String::new(),
+            advisor_model: String::new(),
+            advisor_mode: mikmik_core::advisor::AdvisorMode::default()
+                .as_str()
+                .to_string(),
+            advisor_sync_backlog: "3".to_string(),
             output_format: "text".to_string(),
             disable_claude_mds: false,
             file_injection_enabled: true,
@@ -266,6 +298,25 @@ impl SettingsScreen {
             .compact_model
             .clone()
             .unwrap_or_default();
+        self.advisor_model = self
+            .settings_snapshot
+            .config
+            .advisor_model
+            .clone()
+            .unwrap_or_default();
+        // The effective values, not the raw fields: both are unset by default,
+        // and a blank cell says nothing about what the session actually does.
+        self.advisor_mode = self
+            .settings_snapshot
+            .config
+            .effective_advisor_mode()
+            .as_str()
+            .to_string();
+        self.advisor_sync_backlog = self
+            .settings_snapshot
+            .config
+            .effective_advisor_sync_backlog()
+            .to_string();
         self.output_format = match &self.settings_snapshot.config.output_format {
             mikmik_core::config::OutputFormat::Text => "text".to_string(),
             mikmik_core::config::OutputFormat::Json => "json".to_string(),
@@ -387,6 +438,11 @@ impl SettingsScreen {
                 self.settings_snapshot.config.compact_model = model.clone();
                 config.compact_model = model;
             }
+            "advisor_model" => {
+                self.advisor_model = model.clone().unwrap_or_default();
+                self.settings_snapshot.config.advisor_model = model.clone();
+                config.advisor_model = model;
+            }
             _ => return,
         }
         self.persist();
@@ -453,6 +509,24 @@ impl SettingsScreen {
                     config.searxng_url = url.clone();
                     saved.searxng_url = url;
                     self.searxng_url = trimmed.to_string();
+                }
+                "advisor_mode" => {
+                    // Store what the enum read back, not the raw string: an
+                    // unreadable value would otherwise sit in settings.json
+                    // looking valid while the session silently used `tool`.
+                    let mode = mikmik_core::advisor::AdvisorMode::parse(value)
+                        .as_str()
+                        .to_string();
+                    config.advisor_mode = Some(mode.clone());
+                    saved.advisor_mode = Some(mode.clone());
+                    self.advisor_mode = mode;
+                }
+                "advisor_sync_backlog" => {
+                    if let Ok(n) = value.parse::<u32>() {
+                        config.advisor_sync_backlog = Some(n);
+                        saved.advisor_sync_backlog = Some(n);
+                        self.advisor_sync_backlog = value.clone();
+                    }
                 }
                 "compact_threshold" => {
                     if let Ok(n) = value.parse::<u8>() {
@@ -813,6 +887,39 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             } else {
                 screen.compact_model.clone()
             },
+        },
+        SettingsEntry {
+            key: "advisor_model".into(),
+            label: "Advisor model".into(),
+            description:
+                "The second model that reviews the work. Unset, there is no advisor at all, whatever the mode says."
+                    .into(),
+            kind: SettingKind::ModelPicker,
+            value: if screen.advisor_model.is_empty() {
+                NO_ADVISOR.to_string()
+            } else {
+                screen.advisor_model.clone()
+            },
+        },
+        SettingsEntry {
+            key: "advisor_mode".into(),
+            label: "Advisor mode".into(),
+            description:
+                "How the advisor works. `tool`: the agent consults it when it decides to. `runtime`: it reads every turn on its own and interrupts. `both`: either way. `off`: neither."
+                    .into(),
+            kind: SettingKind::Enum {
+                options: mikmik_core::advisor::AdvisorMode::ALL.to_vec(),
+            },
+            value: screen.advisor_mode.clone(),
+        },
+        SettingsEntry {
+            key: "advisor_sync_backlog".into(),
+            label: "Advisor sync wait".into(),
+            description:
+                "How many turns the watching advisor may fall behind before the agent waits for it at the end of a turn. 0 never waits."
+                    .into(),
+            kind: SettingKind::Number,
+            value: screen.advisor_sync_backlog.clone(),
         },
         SettingsEntry {
             key: "searxng_url".into(),
@@ -1589,6 +1696,11 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                         screen.settings_snapshot.config.output_format = format.clone();
                         config.output_format = format;
                     }
+                    "advisor_mode" => {
+                        screen.advisor_mode = new_value.to_string();
+                        screen.settings_snapshot.config.advisor_mode = Some(new_value.to_string());
+                        config.advisor_mode = Some(new_value.to_string());
+                    }
                     _ => {}
                 }
                 screen.persist();
@@ -1883,6 +1995,40 @@ mod tests {
         toggle_or_cycle_current(&mut screen, &mut config);
         assert!(!screen.notify_sound, "the row does not toggle back off");
         assert!(!screen.settings_snapshot.notify_sound);
+    }
+
+    /// The advisor mode decides whether a second model runs, so the row has to
+    /// reach the running session's `config`, not only the file on disk. A key
+    /// missing from the enum arm reads as a working row and changes nothing.
+    #[test]
+    fn cycling_the_advisor_mode_row_reaches_the_running_session() {
+        let _guard = HomeGuard::new();
+
+        let mut screen = SettingsScreen::new();
+        screen.open();
+        let mut config = Config::default();
+
+        let index = all_entries(&screen)
+            .iter()
+            .position(|e| e.key == "advisor_mode")
+            .expect("the advisor mode row is missing");
+        screen.selected_idx = index;
+
+        assert_eq!(screen.advisor_mode, "tool", "the default is today's tool");
+        toggle_or_cycle_current(&mut screen, &mut config);
+
+        assert_eq!(screen.advisor_mode, "runtime");
+        assert_eq!(
+            config.advisor_mode.as_deref(),
+            Some("runtime"),
+            "the session went on using the old mode"
+        );
+        assert_eq!(
+            screen.settings_snapshot.config.advisor_mode.as_deref(),
+            Some("runtime"),
+            "the snapshot written to disk kept the old mode"
+        );
+        assert_eq!(screen.save_error, None);
     }
 
     #[test]

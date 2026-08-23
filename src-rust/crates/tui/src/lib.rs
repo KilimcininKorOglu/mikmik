@@ -660,6 +660,39 @@ mod tests {
         assert_eq!(app.config.compact_model, None);
     }
 
+    /// Each model setting has its own "leave it unset" row. Sharing one label
+    /// would leave the advisor row unable to clear itself, and would store the
+    /// other setting's label as if it were a model name.
+    #[test]
+    fn the_unset_row_of_the_advisor_picker_clears_the_advisor() {
+        let _guard = HomeGuard::new();
+        let mut app = make_app();
+        app.config.advisor_model = Some("anthropic/claude-haiku-4-5".to_string());
+
+        app.model_picker
+            .set_models(vec![crate::model_picker::ModelEntry {
+                id: crate::settings_screen::NO_ADVISOR.to_string(),
+                display_name: crate::settings_screen::NO_ADVISOR.to_string(),
+                description: String::new(),
+                is_current: true,
+                provider_id: None,
+            }]);
+        app.model_picker.open_with_title(
+            "Model for this setting",
+            crate::settings_screen::NO_ADVISOR,
+            app.effort_level,
+            false,
+        );
+        app.model_picker_for_setting = Some("advisor_model".to_string());
+
+        app.handle_key_event(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+
+        assert_eq!(app.config.advisor_model, None);
+    }
+
     #[test]
     fn an_account_prefix_moves_the_account() {
         let mut app = make_app();

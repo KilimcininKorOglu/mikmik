@@ -150,6 +150,8 @@ pub struct SettingsScreen {
     pub advisor_mode: String,
     /// How far the watcher may fall behind before the primary waits for it.
     pub advisor_sync_backlog: String,
+    /// One of `off`, `stale`, `strict`.
+    pub edit_guard: String,
     pub output_format: String,
     pub disable_claude_mds: bool,
     pub file_injection_enabled: bool,
@@ -214,6 +216,9 @@ impl SettingsScreen {
                 .as_str()
                 .to_string(),
             advisor_sync_backlog: "3".to_string(),
+            edit_guard: mikmik_core::file_snapshot::EditGuard::default()
+                .as_str()
+                .to_string(),
             output_format: "text".to_string(),
             disable_claude_mds: false,
             file_injection_enabled: true,
@@ -316,6 +321,12 @@ impl SettingsScreen {
             .settings_snapshot
             .config
             .effective_advisor_sync_backlog()
+            .to_string();
+        self.edit_guard = self
+            .settings_snapshot
+            .config
+            .effective_edit_guard()
+            .as_str()
             .to_string();
         self.output_format = match &self.settings_snapshot.config.output_format {
             mikmik_core::config::OutputFormat::Text => "text".to_string(),
@@ -527,6 +538,17 @@ impl SettingsScreen {
                         saved.advisor_sync_backlog = Some(n);
                         self.advisor_sync_backlog = value.clone();
                     }
+                }
+                "edit_guard" => {
+                    // Store what the enum read back, not the raw string: an
+                    // unreadable value would otherwise sit in settings.json
+                    // looking valid while every edit went unchecked.
+                    let level = mikmik_core::file_snapshot::EditGuard::parse(value)
+                        .as_str()
+                        .to_string();
+                    config.edit_guard = Some(level.clone());
+                    saved.edit_guard = Some(level.clone());
+                    self.edit_guard = level;
                 }
                 "compact_threshold" => {
                     if let Ok(n) = value.parse::<u8>() {
@@ -920,6 +942,17 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
                     .into(),
             kind: SettingKind::Number,
             value: screen.advisor_sync_backlog.clone(),
+        },
+        SettingsEntry {
+            key: "edit_guard".into(),
+            label: "Edit guard".into(),
+            description:
+                "How strictly an edit is held to what this session read. `stale`: refuse an edit to a file that changed after the read. `strict`: also refuse an edit to lines the read never displayed. `off`: neither."
+                    .into(),
+            kind: SettingKind::Enum {
+                options: mikmik_core::file_snapshot::EditGuard::ALL.to_vec(),
+            },
+            value: screen.edit_guard.clone(),
         },
         SettingsEntry {
             key: "searxng_url".into(),
@@ -1701,6 +1734,11 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                         screen.settings_snapshot.config.advisor_mode = Some(new_value.to_string());
                         config.advisor_mode = Some(new_value.to_string());
                     }
+                    "edit_guard" => {
+                        screen.edit_guard = new_value.to_string();
+                        screen.settings_snapshot.config.edit_guard = Some(new_value.to_string());
+                        config.edit_guard = Some(new_value.to_string());
+                    }
                     _ => {}
                 }
                 screen.persist();
@@ -2027,6 +2065,40 @@ mod tests {
             screen.settings_snapshot.config.advisor_mode.as_deref(),
             Some("runtime"),
             "the snapshot written to disk kept the old mode"
+        );
+        assert_eq!(screen.save_error, None);
+    }
+
+    /// The edit guard decides whether a write is checked at all, so the row
+    /// has to reach the running session's `config`. A key missing from the
+    /// enum arm reads as a working row and changes nothing.
+    #[test]
+    fn cycling_the_edit_guard_row_reaches_the_running_session() {
+        let _guard = HomeGuard::new();
+
+        let mut screen = SettingsScreen::new();
+        screen.open();
+        let mut config = Config::default();
+
+        let index = all_entries(&screen)
+            .iter()
+            .position(|e| e.key == "edit_guard")
+            .expect("the edit guard row is missing");
+        screen.selected_idx = index;
+
+        assert_eq!(screen.edit_guard, "off", "the default checks nothing");
+        toggle_or_cycle_current(&mut screen, &mut config);
+
+        assert_eq!(screen.edit_guard, "stale");
+        assert_eq!(
+            config.edit_guard.as_deref(),
+            Some("stale"),
+            "the session went on editing unchecked"
+        );
+        assert_eq!(
+            screen.settings_snapshot.config.edit_guard.as_deref(),
+            Some("stale"),
+            "the snapshot written to disk kept the old level"
         );
         assert_eq!(screen.save_error, None);
     }

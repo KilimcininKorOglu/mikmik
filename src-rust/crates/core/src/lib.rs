@@ -1347,28 +1347,57 @@ pub mod config {
         /// `Option` rather than `bool` so the merge can tell "the project file
         /// did not mention this" from "the project file set it to false". Read
         /// it through [`Config::effective_auto_compact`].
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// The alias is the top-level twin's spelling. `Config` has no
+        /// `rename_all`, so this key is snake_case on the wire while
+        /// `Settings::auto_compact` is camelCase, and a user who reads the
+        /// documented top-level name and puts it in this block would otherwise
+        /// lose it: serde drops an unknown field with no error, so the file
+        /// reads as configured and the setting never applies. Aliased rather
+        /// than renamed, so what is written back out does not change.
+        #[serde(
+            default,
+            alias = "autoCompact",
+            skip_serializing_if = "Option::is_none"
+        )]
         pub auto_compact: Option<bool>,
         /// Whether the project's memory directory is kept and shown to the
         /// model. Defaults to off.
         ///
         /// `Option` so `memdir::is_auto_memory_enabled` can still tell "unset"
         /// from "set to false"; an env var overrides only the former.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Aliased to the top-level spelling; see [`Config::auto_compact`].
+        #[serde(
+            default,
+            alias = "autoMemoryEnabled",
+            skip_serializing_if = "Option::is_none"
+        )]
         pub auto_memory_enabled: Option<bool>,
         /// Whether `AGENTS.md` files are loaded into the prompt. Defaults to on.
         ///
         /// `Option` because `Config` derives `Default`, where a `bool` would
         /// start out false; read it through
         /// [`Config::effective_agents_md_enabled`].
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Aliased to the top-level spelling; see [`Config::auto_compact`].
+        #[serde(
+            default,
+            alias = "agentsMdEnabled",
+            skip_serializing_if = "Option::is_none"
+        )]
         pub agents_md_enabled: Option<bool>,
         /// Whether `CLAUDE.md` files are loaded alongside them. Defaults to off.
         ///
         /// Separate from `agents_md_enabled` so a project holding both files
         /// can have either one, the other, or both read. Read it through
         /// [`Config::effective_claude_md_enabled`].
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Aliased to the top-level spelling; see [`Config::auto_compact`].
+        ///
+        /// Both halves keep the `claude` spelling: the key names the literal
+        /// `CLAUDE.md` file, not the module that reads it.
+        #[serde(
+            default,
+            alias = "claudeMdEnabled",
+            skip_serializing_if = "Option::is_none"
+        )]
         pub claude_md_enabled: Option<bool>,
         /// Context fill, as a percentage 0-100, at which auto-compact fires.
         ///
@@ -4188,29 +4217,70 @@ pub mod config {
             assert_eq!(merged.config.memory_model.as_deref(), Some("cheap/model"));
         }
 
-        /// Both spellings the documentation offers have to work, because a
-        /// user pastes one of them. `Config` carries no `rename_all`, so most
-        /// of its keys are snake_case on the wire while the top-level twin is
-        /// camelCase, and a camelCase key in the wrong block is dropped with
-        /// no error at all.
+        /// Every spelling a reader could reasonably write has to work.
+        ///
+        /// `Config` carries no `rename_all`, so its keys are snake_case on the
+        /// wire while their top-level twins are camelCase. Without an alias a
+        /// user who reads the documented top-level name and puts it inside
+        /// `config` loses it: serde drops an unknown field with no error, so
+        /// the file reads as configured and the setting never applies.
         #[test]
-        fn both_documented_spellings_turn_auto_memory_on() {
-            let top_level: Settings =
-                serde_json::from_str(r#"{"version":1,"autoMemoryEnabled":true}"#)
-                    .expect("the settings file must parse");
-            assert_eq!(
-                top_level.effective_config().auto_memory_enabled,
-                Some(true),
-                "the documented top-level spelling did nothing"
-            );
+        fn a_camel_case_key_works_inside_the_config_block_too() {
+            /// Reads the one field a case is about.
+            type ReadField = fn(&Config) -> Option<bool>;
 
-            let nested: Settings =
+            let cases: [(&str, ReadField); 4] = [
+                ("autoCompact", |c| c.auto_compact),
+                ("autoMemoryEnabled", |c| c.auto_memory_enabled),
+                ("agentsMdEnabled", |c| c.agents_md_enabled),
+                ("claudeMdEnabled", |c| c.claude_md_enabled),
+            ];
+
+            for (camel, read) in cases {
+                let nested: Settings = serde_json::from_str(&format!(
+                    r#"{{"version":1,"config":{{"{camel}":true}}}}"#
+                ))
+                .expect("the settings file must parse");
+                assert_eq!(
+                    read(&nested.config),
+                    Some(true),
+                    "`config.{camel}` was dropped"
+                );
+
+                let top: Settings =
+                    serde_json::from_str(&format!(r#"{{"version":1,"{camel}":true}}"#))
+                        .expect("the settings file must parse");
+                assert_eq!(
+                    read(&top.effective_config()),
+                    Some(true),
+                    "top-level `{camel}` was dropped"
+                );
+            }
+
+            // The snake_case spelling is the primary one and still works.
+            let snake: Settings =
                 serde_json::from_str(r#"{"version":1,"config":{"auto_memory_enabled":true}}"#)
                     .expect("the settings file must parse");
-            assert_eq!(
-                nested.effective_config().auto_memory_enabled,
-                Some(true),
-                "the documented nested spelling did nothing"
+            assert_eq!(snake.config.auto_memory_enabled, Some(true));
+        }
+
+        /// Aliased, not renamed. A rename would change what is written back
+        /// out, so the next save would rewrite the user's file under a
+        /// different key than the one the other 31 `config` fields use.
+        #[test]
+        fn the_alias_does_not_change_what_is_written_out() {
+            let settings = Settings {
+                config: Config {
+                    auto_memory_enabled: Some(true),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let json = serde_json::to_string(&settings).expect("serialise");
+            assert!(json.contains(r#""auto_memory_enabled":true"#), "{json}");
+            assert!(
+                !json.contains(r#""config":{"autoMemoryEnabled""#),
+                "the alias leaked into the output: {json}"
             );
         }
 

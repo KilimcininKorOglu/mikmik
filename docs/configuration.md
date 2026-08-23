@@ -1281,26 +1281,23 @@ A second memory store, separate from AGENTS.md. AGENTS.md is a file you write
 and commit; the auto memory directory is one MikMik keeps for you, outside the
 checkout, and the model writes to it during a session.
 
-| Key                 | Where                   | Type    | Default | Description                                             |
-|---------------------|-------------------------|---------|---------|---------------------------------------------------------|
-| `autoMemoryEnabled` | top level               | boolean | false   | Keep the directory and show it to the model.            |
-| `memoryModel`       | top level or `config`   | string  | unset   | Model the memory jobs run on. Unset uses the session's. |
+| Key                 | Type    | Default | Description                                             |
+|---------------------|---------|---------|---------------------------------------------------------|
+| `autoMemoryEnabled` | boolean | false   | Keep the directory and show it to the model.            |
+| `memoryModel`       | string  | unset   | Model the memory jobs run on. Unset uses the session's. |
 
-The **Where** column matters. Inside the `config` block, `autoMemoryEnabled` is
-spelled `auto_memory_enabled`, like most keys there; the camelCase spelling only
-works at the top level, and a camelCase key in the wrong block is ignored with
-no error. Prefer `/settings`, which writes both spellings. By hand, either of
-these works:
+Both work at the top level and inside the `config` block:
 
 ```json
 { "version": 1, "autoMemoryEnabled": true }
 ```
 
 ```json
-{ "version": 1, "config": { "auto_memory_enabled": true } }
+{ "version": 1, "config": { "autoMemoryEnabled": true } }
 ```
 
-`memoryModel` is spelled the same way in both places.
+Inside `config`, `autoMemoryEnabled` is an alias for `auto_memory_enabled`,
+which is what gets written back out. `/settings` writes both keys.
 
 `memoryModel` covers both background jobs: the extraction that writes
 `session-notes.md` at the end of a turn, and the consolidation sub-agent. Nobody

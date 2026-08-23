@@ -354,6 +354,23 @@ impl AdvisorSession {
         std::mem::take(&mut self.pending)
     }
 
+    /// Close a turn: hand the watcher the finished work, wait for it if the
+    /// setting says to, and read back what it said.
+    ///
+    /// Returns the notes and whether one of them wakes the turn. Only a
+    /// `blocker` does: it means work was handed off that does not run, and
+    /// leaving that until the user speaks again is the bug. A `concern` or a
+    /// `nit` stays in the conversation and reaches the model next time.
+    pub async fn finish_turn(&mut self, messages: &[Message]) -> (Vec<AdvisorNote>, bool) {
+        self.push_delta(messages, false);
+        self.wait_for_catchup().await;
+        let notes = self.take_pending();
+        let wake = notes
+            .iter()
+            .any(|note| note.severity == AdvisorSeverity::Blocker);
+        (notes, wake)
+    }
+
     /// Wait for the watcher to get close enough to the primary.
     ///
     /// Returns as soon as the backlog drops below the threshold, when the
@@ -877,6 +894,30 @@ mod tests {
             "a destructive directive is dropped, not delivered"
         );
         assert!(session.take_pending().is_empty());
+    }
+
+    /// Only a blocker wakes a turn that already ended. Waking one to restate a
+    /// concern is noise; a blocker means the agent handed off work that does
+    /// not run, and leaving that until the user speaks again is the bug.
+    #[tokio::test]
+    async fn only_a_blocker_wakes_a_finished_turn() {
+        let messages = vec![Message::user("start")];
+
+        let (mut session, tx) = session_with(0, 3);
+        tx.send(note(AdvisorSeverity::Concern, "A late concern."))
+            .expect("send");
+        let (notes, wake) = session.finish_turn(&messages).await;
+        assert_eq!(notes.len(), 1);
+        assert!(!wake, "a concern must not reopen a finished turn");
+
+        let (mut session, tx) = session_with(0, 3);
+        tx.send(note(AdvisorSeverity::Nit, "A late nit."))
+            .expect("send");
+        tx.send(note(AdvisorSeverity::Blocker, "The tests never ran."))
+            .expect("send");
+        let (notes, wake) = session.finish_turn(&messages).await;
+        assert_eq!(notes.len(), 2, "both notes reach the agent");
+        assert!(wake, "a blocker must reopen the turn");
     }
 
     /// A note that arrives after the turn ended reaches the boundary drain with

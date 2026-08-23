@@ -756,20 +756,10 @@ async fn run_query_loop_inner(
                     };
                 }
 
-                // Hand the watcher the finished turn, wait for it to catch up
-                // if the setting says to, and read what it said. A blocker
-                // wakes the turn: it means work was handed off that does not
-                // run, and deferring that to the next user message is the bug.
-                // A concern or a nit stays in the conversation and reaches the
-                // model when the user speaks again.
+                // Close the turn with the watcher before ending it.
                 if let Some(session) = advisor.as_mut() {
-                    session.push_delta(messages, false);
-                    session.wait_for_catchup().await;
-                    let notes = session.take_pending();
+                    let (notes, wake) = session.finish_turn(messages).await;
                     if !notes.is_empty() {
-                        let wake = notes.iter().any(|note| {
-                            note.severity == mikmik_core::advisor::AdvisorSeverity::Blocker
-                        });
                         if let Some(ref tx) = event_tx {
                             for note in &notes {
                                 let _ = tx.send(QueryEvent::Advisory {

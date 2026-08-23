@@ -446,6 +446,19 @@ pub enum AdvisorScope {
     Project,
 }
 
+impl AdvisorScope {
+    /// Which of the two directories an entry came from.
+    ///
+    /// Worth reporting, because the two are not equal: a project entry keeps
+    /// the default model and the read-only tool set whatever its file asks for.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Project => "project",
+        }
+    }
+}
+
 /// One watcher.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdvisorDefinition {
@@ -612,6 +625,21 @@ pub fn load_advisor_roster(project_root: &Path) -> Vec<AdvisorDefinition> {
 /// The file name that carries watcher-only guidance.
 pub const ADVISOR_GUIDANCE_FILENAME: &str = "ADVISOR.md";
 
+/// Every `ADVISOR.md` that exists and applies here, in prompt order.
+///
+/// The same list `load_advisor_guidance` reads, so a report of what is in force
+/// cannot drift from what the watcher was actually given.
+pub fn advisor_guidance_files(project_root: &Path) -> Vec<PathBuf> {
+    [
+        crate::config::Settings::config_dir().join(ADVISOR_GUIDANCE_FILENAME),
+        project_root.join(ADVISOR_GUIDANCE_FILENAME),
+        project_root.join(".mikmik").join(ADVISOR_GUIDANCE_FILENAME),
+    ]
+    .into_iter()
+    .filter(|path| path.is_file())
+    .collect()
+}
+
 /// Read every `ADVISOR.md` that applies here, in prompt order.
 ///
 /// Unlike `AGENTS.md`, this never reaches the primary model. It is for review
@@ -621,14 +649,8 @@ pub const ADVISOR_GUIDANCE_FILENAME: &str = "ADVISOR.md";
 /// User level first, then the project's, so the narrower guidance sits closer
 /// to the end of the prompt.
 pub fn load_advisor_guidance(project_root: &Path) -> String {
-    let candidates = [
-        crate::config::Settings::config_dir().join(ADVISOR_GUIDANCE_FILENAME),
-        project_root.join(ADVISOR_GUIDANCE_FILENAME),
-        project_root.join(".mikmik").join(ADVISOR_GUIDANCE_FILENAME),
-    ];
-
     let mut blocks = Vec::new();
-    for path in candidates {
+    for path in advisor_guidance_files(project_root) {
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
         };

@@ -1325,6 +1325,31 @@ Each body the tool returns is prefixed with a staleness note when the file is
 more than a day old, because a memory is a point-in-time observation and a
 file:line citation in it may no longer hold.
 
+### Credentials never reach a memory file
+
+A memory file is read back into the system prompt of every later session in the
+same project. A credential stored in one is not written once; it is re-sent on
+every request, to whichever provider that session uses, until somebody opens the
+file. Two checks stop that, and neither has a setting to turn it off.
+
+Session extraction masks what it writes. Anything the extractor produces that
+looks like a credential is replaced with `[REDACTED]` before `session-notes.md`
+is written, and the run logs which class fired at `warn` level. The sentence
+around the value survives, so "the deploy token is `[REDACTED]`" still records
+that a deploy token exists.
+
+`Write`, `Edit` and `BatchEdit` refuse instead. A write into the memory
+directory whose new content carries a credential is rejected with a message
+naming the class, and no bytes are written. `BatchEdit` aborts the whole batch,
+including its clean edits. The check looks only at what the call adds, so a
+memory file that already holds a credential stays editable and the edit that
+removes it goes through. Everywhere else on disk these tools are unchanged.
+
+Recognised classes: Anthropic, OpenAI, GitHub, GitLab, npm, Slack, Google, AWS,
+Hugging Face, JWTs, PEM private-key blocks, and any `token: <long value>`-style
+assignment. Every rule anchors on a vendor prefix or on an assignment, so an
+ordinary identifier such as `keyboard_shortcuts_v2` is left alone.
+
 ### Environment variables
 
 | Variable                      | Effect                                                                    |

@@ -68,6 +68,9 @@ pub mod message_utils;
 pub mod file_history;
 pub mod file_snapshot;
 
+// Credential masking for text on its way into long-lived storage.
+pub mod redact;
+
 // Snapshot/undo system — tracks file changes per session for /undo support.
 pub mod snapshot;
 

@@ -174,6 +174,15 @@ impl Tool for FileEditTool {
             ));
         }
 
+        // What this call adds, not the whole file: a memory file that already
+        // carries a credential still has to be editable, and the edit that
+        // removes it must not be the one that gets refused.
+        if let Some(refusal) =
+            crate::memory_guard::refuse_secret_write(ctx, &path, &params.new_string)
+        {
+            return ToolResult::error(refusal);
+        }
+
         // Write back
         if let Err(e) = ctx.write_text(&path, new_content.as_bytes()).await {
             return ToolResult::error(format!("Failed to write file {}: {}", path.display(), e));

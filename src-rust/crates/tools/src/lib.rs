@@ -47,6 +47,7 @@ pub mod lsp_tool;
 pub mod mcp_auth_tool;
 pub mod mcp_resources;
 pub mod mcp_tool;
+pub mod memory_guard;
 pub mod memory_tool;
 pub mod monitor_tool;
 pub mod notebook_edit;

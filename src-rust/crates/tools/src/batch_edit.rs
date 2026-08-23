@@ -167,6 +167,15 @@ impl Tool for BatchEditTool {
             let old_string = edit.old_string.replace("\r\n", "\n");
             let new_string = edit.new_string.replace("\r\n", "\n");
 
+            // In the validation phase, so a credential aborts the batch before
+            // any file is touched. Only what this edit adds is checked: a
+            // memory file that already carries one must stay editable.
+            if let Some(refusal) = crate::memory_guard::refuse_secret_write(ctx, &path, &new_string)
+            {
+                pre_check_errors.push(format!("Edit {i}: {refusal}"));
+                continue;
+            }
+
             let count = normalized.matches(&old_string).count();
             if count == 0 {
                 pre_check_errors.push(format!(

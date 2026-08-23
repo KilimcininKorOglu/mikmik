@@ -131,6 +131,8 @@ Write content to a file. Creates the file and any missing parent directories. Ov
 
 The previous content is stored, so `/undo` can put it back.
 
+A write into the [auto memory directory](configuration.md#auto-memory) is refused when the content carries a credential, because a memory file is re-sent in the system prompt of every later session. The refusal names the class and never the value. Everywhere else this check is silent.
+
 When a language server serves the file, the result also carries the problems the
 write introduced, and the file can be formatted by that server first. Both are
 settings; see [configuration.md#language-servers](configuration.md#language-servers).
@@ -156,6 +158,8 @@ An edit that would produce the bytes already on disk is refused rather than repo
 
 `old_string` proves its own address, and nothing else. It says the text is in the file now; it says nothing about whether the file is still the one that was read, or whether that text was ever displayed. The [`editGuard`](configuration.md#edit-guard) setting adds those checks. It is `off` by default.
 
+An edit that would add a credential to a file in the [auto memory directory](configuration.md#auto-memory) is refused. Only `new_string` is checked, so a memory file that already holds one stays editable and the edit that removes it goes through.
+
 When a language server serves the file, the result also carries the problems the
 write introduced, and the file can be formatted by that server first. Both are
 settings; see [configuration.md#language-servers](configuration.md#language-servers).
@@ -175,6 +179,8 @@ Apply multiple `Edit`-style edits in a single tool call. More efficient than cal
 Edits within the same file are applied in order. If any individual edit fails (string not found, not unique), the batch is aborted and no changes are written.
 
 [`editGuard`](configuration.md#edit-guard) applies here too, on the first edit that touches each file. A later edit in the same batch works on content the same call produced, so there is nothing to hold it to. Checking only `Edit` would make this tool the way around the guard.
+
+The credential check runs here too, in the validation phase. One edit that would add a credential to a memory file aborts the whole batch, clean edits included.
 
 Like `Write` and `Edit`, the result carries the language server's verdict when
 `lsp_diagnostics_on_write` is on. The whole batch is reported at once: the files

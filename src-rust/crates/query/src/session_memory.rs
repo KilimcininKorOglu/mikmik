@@ -308,16 +308,36 @@ impl SessionMemoryExtractor {
             Err(e) => return Err(e.into()),
         };
 
-        // Build the new entries block
+        // Build the new entries block.
+        //
+        // The content is model output derived from the conversation, and this
+        // file is read back into the system prompt of every later session in
+        // the project. A credential that reaches it is not stored once; it is
+        // re-sent on every request until somebody opens the file. This is the
+        // last point where the text is still one string in one process.
         let date_str = chrono::Local::now().format("%Y-%m-%d").to_string();
         let mut new_block = format!("\n### Session memories — {}\n\n", date_str);
+        let mut masked_classes: Vec<&'static str> = Vec::new();
         for memory in memories {
+            let redacted = mikmik_core::redact::redact_secrets(&memory.content);
+            for class in &redacted.classes {
+                if !masked_classes.contains(class) {
+                    masked_classes.push(class);
+                }
+            }
             new_block.push_str(&format!(
                 "- **[{}]** {} *(confidence: {:.0}%)*\n",
                 memory.category.label(),
-                memory.content,
+                redacted.text,
                 memory.confidence * 100.0
             ));
+        }
+        if !masked_classes.is_empty() {
+            tracing::warn!(
+                classes = %masked_classes.join(", "),
+                path = %target_path.display(),
+                "Masked a credential on its way into the memory directory"
+            );
         }
 
         // Insert under the auto-extracted memories section header (or append it)
@@ -788,5 +808,49 @@ MEMORY: code_pattern | 7 | Uses builder pattern";
         let block = mikmik_core::memdir::build_memory_prompt_content(dir.path());
         assert!(block.contains("session-notes.md"), "{block}");
         assert!(block.contains("[project]"), "{block}");
+    }
+
+    /// This file enters the system prompt of every later session in the
+    /// project, so a credential stored here is re-sent on every request.
+    /// The literal below is shaped like a GitHub token and is not one.
+    #[tokio::test]
+    async fn a_credential_never_reaches_the_notes_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = session_notes_path(dir.path());
+        let secret = "ghp_AAAABBBBCCCCDDDDEEEEFFFFGGGG";
+
+        SessionMemoryExtractor::persist(
+            &[a_memory(&format!("the deploy token is {secret}"))],
+            &target,
+        )
+        .await
+        .expect("persist");
+
+        let written = std::fs::read_to_string(&target).expect("read back");
+        assert!(
+            !written.contains(secret),
+            "the credential was stored verbatim:\n{written}"
+        );
+        assert!(written.contains("[REDACTED]"), "{written}");
+        assert!(
+            written.contains("the deploy token is"),
+            "the sentence around it must survive:\n{written}"
+        );
+    }
+
+    /// Masking must not touch a memory that only reads like one.
+    #[tokio::test]
+    async fn an_ordinary_fact_is_stored_word_for_word() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = session_notes_path(dir.path());
+        let fact = "keyboard_shortcuts_v2 is resolved by KeybindingResolver";
+
+        SessionMemoryExtractor::persist(&[a_memory(fact)], &target)
+            .await
+            .expect("persist");
+
+        let written = std::fs::read_to_string(&target).expect("read back");
+        assert!(written.contains(fact), "{written}");
+        assert!(!written.contains("[REDACTED]"), "{written}");
     }
 }

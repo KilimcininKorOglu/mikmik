@@ -84,6 +84,14 @@ impl Tool for FileWriteTool {
             }
         }
 
+        // Before the write, and before the parent directory work matters: a
+        // memory file is re-sent on every later request, so a credential must
+        // not reach one.
+        if let Some(refusal) = crate::memory_guard::refuse_secret_write(ctx, &path, &params.content)
+        {
+            return ToolResult::error(refusal);
+        }
+
         let existed = path.exists();
         let before_content = if existed {
             match tokio::fs::read(&path).await {

@@ -47,10 +47,6 @@ pub use spinner::{
     sample_completion_verb, sample_spinner_verb, SPINNER_VERBS, TURN_COMPLETION_VERBS,
 };
 
-// Remote session sync and cloud session API (T3-1, T3-2).
-pub mod cloud_session;
-pub mod remote_session;
-
 // AGENTS.md hierarchical memory loading (T4-1).
 pub mod advisor;
 pub mod agentsmd;

@@ -98,7 +98,6 @@ glob = { workspace = true }
 similar = { workspace = true }
 which = { workspace = true }
 tokio-util = { workspace = true }
-tokio-tungstenite = { workspace = true }
 futures = { workspace = true }
 rusqlite = { workspace = true }
 # Optional: real audio capture for voice input (gated behind the `voice` feature)

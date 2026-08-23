@@ -864,6 +864,11 @@ async fn main() -> anyhow::Result<()> {
     let file_history = Arc::new(ParkingMutex::new(
         mikmik_core::file_history::FileHistory::new(),
     ));
+    // One store for the session, so a read in one turn still authorises an
+    // edit in the next. See `mikmik_tools::edit_guard`.
+    let file_snapshots = Arc::new(ParkingMutex::new(
+        mikmik_core::file_snapshot::FileSnapshotStore::new(),
+    ));
     let current_turn = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     // Load plugins and register any plugin-provided MCP servers into the
@@ -1050,6 +1055,7 @@ async fn main() -> anyhow::Result<()> {
         cost_tracker: cost_tracker.clone(),
         session_id: session_id.clone(),
         file_history: file_history.clone(),
+        file_snapshots: file_snapshots.clone(),
         current_turn: current_turn.clone(),
         non_interactive: is_non_interactive,
         mcp_manager: mcp_manager_arc.clone(),
@@ -8907,6 +8913,9 @@ mod bang_command_tests {
             session_id: "bang-command-test".to_string(),
             file_history: std::sync::Arc::new(parking_lot::Mutex::new(
                 mikmik_core::file_history::FileHistory::new(),
+            )),
+            file_snapshots: std::sync::Arc::new(parking_lot::Mutex::new(
+                mikmik_core::file_snapshot::FileSnapshotStore::new(),
             )),
             current_turn: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             non_interactive: true,

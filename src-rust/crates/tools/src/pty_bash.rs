@@ -1341,6 +1341,9 @@ mod tests {
             file_history: std::sync::Arc::new(parking_lot::Mutex::new(
                 mikmik_core::file_history::FileHistory::new(),
             )),
+            file_snapshots: std::sync::Arc::new(parking_lot::Mutex::new(
+                mikmik_core::file_snapshot::FileSnapshotStore::new(),
+            )),
             current_turn: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             non_interactive: true,
             mcp_manager: None,

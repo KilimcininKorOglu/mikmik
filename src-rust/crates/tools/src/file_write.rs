@@ -116,6 +116,9 @@ impl Tool for FileWriteTool {
         // Run any configured formatter for this file type.
         crate::try_format_file(&path.to_string_lossy(), ctx).await;
 
+        // After the formatter, so the recorded content is what is on disk.
+        crate::edit_guard::record_written_file(ctx, &path).await;
+
         let line_count = params.content.lines().count();
         let byte_count = params.content.len();
 

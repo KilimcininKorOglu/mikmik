@@ -30,6 +30,7 @@ pub mod bundled_skills;
 pub mod computer_use;
 pub mod config_tool;
 pub mod cron;
+pub mod edit_guard;
 pub mod editor_host;
 pub mod enter_plan_mode;
 pub mod exit_plan_mode;
@@ -423,6 +424,11 @@ pub struct ToolContext {
     pub cost_tracker: Arc<CostTracker>,
     pub session_id: String,
     pub file_history: Arc<parking_lot::Mutex<mikmik_core::file_history::FileHistory>>,
+    /// What this session has read from each file, and what keeps failing
+    /// against it. The reading tools fill it and the editing tools check it;
+    /// see `mikmik_core::file_snapshot`. A context built with a fresh store
+    /// has read nothing, so every guard correctly stays silent.
+    pub file_snapshots: Arc<parking_lot::Mutex<mikmik_core::file_snapshot::FileSnapshotStore>>,
     pub current_turn: Arc<AtomicUsize>,
     /// If true, suppress interactive prompts (batch / CI mode).
     pub non_interactive: bool,
@@ -928,6 +934,9 @@ mod tests {
             session_id: "test".to_string(),
             file_history: Arc::new(parking_lot::Mutex::new(
                 mikmik_core::file_history::FileHistory::new(),
+            )),
+            file_snapshots: Arc::new(parking_lot::Mutex::new(
+                mikmik_core::file_snapshot::FileSnapshotStore::new(),
             )),
             current_turn: Arc::new(AtomicUsize::new(0)),
             non_interactive: true,

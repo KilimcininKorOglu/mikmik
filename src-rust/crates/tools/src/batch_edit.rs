@@ -124,11 +124,12 @@ impl Tool for BatchEditTool {
                 continue;
             }
 
-            let original = if let Some(content) = path_content.get(&path.display().to_string()) {
+            let cached = path_content.get(&path.display().to_string()).cloned();
+            let from_disk = cached.is_none();
+            let original = match cached {
                 // use cached edited content if available
-                content.clone()
-            } else {
-                match ctx.read_text(&path).await {
+                Some(content) => content,
+                None => match ctx.read_text(&path).await {
                     Ok(c) => c,
                     Err(e) => {
                         pre_check_errors.push(format!(
@@ -139,8 +140,22 @@ impl Tool for BatchEditTool {
                         ));
                         continue;
                     }
-                }
+                },
             };
+
+            // Held to what this session read, on the first edit that touches
+            // this file. A later edit in the same batch works on content this
+            // call produced, so there is nothing to compare it with. The same
+            // guard runs in `FileEditTool`; skipping it here would make this
+            // tool the way around it.
+            if from_disk {
+                if let Some(refusal) =
+                    crate::edit_guard::check(ctx, &path, &original, &edit.old_string, false)
+                {
+                    pre_check_errors.push(format!("Edit {}: {}", i, refusal.message));
+                    continue;
+                }
+            }
 
             // Detect the current content's dominant line ending BEFORE editing
             // so it survives the write (#225).  Match on an LF-normalized view
@@ -223,6 +238,14 @@ impl Tool for BatchEditTool {
                         new_content.as_bytes(),
                         self.name(),
                     );
+                    // One batch can apply several edits to one file, and the
+                    // recorded line numbers cannot be mapped across a chain of
+                    // them. Forgetting the path leaves the next edit unguarded,
+                    // which is honest; keeping the numbers would guard it
+                    // against text that has moved.
+                    let mut store = ctx.file_snapshots.lock();
+                    store.clear_failures(path);
+                    store.forget(path);
                 }
                 Err(e) => {
                     // Attempt rollback of already-written files.

@@ -171,6 +171,16 @@ impl Tool for FileReadTool {
             ));
         }
 
+        // Record what this read displayed, so an edit can be held to it. A read
+        // that showed the whole file records no line set at all, because there
+        // is then nothing the model has not seen. See `crate::edit_guard`.
+        let displayed = if start == 0 && end == total_lines {
+            None
+        } else {
+            Some((start + 1..=end).collect())
+        };
+        ctx.file_snapshots.lock().record(&path, &content, displayed);
+
         ToolResult::success(output)
     }
 }

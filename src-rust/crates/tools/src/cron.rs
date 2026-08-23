@@ -583,6 +583,9 @@ mod tests {
             file_history: Arc::new(parking_lot::Mutex::new(
                 mikmik_core::file_history::FileHistory::new(),
             )),
+            file_snapshots: Arc::new(parking_lot::Mutex::new(
+                mikmik_core::file_snapshot::FileSnapshotStore::new(),
+            )),
             current_turn: Arc::new(AtomicUsize::new(0)),
             non_interactive: true,
             mcp_manager: None,

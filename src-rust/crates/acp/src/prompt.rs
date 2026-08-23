@@ -87,6 +87,7 @@ pub async fn handle(
         cost_tracker: session.cost_tracker.clone(),
         session_id: session.session_id.0.to_string(),
         file_history: session.file_history.clone(),
+        file_snapshots: session.file_snapshots.clone(),
         current_turn: session.current_turn.clone(),
         non_interactive: false, // ACP routes permissions via the bridge
         mcp_manager: session_mcp

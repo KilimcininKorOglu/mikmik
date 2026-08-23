@@ -38,6 +38,10 @@ pub struct SessionState {
     cancel_token: parking_lot::Mutex<CancellationToken>,
     pub pending_permissions: Arc<parking_lot::Mutex<PendingPermissionStore>>,
     pub file_history: Arc<parking_lot::Mutex<mikmik_core::file_history::FileHistory>>,
+    /// What this session has read from each file. Per session, like the
+    /// history beside it, so one editor session's reads never authorise
+    /// another's edits.
+    pub file_snapshots: Arc<parking_lot::Mutex<mikmik_core::file_snapshot::FileSnapshotStore>>,
     pub current_turn: Arc<std::sync::atomic::AtomicUsize>,
     pub settings: parking_lot::Mutex<SessionSettings>,
     /// Human-readable name, shown by anything that lists sessions.
@@ -140,6 +144,9 @@ impl SessionState {
             )),
             file_history: Arc::new(parking_lot::Mutex::new(
                 mikmik_core::file_history::FileHistory::new(),
+            )),
+            file_snapshots: Arc::new(parking_lot::Mutex::new(
+                mikmik_core::file_snapshot::FileSnapshotStore::new(),
             )),
             current_turn: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             settings: parking_lot::Mutex::new(SessionSettings::default()),

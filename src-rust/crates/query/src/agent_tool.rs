@@ -826,6 +826,9 @@ pub(crate) mod tests {
             file_history: Arc::new(parking_lot::Mutex::new(
                 mikmik_core::file_history::FileHistory::new(),
             )),
+            file_snapshots: Arc::new(parking_lot::Mutex::new(
+                mikmik_core::file_snapshot::FileSnapshotStore::new(),
+            )),
             current_turn: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             non_interactive: false,
             mcp_manager: None,

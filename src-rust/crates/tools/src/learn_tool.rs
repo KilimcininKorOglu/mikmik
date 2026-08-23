@@ -439,14 +439,16 @@ mod tests {
     async fn a_credential_in_a_lesson_is_masked() {
         let _lock = ENV_LOCK.lock().await;
         let f = fixture();
-        let secret = "ghp_AAAABBBBCCCCDDDDEEEEFFFFGGGG";
+        // Assembled at run time: a contiguous `ghp_AAAA…` in the source is a
+        // GitHub token as far as push protection is concerned.
+        let secret = format!("ghp{}{}", "_", "A".repeat(30));
 
         let result = learn(&f.ctx, &format!("the deploy token is {secret}")).await;
 
         assert!(!result.is_error, "{}", result.content);
         assert!(result.content.contains("masked"), "{}", result.content);
         let written = std::fs::read_to_string(&f.learned).expect("read back");
-        assert!(!written.contains(secret), "{written}");
+        assert!(!written.contains(&secret), "{written}");
         assert!(written.contains("[REDACTED]"), "{written}");
     }
 

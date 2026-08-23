@@ -156,24 +156,34 @@ pub fn find_secrets(input: &str) -> Vec<&'static str> {
 mod tests {
     use super::*;
 
-    /// The literals below are shaped like credentials on purpose; none is real.
     fn masked(input: &str) -> String {
         redact_secrets(input).text
+    }
+
+    /// A credential-shaped string, assembled at run time.
+    ///
+    /// Never write one of these out as a single literal. A scanner reads the
+    /// source, not the program: a contiguous `hf_AAAA…` in a test file is a
+    /// Hugging Face token as far as GitHub push protection is concerned, and
+    /// the push is rejected. Splitting the prefix from the body means the
+    /// pattern exists only in memory. `team_memory_sync.rs` does the same.
+    fn shaped(prefix: &str, joint: &str, fill: usize) -> String {
+        format!("{prefix}{joint}{}", "A".repeat(fill))
     }
 
     #[test]
     fn each_vendor_prefix_is_masked() {
         let cases = [
-            ("anthropic", "sk-ant-api03-AAAABBBBCCCCDDDDEEEEFFFF"),
-            ("openai", "sk-AAAABBBBCCCCDDDDEEEEFFFFGGGG"),
-            ("github", "ghp_AAAABBBBCCCCDDDDEEEEFFFFGGGG"),
-            ("github", "github_pat_AAAABBBBCCCCDDDDEEEE"),
-            ("gitlab", "glpat-AAAABBBBCCCCDDDDEEEE"),
-            ("npm", "npm_AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIII"),
-            ("slack", "xoxb-1111111111-AAAABBBBCCCC"),
-            ("google", "AIzaAAAABBBBCCCCDDDDEEEEFFFFGGGGHHHH"),
-            ("aws", "AKIAIOSFODNN7EXAMPLE"),
-            ("huggingface", "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"),
+            ("anthropic", shaped("sk-", "ant-api03-", 24)),
+            ("openai", shaped("sk", "-", 24)),
+            ("github", shaped("ghp", "_", 30)),
+            ("github", shaped("github", "_pat_", 24)),
+            ("gitlab", shaped("glpat", "-", 24)),
+            ("npm", shaped("npm", "_", 36)),
+            ("slack", shaped("xox", "b-1111111111-", 12)),
+            ("google", shaped("AIz", "a", 35)),
+            ("aws", shaped("AKI", "A", 16)),
+            ("huggingface", shaped("hf", "_", 36)),
         ];
 
         for (class, literal) in cases {
@@ -192,10 +202,14 @@ mod tests {
 
     #[test]
     fn a_jwt_is_masked_but_a_dotted_triple_is_not() {
-        assert_eq!(
-            masked("token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
-            "token [REDACTED]"
+        let jwt = format!(
+            "{}{}.{}.{}",
+            "ey",
+            "JhbGciOiJIUzI1NiJ9",
+            "A".repeat(20),
+            "B".repeat(20)
         );
+        assert_eq!(masked(&format!("token {jwt}")), "token [REDACTED]");
         // A version string and a package path both look like `a.b.c`.
         let ordinary = "crates_core_memdir.find_relevant_memories.simple_scoring";
         assert_eq!(masked(ordinary), ordinary);
@@ -244,23 +258,26 @@ mod tests {
 
     #[test]
     fn several_secrets_in_one_string_all_go() {
-        let result =
-            redact_secrets("first ghp_AAAABBBBCCCCDDDDEEEEFFFFGGGG then AKIAIOSFODNN7EXAMPLE done");
+        let github = shaped("ghp", "_", 30);
+        let aws = shaped("AKI", "A", 16);
+        let result = redact_secrets(&format!("first {github} then {aws} done"));
         assert_eq!(result.text, "first [REDACTED] then [REDACTED] done");
         assert_eq!(result.classes, vec!["github", "aws"]);
     }
 
     #[test]
     fn a_repeated_class_is_reported_once() {
-        let result = redact_secrets("AKIAIOSFODNN7EXAMPLE and ASIAIOSFODNN7EXAMPLE");
+        let one = shaped("AKI", "A", 16);
+        let two = shaped("ASI", "A", 16);
+        let result = redact_secrets(&format!("{one} and {two}"));
         assert_eq!(result.classes, vec!["aws"]);
         assert_eq!(result.text, "[REDACTED] and [REDACTED]");
     }
 
     #[test]
     fn finding_does_not_quote_what_it_found() {
-        let classes = find_secrets("key sk-ant-api03-AAAABBBBCCCCDDDDEEEEFFFF");
-        assert_eq!(classes, vec!["anthropic"]);
+        let key = shaped("sk-", "ant-api03-", 24);
+        assert_eq!(find_secrets(&format!("key {key}")), vec!["anthropic"]);
         assert!(find_secrets("nothing to see here").is_empty());
     }
 
@@ -269,10 +286,11 @@ mod tests {
     #[test]
     fn finding_and_masking_agree() {
         for text in [
-            "ghp_AAAABBBBCCCCDDDDEEEEFFFFGGGG",
-            "plain text",
-            "password: ABCDEFGHIJKLMNOPQRSTUV",
+            shaped("ghp", "_", 30),
+            "plain text".to_string(),
+            "password: ABCDEFGHIJKLMNOPQRSTUV".to_string(),
         ] {
+            let text = text.as_str();
             assert_eq!(
                 find_secrets(text).is_empty(),
                 redact_secrets(text).is_clean(),

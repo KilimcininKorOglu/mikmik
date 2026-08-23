@@ -817,7 +817,9 @@ MEMORY: code_pattern | 7 | Uses builder pattern";
     async fn a_credential_never_reaches_the_notes_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let target = session_notes_path(dir.path());
-        let secret = "ghp_AAAABBBBCCCCDDDDEEEEFFFFGGGG";
+        // Assembled at run time: a contiguous `ghp_AAAA…` in the source is a
+        // GitHub token as far as push protection is concerned.
+        let secret = format!("ghp{}{}", "_", "A".repeat(30));
 
         SessionMemoryExtractor::persist(
             &[a_memory(&format!("the deploy token is {secret}"))],
@@ -828,7 +830,7 @@ MEMORY: code_pattern | 7 | Uses builder pattern";
 
         let written = std::fs::read_to_string(&target).expect("read back");
         assert!(
-            !written.contains(secret),
+            !written.contains(&secret),
             "the credential was stored verbatim:\n{written}"
         );
         assert!(written.contains("[REDACTED]"), "{written}");

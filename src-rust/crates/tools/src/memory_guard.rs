@@ -112,17 +112,28 @@ mod tests {
         }
     }
 
-    const SECRET: &str = "the key is ghp_AAAABBBBCCCCDDDDEEEEFFFFGGGG";
+    /// A credential-shaped string, assembled at run time.
+    ///
+    /// Never write one out as a single literal. A scanner reads the source,
+    /// not the program: a contiguous `ghp_AAAA…` in a test file is a GitHub
+    /// token as far as push protection is concerned, and the push is rejected.
+    fn fake_token() -> String {
+        format!("ghp{}{}", "_", "A".repeat(30))
+    }
+
+    fn secret_text() -> String {
+        format!("the key is {}", fake_token())
+    }
 
     #[tokio::test]
     async fn a_credential_bound_for_the_memory_directory_is_refused() {
         let _lock = ENV_LOCK.lock().await;
         let f = fixture();
-        let message = refuse_secret_write(&f.ctx, &f.memory_dir.join("notes.md"), SECRET)
+        let message = refuse_secret_write(&f.ctx, &f.memory_dir.join("notes.md"), &secret_text())
             .expect("the write should have been refused");
         assert!(message.contains("github"), "{message}");
         assert!(
-            !message.contains("ghp_AAAABBBBCCCCDDDDEEEEFFFFGGGG"),
+            !message.contains(&fake_token()),
             "the refusal quoted the secret back: {message}"
         );
     }
@@ -132,14 +143,16 @@ mod tests {
         let _lock = ENV_LOCK.lock().await;
         let f = fixture();
         let nested = f.memory_dir.join("topics").join("deploy.md");
-        assert!(refuse_secret_write(&f.ctx, &nested, SECRET).is_some());
+        assert!(refuse_secret_write(&f.ctx, &nested, &secret_text()).is_some());
     }
 
     #[tokio::test]
     async fn the_same_content_is_allowed_anywhere_else() {
         let _lock = ENV_LOCK.lock().await;
         let f = fixture();
-        assert!(refuse_secret_write(&f.ctx, &f.elsewhere.join("main.rs"), SECRET).is_none());
+        assert!(
+            refuse_secret_write(&f.ctx, &f.elsewhere.join("main.rs"), &secret_text()).is_none()
+        );
     }
 
     #[tokio::test]
@@ -163,7 +176,7 @@ mod tests {
 
         let result = crate::FileWriteTool
             .execute(
-                json!({ "file_path": target.to_string_lossy(), "content": SECRET }),
+                json!({ "file_path": target.to_string_lossy(), "content": secret_text() }),
                 &f.ctx,
             )
             .await;
@@ -185,7 +198,7 @@ mod tests {
                 json!({
                     "file_path": target.to_string_lossy(),
                     "old_string": "the environment",
-                    "new_string": SECRET,
+                    "new_string": secret_text(),
                 }),
                 &f.ctx,
             )
@@ -211,7 +224,7 @@ mod tests {
             .execute(
                 json!({ "edits": [
                     { "file_path": target.to_string_lossy(), "old_string": "alpha", "new_string": "ALPHA" },
-                    { "file_path": target.to_string_lossy(), "old_string": "beta", "new_string": SECRET },
+                    { "file_path": target.to_string_lossy(), "old_string": "beta", "new_string": secret_text() },
                 ] }),
                 &f.ctx,
             )
@@ -235,12 +248,15 @@ mod tests {
 
         let result = crate::FileWriteTool
             .execute(
-                json!({ "file_path": target.to_string_lossy(), "content": SECRET }),
+                json!({ "file_path": target.to_string_lossy(), "content": secret_text() }),
                 &f.ctx,
             )
             .await;
 
         assert!(!result.is_error, "{}", result.content);
-        assert_eq!(std::fs::read_to_string(&target).expect("read back"), SECRET);
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read back"),
+            secret_text()
+        );
     }
 }

@@ -1315,15 +1315,19 @@ Tag the commit, then wait for the release workflow.
 without frontmatter is still findable through its text but ranks below one that
 names the topic.
 
-Session extraction writes `session-notes.md` there on its own.
+Session extraction writes `session-notes.md` there on its own, and the
+[`Learn`](tools.md#learn) tool writes `learned.md`: one durable lesson per
+entry, newest first, deduplicated, 100 entries at most.
 
 ### What the model sees
 
 While the feature is on, the system prompt carries a `<memory>` block naming
 the directory, the `MEMORY.md` index (capped at 200 lines and 25 KB), and a
 one-line manifest entry per file with its type, description and age. Bodies are
-not loaded; the model reads one with the `Memory` tool, which is offered only
-while the feature is on.
+not loaded; the model reads one with the [`Memory`](tools.md#memory) tool. The
+block also tells the model to record a single lesson with
+[`Learn`](tools.md#learn) and a whole document with `Write`. Both tools are
+offered only while the feature is on.
 
 Each body the tool returns is prefixed with a staleness note when the file is
 more than a day old, because a memory is a point-in-time observation and a

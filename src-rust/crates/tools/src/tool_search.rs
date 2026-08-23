@@ -53,6 +53,8 @@ fn keywords_for(name: &str) -> &'static [&'static str] {
         "Skill" => &["skill", "slash", "command", "template", "prompt"],
         "Config" => &["config", "settings", "model", "permission"],
         "SendMessage" => &["message", "broadcast", "inbox", "communicate"],
+        "Memory" => &["memory", "remember", "recall", "notes", "past"],
+        "Learn" => &["memory", "remember", "lesson", "record", "note"],
         _ => &[],
     }
 }
@@ -67,6 +69,10 @@ static SUPPLEMENTAL_TOOLS: &[(&str, &str)] = &[
     (
         "Memory",
         "Load the full text of memory files about a topic.",
+    ),
+    (
+        "Learn",
+        "Record one durable lesson about this project for a later session.",
     ),
 ];
 
@@ -334,5 +340,24 @@ mod tests {
             out.contains("Agent"),
             "Agent tool should be discoverable even though it lives outside all_tools():\n{out}"
         );
+    }
+
+    /// Both memory tools are registered in the query crate's roster rather
+    /// than in `all_tools()`, so the catalog only knows them through the
+    /// supplement. Without an entry each, a session with memory on carries a
+    /// tool that `ToolSearch` reports as not existing.
+    #[tokio::test]
+    async fn both_memory_tools_are_discoverable_via_supplement() {
+        let out = run("select:Memory,Learn").await;
+        assert!(out.contains("Memory:"), "{out}");
+        assert!(out.contains("Learn:"), "{out}");
+        assert!(!out.contains("Not found"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn a_search_for_remembering_finds_both_memory_tools() {
+        let out = run("remember something for a later session").await;
+        assert!(out.contains("Memory"), "{out}");
+        assert!(out.contains("Learn"), "{out}");
     }
 }

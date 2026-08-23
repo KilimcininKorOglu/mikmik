@@ -45,9 +45,11 @@ pub fn build_tool_roster(
     }
 
     // And again for memory: with the feature off there is no directory to
-    // search, so the tool could only ever answer "nothing is there".
+    // search, so the tool could only ever answer "nothing is there". `Learn`
+    // rides the same gate, because it writes into the directory `Memory` reads.
     if mikmik_core::memdir::is_auto_memory_enabled(config.auto_memory_enabled) {
         tools.push(Box::new(mikmik_tools::MemoryTool));
+        tools.push(Box::new(mikmik_tools::LearnTool));
     }
 
     if let Some(manager) = &mcp_manager {
@@ -163,18 +165,27 @@ mod tests {
     }
 
     #[test]
-    fn the_memory_tool_is_offered_only_when_the_directory_is_kept() {
+    fn the_memory_tools_are_offered_only_when_the_directory_is_kept() {
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _env = MemoryEnvGuard::cleared();
 
         // Off by default, so a session that never asked pays no schema tokens.
-        assert!(!names(&build_tool_roster(None, &Config::default())).contains(&"Memory"));
+        let bare = build_tool_roster(None, &Config::default());
+        let off = names(&bare);
+        assert!(!off.contains(&"Memory"), "{off:?}");
+        assert!(!off.contains(&"Learn"), "{off:?}");
 
-        let on = Config {
+        let config = Config {
             auto_memory_enabled: Some(true),
             ..Default::default()
         };
-        assert!(names(&build_tool_roster(None, &on)).contains(&"Memory"));
+        let kept = build_tool_roster(None, &config);
+        let on = names(&kept);
+        assert!(on.contains(&"Memory"), "{on:?}");
+        // `Learn` writes into the directory `Memory` reads, so one gate has to
+        // decide both. Offering a writer with no reader, or the other way
+        // round, would leave half the feature advertised.
+        assert!(on.contains(&"Learn"), "{on:?}");
     }
 
     #[test]

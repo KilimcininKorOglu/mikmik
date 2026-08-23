@@ -516,9 +516,10 @@ pub fn build_memory_prompt_content(memory_dir: &Path) -> String {
     }
 
     let mut parts: Vec<String> = vec![format!(
-        "Memory directory: {}\nWrite a new memory as a `.md` file there, with \
-         `name`, `description` and `type` frontmatter, and add one line for it \
-         to {}.",
+        "Memory directory: {}\nFor one durable lesson, call the `Learn` tool; \
+         it deduplicates and files it for you. For a whole document, write a \
+         `.md` file there with `name`, `description` and `type` frontmatter, \
+         and add one line for it to {}.",
         memory_dir.display(),
         MEMORY_ENTRYPOINT
     )];

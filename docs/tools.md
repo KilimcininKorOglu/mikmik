@@ -569,6 +569,28 @@ Load the full text of memory files about a topic. The system prompt lists which 
 
 The query is scored against each file's `name` (weight 2), `description` (1), filename (0.5) and body (0.25), so search by topic rather than by exact wording. The frontmatter outranks the body because it is what the author chose to call the file, and a body hit counts once per word however often the word occurs, so a long file that repeats a term cannot outrank a short one that names the topic. Only files scoring above zero are returned, newest first among equal scores. Defaults to 3 files, capped at 10.
 
+Offered only while [auto memory](configuration.md#auto-memory) is on.
+
+---
+
+### Learn
+
+**Permission level:** Write
+
+Record one durable lesson about the project, so a later session starts knowing it. Writes into `learned.md` in the [auto memory directory](configuration.md#auto-memory), which `Memory` then loads like any other memory file.
+
+| Parameter | Type   | Required | Description                                          |
+|-----------|--------|----------|------------------------------------------------------|
+| `lesson`  | string | yes      | The lesson, as a statement that stands on its own    |
+| `topic`   | string | no       | A few words for the heading                          |
+| `context` | string | no       | Where the lesson came from                           |
+
+The tool does the bookkeeping that `Write` leaves to the model: newest first, one file, no duplicates, and a cap. A lesson already recorded is reported as such and nothing is written; comparison ignores case and spacing. `lesson` is kept to 2000 characters and `context` to 400. The file holds 100 entries, and the oldest drops when a new one arrives.
+
+A credential in a lesson is masked rather than refused, unlike `Write`: refusing would lose the whole lesson over a value that is not the point of it. The result says a class was masked.
+
+Use `Write` instead when the memory is a whole document rather than a sentence. Offered only while auto memory is on.
+
 ---
 
 ### SendMessage

@@ -247,6 +247,8 @@ mod managed_agents;
 pub use managed_agents::*;
 mod appearance;
 pub use appearance::*;
+mod memories;
+pub use memories::*;
 mod memory;
 pub use memory::*;
 mod permissions;
@@ -1386,6 +1388,7 @@ pub fn all_commands() -> Vec<Box<dyn SlashCommand>> {
         Box::new(StatusCommand),
         Box::new(DiffCommand),
         Box::new(MemoryCommand),
+        Box::new(MemoriesCommand),
         Box::new(UsageCommand),
         Box::new(DoctorCommand),
         Box::new(LoginCommand),

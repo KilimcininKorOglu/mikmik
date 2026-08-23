@@ -37,7 +37,8 @@ fn auto_memory_section(working_dir: &std::path::Path, config: &mikmik_core::Conf
         "\n\nAuto memory\n\
          ───────────\n\
          Path: {}\n\
-         {}, {}.",
+         {}, {}.\n\
+         Use /memories to read, measure or clear it.",
         dir.display(),
         index_line,
         files_line

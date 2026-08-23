@@ -13,7 +13,7 @@ This document is the complete reference for every slash command available in Mik
 5. [Configuration & Settings](#configuration--settings) — `/config`, `/turns`, `/poke`, `/yolo`, `/keybindings`, `/permissions`, `/hooks`, `/privacy-settings`, `/mcp`, `/output-style`, `/theme`, `/statusline`, `/timeline`, `/vim`, `/voice`, `/terminal-setup`
 6. [Code & Git](#code--git) — `/commit`, `/diff`, `/undo`, `/review`, `/security-review`, `/init`, `/search`
 7. [Search & Files](#search--files) — `/files`, `/context`
-8. [Memory & Context](#memory--context) — `/memory`, `/usage`, `/cost`, `/stats`, `/status`, `/insights`
+8. [Memory & Context](#memory--context) — `/memory`, `/memories`, `/usage`, `/cost`, `/stats`, `/status`, `/insights`
 9. [Agents & Tasks](#agents--tasks) — `/agents`, `/tasks`, `/todos`, `/goal`, `/managed-agents`, `/agent`
 10. [Planning & Review](#planning--review) — `/plan`, `/ultraplan`, `/ultrareview`
 11. [MCP & Integrations](#mcp--integrations) — `/mcp`, `/skills`, `ultracode`, `/plugin`, `/chrome`
@@ -867,8 +867,40 @@ Locations, in priority order: `<project>/.mikmik/AGENTS.md`,
 `<project>/AGENTS.md`, then `~/.config/mikmik/AGENTS.md`. Use `/init` to create
 one from a template.
 
-While auto memory is on, `/memory` also reports that directory and what it
-holds; see [Configuration](configuration.md#auto-memory).
+While auto memory is on, `/memory` also names the second store and points at
+`/memories`.
+
+---
+
+### /memories
+
+Inspect or clear the [auto memory directory](configuration.md#auto-memory), the
+second memory store. `/memory` above is the one you write and commit;
+`/memories` is the one MikMik keeps for itself, outside the checkout.
+
+```
+/memories                 — path, MEMORY.md, and the file list
+/memories stats           — file count, total size, and MEMORY.md against its caps
+/memories diagnose        — why consolidation has or has not run
+/memories clear           — list what would be deleted
+/memories clear confirm   — delete it
+/memories rebuild         — clear the consolidation state so the time gate opens
+```
+
+`clear` needs the literal word `confirm`. Without it, nothing is deleted and the
+command lists the files instead. The directory itself is kept either way, so the
+next session writes into it again.
+
+`diagnose` reports all three consolidation gates: hours since the last run,
+transcripts newer than it, and whether another process holds the lock. All three
+have to pass at the end of a turn.
+
+`rebuild` does not start a consolidation. A slash command has no session to
+spawn a sub-agent in, so it deletes the state file, which opens the time gate;
+the session gate still decides whether the run happens.
+
+Every subcommand reports that the feature is off when `autoMemoryEnabled` is
+unset, because there is then no directory to report on.
 
 ---
 

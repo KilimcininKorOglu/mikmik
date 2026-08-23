@@ -1284,6 +1284,9 @@ checkout, and the model writes to it during a session.
 |---------------------|---------|---------|-----------------------------------------------------------|
 | `autoMemoryEnabled` | boolean | false   | Keep the directory and show it to the model.              |
 
+`/memories` reads, measures and clears the directory; see
+[Commands](commands.md#memories).
+
 Off by default. Turn it on with `/settings` → **Auto memory**, and `/memory`
 reports the directory's path and what it holds.
 

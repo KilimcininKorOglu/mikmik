@@ -46,6 +46,28 @@ pub struct ConsolidationState {
     pub lock_etag: Option<String>,
 }
 
+/// Every gate's answer at once, for a user asking why nothing has consolidated.
+#[derive(Debug, Clone)]
+pub struct ConsolidationDiagnosis {
+    /// Whether enough time has passed since the last run.
+    pub time_ok: bool,
+    /// Hours since the last run, or `None` when there has not been one.
+    pub hours_elapsed: Option<f64>,
+    /// The threshold `hours_elapsed` is measured against.
+    pub min_hours: f64,
+    /// Transcripts modified since the last run.
+    pub sessions_seen: usize,
+    /// How many of those it takes.
+    pub sessions_needed: usize,
+    /// Whether no other process holds the lock. A lock older than an hour
+    /// counts as released.
+    pub lock_free: bool,
+    pub lock_file: PathBuf,
+    pub state_file: PathBuf,
+    /// Unix seconds of the last run, or `None` when there has not been one.
+    pub last_consolidated_at: Option<u64>,
+}
+
 /// Data returned by `AutoDream::maybe_trigger` when consolidation should proceed.
 /// Pass this to `AutoDream::finish_consolidation` after the agent completes.
 #[derive(Debug, Clone)]
@@ -123,23 +145,61 @@ impl AutoDream {
         Ok(true)
     }
 
+    /// Report every gate's answer, for `/memories diagnose`.
+    ///
+    /// Separate from [`Self::should_consolidate`] because that one stops at the
+    /// first closed gate: it only needs a yes or no, while somebody asking why
+    /// nothing has consolidated needs all three answers and the numbers behind
+    /// them. Both read the same gate helpers, so the two cannot disagree.
+    pub async fn diagnose(&self, state: &ConsolidationState) -> Result<ConsolidationDiagnosis> {
+        Ok(ConsolidationDiagnosis {
+            time_ok: self.time_gate_passes(state),
+            hours_elapsed: self.hours_since(state),
+            min_hours: self.config.min_hours,
+            sessions_seen: self.count_new_sessions(state, None).await?,
+            sessions_needed: self.config.min_sessions,
+            lock_free: self.lock_gate_passes().await?,
+            lock_file: self.lock_file.clone(),
+            state_file: self.state_file.clone(),
+            last_consolidated_at: state.last_consolidated_at,
+        })
+    }
+
+    /// Hours since the last consolidation, or `None` when there has not been
+    /// one.
+    fn hours_since(&self, state: &ConsolidationState) -> Option<f64> {
+        state
+            .last_consolidated_at
+            .map(|last| (now_secs().saturating_sub(last)) as f64 / 3600.0)
+    }
+
     fn time_gate_passes(&self, state: &ConsolidationState) -> bool {
-        let now_secs = now_secs();
-        match state.last_consolidated_at {
+        match self.hours_since(state) {
             None => true, // Never consolidated → always pass
-            Some(last) => {
-                let hours_elapsed = (now_secs.saturating_sub(last)) as f64 / 3600.0;
-                hours_elapsed >= self.config.min_hours
-            }
+            Some(hours_elapsed) => hours_elapsed >= self.config.min_hours,
         }
     }
 
     async fn session_gate_passes(&self, state: &ConsolidationState) -> Result<bool> {
+        let needed = self.config.min_sessions;
+        Ok(self.count_new_sessions(state, Some(needed)).await? >= needed)
+    }
+
+    /// Transcripts modified since the last consolidation.
+    ///
+    /// `stop_at` bounds the scan: the gate only needs to know whether the
+    /// threshold is reached, so it stops counting there, while a diagnosis
+    /// wants the real number and passes `None`.
+    async fn count_new_sessions(
+        &self,
+        state: &ConsolidationState,
+        stop_at: Option<usize>,
+    ) -> Result<usize> {
         let last_secs = state.last_consolidated_at.unwrap_or(0);
         let mut count = 0usize;
 
         if !self.conversations_dir.exists() {
-            return Ok(false);
+            return Ok(0);
         }
 
         let mut dir = fs::read_dir(&self.conversations_dir).await?;
@@ -152,14 +212,14 @@ impl AutoDream {
                     .as_secs();
                 if mtime_secs > last_secs {
                     count += 1;
-                    if count >= self.config.min_sessions {
-                        return Ok(true);
+                    if stop_at.is_some_and(|limit| count >= limit) {
+                        return Ok(count);
                     }
                 }
             }
         }
 
-        Ok(false)
+        Ok(count)
     }
 
     async fn lock_gate_passes(&self) -> Result<bool> {

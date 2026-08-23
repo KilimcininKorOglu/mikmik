@@ -161,6 +161,34 @@ fn path_matches(patterns: &[glob::Pattern], path: &str) -> bool {
 // Scope parsing
 // ---------------------------------------------------------------------------
 
+/// Split a scope line on the commas that separate its tokens.
+///
+/// Not every comma does: `tool:Edit(*.{ts,tsx})` carries two of its own inside
+/// a brace group, and splitting on those leaves two halves that name nothing.
+fn split_scope_tokens(scope: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0usize;
+    for c in scope.chars() {
+        match c {
+            '(' | '{' | '[' => depth += 1,
+            ')' | '}' | ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                tokens.push(std::mem::take(&mut current));
+                continue;
+            }
+            _ => {}
+        }
+        current.push(c);
+    }
+    tokens.push(current);
+    tokens
+        .into_iter()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
 /// Read a scope line such as `tool:Edit(*.rs), tool:Write(*.rs)`.
 ///
 /// Tokens: `text`, `thinking`, `tool`, `tool:Name`, `tool:Name(glob)`. A bare
@@ -175,11 +203,8 @@ pub fn parse_scope(scope: &str) -> RuleScope {
     let mut named: Vec<(String, Option<glob::Pattern>)> = Vec::new();
     let mut any_tool = false;
 
-    for token in scope.split(',') {
-        let token = token.trim();
-        if token.is_empty() {
-            continue;
-        }
+    for token in split_scope_tokens(scope) {
+        let token = token.as_str();
         if token.eq_ignore_ascii_case("text") {
             result.text = true;
             continue;
@@ -583,6 +608,10 @@ const BUILTIN_RULES: &[(&str, &str)] = &[
         include_str!("../assets/rules/go-add-cleanup.md"),
     ),
     (
+        "go-bench-loop",
+        include_str!("../assets/rules/go-bench-loop.md"),
+    ),
+    (
         "go-exp-promoted",
         include_str!("../assets/rules/go-exp-promoted.md"),
     ),
@@ -591,7 +620,15 @@ const BUILTIN_RULES: &[(&str, &str)] = &[
         "go-join-hostport",
         include_str!("../assets/rules/go-join-hostport.md"),
     ),
+    (
+        "go-new-expr",
+        include_str!("../assets/rules/go-new-expr.md"),
+    ),
     ("go-rand-v2", include_str!("../assets/rules/go-rand-v2.md")),
+    (
+        "go-range-int",
+        include_str!("../assets/rules/go-range-int.md"),
+    ),
     ("no-secrets", include_str!("../assets/rules/no-secrets.md")),
     (
         "rs-box-leak",
@@ -647,6 +684,10 @@ const BUILTIN_RULES: &[(&str, &str)] = &[
         include_str!("../assets/rules/ts-no-dynamic-import.md"),
     ),
     (
+        "ts-no-inline-cast-access",
+        include_str!("../assets/rules/ts-no-inline-cast-access.md"),
+    ),
+    (
         "ts-no-local-is-record",
         include_str!("../assets/rules/ts-no-local-is-record.md"),
     ),
@@ -665,6 +706,10 @@ const BUILTIN_RULES: &[(&str, &str)] = &[
     (
         "ts-promise-with-resolvers",
         include_str!("../assets/rules/ts-promise-with-resolvers.md"),
+    ),
+    (
+        "ts-redundant-clear-guard",
+        include_str!("../assets/rules/ts-redundant-clear-guard.md"),
     ),
     ("ts-set-map", include_str!("../assets/rules/ts-set-map.md")),
     (
@@ -900,6 +945,26 @@ mod tests {
     }
 
     #[test]
+    fn a_brace_group_in_a_scope_is_not_read_as_two_tokens() {
+        let rules = set_of(vec![rule(
+            "web-only",
+            "forbidden",
+            Some("tool:Edit(*.{ts,tsx}), tool:Write(*.{ts,tsx})"),
+        )]);
+        let fires = |file: &str| {
+            !rules
+                .match_tool(
+                    "Edit",
+                    &json!({ "file_path": file, "old_string": "", "new_string": "forbidden" }),
+                )
+                .is_empty()
+        };
+        assert!(fires("a.ts"));
+        assert!(fires("a.tsx"));
+        assert!(!fires("a.rs"));
+    }
+
+    #[test]
     fn a_scope_names_one_tool_and_one_file_type() {
         let rules = set_of(vec![rule(
             "rs-only",
@@ -1116,6 +1181,65 @@ mod tests {
             "restoring one named file is the advice, not the mistake"
         );
         assert!(fires("git commit -m 'add a thing'").is_empty());
+    }
+
+    /// The five rules whose upstream form matched a syntax tree.
+    ///
+    /// A regular expression cannot tie `$X` in one place to `$X` in another, so
+    /// each condition here is written to be narrow enough without that: what it
+    /// must catch and what it must leave alone are both asserted.
+    #[test]
+    fn the_rules_that_replaced_a_tree_match_still_read_the_right_code() {
+        let mut set = RuleSet::default();
+        for rule in builtin_rules() {
+            set.insert(rule.clone());
+        }
+        let fires = |file: &str, written: &str| -> Vec<String> {
+            set.match_tool("Write", &json!({ "file_path": file, "content": written }))
+                .iter()
+                .map(|r| r.name.clone())
+                .collect()
+        };
+
+        assert!(fires("main.go", "for i := 0; i < n; i++ {").contains(&"go-range-int".to_string()));
+        assert!(
+            fires("main.go", "for i := n - 1; i >= 0; i-- {").is_empty(),
+            "a descending loop is the documented exception"
+        );
+
+        assert!(fires("encode_test.go", "\tfor i := 0; i < b.N; i++ {")
+            .contains(&"go-bench-loop".to_string()));
+        assert!(
+            !fires("main.go", "\tfor i := 0; i < b.N; i++ {")
+                .contains(&"go-bench-loop".to_string()),
+            "benchmarks live in _test.go files"
+        );
+
+        assert!(fires("ptr.go", "func boolPtr(v bool) *bool { return &v }")
+            .contains(&"go-new-expr".to_string()));
+        assert!(
+            fires("ptr.go", "func find(k string) *Row { return db.lookup(k) }").is_empty(),
+            "a function that does work is not a pointer helper"
+        );
+
+        assert!(fires("a.ts", "const id = (resp as { data: string }).data;")
+            .contains(&"ts-no-inline-cast-access".to_string()));
+        assert!(
+            !fires("a.ts", "const resp = raw as Resp;\nconst id = resp.data;")
+                .contains(&"ts-no-inline-cast-access".to_string()),
+            "a named type read on its own line is the advice, not the mistake"
+        );
+
+        assert!(fires("a.ts", "if (this.timer) clearTimeout(this.timer);")
+            .contains(&"ts-redundant-clear-guard".to_string()));
+        assert!(
+            !fires(
+                "a.ts",
+                "if (this.timer) {\n\tclearTimeout(this.timer);\n\tthis.timer = undefined;\n}"
+            )
+            .contains(&"ts-redundant-clear-guard".to_string()),
+            "a guard that also does work is warranted"
+        );
     }
 
     #[test]

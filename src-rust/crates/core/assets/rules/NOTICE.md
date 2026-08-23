@@ -17,6 +17,13 @@ Files adapted from that project:
 `ts-no-test-timers.md`, `ts-no-tiny-functions.md`,
 `ts-promise-with-resolvers.md`, `ts-set-map.md`.
 
+Five more are adapted from the same project, but matched a syntax tree there.
+Their conditions were rewritten as regular expressions, and each body carries a
+note where the new form is looser or narrower than the original:
+
+`go-bench-loop.md`, `go-new-expr.md`, `go-range-int.md`,
+`ts-no-inline-cast-access.md`, `ts-redundant-clear-guard.md`.
+
 The rest (`git-add-all.md`, `git-destructive.md`, `no-secrets.md`,
 `rs-no-unwrap.md`, `rs-unsafe-safety.md`, `sql-parameterize.md`,
 `web-no-localstorage.md`) are this project's own.

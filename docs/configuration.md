@@ -1045,7 +1045,7 @@ session starts. A rule left with no usable condition is dropped.
 
 ### The rules that ship with the binary
 
-Twenty-nine rules cover the mistakes a pattern can catch. They are on by
+Thirty-four rules cover the mistakes a pattern can catch. They are on by
 default. A rule of the same name in your own directories **replaces** the
 built-in one, so disagreeing with one means rewriting it rather than only
 switching it off.
@@ -1054,12 +1054,15 @@ switching it off.
 |-------|-------|
 | Git   | `git-add-all`, `git-destructive`. Both **block**: they refuse the command rather than comment on it afterwards, because by then the work is gone. |
 | Rust  | `rs-no-unwrap`, `rs-unsafe-safety`, `rs-box-leak`, `rs-lazylock`, `rs-parking-lot`, `rs-match-ergonomics`, `rs-future-prelude`, `rs-result-type` |
-| Go    | `go-add-cleanup`, `go-exp-promoted`, `go-ioutil`, `go-join-hostport`, `go-rand-v2` |
-| TypeScript | `ts-no-any`, `ts-bare-catch`, `ts-import-type`, `ts-no-deprecated-leftovers`, `ts-no-dynamic-import`, `ts-no-local-is-record`, `ts-no-return-type`, `ts-no-test-timers`, `ts-no-tiny-functions`, `ts-promise-with-resolvers`, `ts-set-map` |
+| Go    | `go-add-cleanup`, `go-bench-loop`, `go-exp-promoted`, `go-ioutil`, `go-join-hostport`, `go-new-expr`, `go-rand-v2`, `go-range-int` |
+| TypeScript | `ts-no-any`, `ts-bare-catch`, `ts-import-type`, `ts-no-deprecated-leftovers`, `ts-no-dynamic-import`, `ts-no-inline-cast-access`, `ts-no-local-is-record`, `ts-no-return-type`, `ts-no-test-timers`, `ts-no-tiny-functions`, `ts-promise-with-resolvers`, `ts-redundant-clear-guard`, `ts-set-map` |
 | Any language | `no-secrets`, `sql-parameterize`, `web-no-localstorage` |
 
 Most of them are adapted from the `oh-my-pi` project under the MIT License; the
-notice is in `crates/core/assets/rules/NOTICE.md`.
+notice is in `crates/core/assets/rules/NOTICE.md`. Five of those matched a
+syntax tree upstream. A regular expression cannot tie one placeholder to
+another, so each of their conditions was rewritten to be narrow without that,
+and each file says where its version is looser.
 
 ### Seeing what a rule would do
 

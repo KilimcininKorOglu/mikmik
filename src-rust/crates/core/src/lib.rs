@@ -1499,6 +1499,17 @@ pub mod config {
             skip_serializing_if = "Option::is_none"
         )]
         pub advisor_model: Option<String>,
+        /// Live copy of [`Settings::memory_model`], merged in by
+        /// [`Settings::effective_config`].
+        ///
+        /// Unset means the session's own route, which is what the tree did
+        /// before this key existed.
+        #[serde(
+            default,
+            rename = "memoryModel",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub memory_model: Option<String>,
         /// Which advisor shapes run: `off`, `tool`, `runtime` or `both`.
         ///
         /// Unset reads as `tool`, the behaviour this tree had before the
@@ -2023,6 +2034,19 @@ pub mod config {
             skip_serializing_if = "Option::is_none"
         )]
         pub advisor_model: Option<String>,
+        /// Model the memory jobs run on: session-memory extraction and the
+        /// consolidation sub-agent.
+        ///
+        /// Both are background work with no user waiting on them, so a cheaper
+        /// model than the turn's is usually the right one. Accepts a bare model
+        /// ID or `"provider/model"`. Absent means the session's own route,
+        /// which is what the tree did before this key existed.
+        #[serde(
+            default,
+            rename = "memoryModel",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub memory_model: Option<String>,
         /// Which advisor shapes run: `off`, `tool`, `runtime` or `both`.
         /// Mirrors [`Config::advisor_mode`]; the nested block wins.
         #[serde(
@@ -3126,6 +3150,9 @@ pub mod config {
             if config.advisor_model.is_none() {
                 config.advisor_model = self.advisor_model.clone();
             }
+            if config.memory_model.is_none() {
+                config.memory_model = self.memory_model.clone();
+            }
             if config.advisor_mode.is_none() {
                 config.advisor_mode = self.advisor_mode.clone();
             }
@@ -3569,6 +3596,10 @@ pub mod config {
                 advisor_mode: base.config.advisor_mode,
                 advisor_sync_backlog: base.config.advisor_sync_backlog,
                 advisor_immune_turns: base.config.advisor_immune_turns,
+                // SECURITY: same reasoning. This names a model that runs on
+                // its own after every turn, on the user's account. A
+                // repository does not choose it.
+                memory_model: base.config.memory_model,
                 // SECURITY: the stricter of the two wins. A repository may ask
                 // for more checking than the user configured, because that only
                 // costs an extra read. It may never ask for less: a checkout
@@ -3790,6 +3821,7 @@ pub mod config {
                 advisor_mode: base.advisor_mode.clone(),
                 advisor_sync_backlog: base.advisor_sync_backlog,
                 advisor_immune_turns: base.advisor_immune_turns,
+                memory_model: base.memory_model.clone(),
                 companion: over.companion.clone().or(base.companion.clone()),
                 reduce_motion: base.reduce_motion,
                 terminal_progress_bar: base.terminal_progress_bar,
@@ -4114,6 +4146,68 @@ pub mod config {
             );
             assert_eq!(merged.config.effective_advisor_sync_backlog(), 3);
             assert_eq!(merged.config.effective_advisor_immune_turns(), 3);
+        }
+
+        /// Same reasoning as the advisor keys. This one names a model that runs
+        /// on its own after every turn, on the user's account.
+        #[test]
+        fn a_project_cannot_pick_the_memory_model() {
+            let project = Settings {
+                memory_model: Some("expensive/model".to_string()),
+                config: Config {
+                    memory_model: Some("expensive/model".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let merged =
+                Settings::merge_with(Settings::default(), project, ProjectRunnables::Allow);
+
+            assert_eq!(merged.config.memory_model, None);
+            assert_eq!(merged.memory_model, None);
+        }
+
+        #[test]
+        fn the_users_memory_model_survives_a_project_settings_file() {
+            let user = Settings {
+                config: Config {
+                    memory_model: Some("cheap/model".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let project = Settings {
+                config: Config {
+                    memory_model: Some("expensive/model".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let merged = Settings::merge_with(user, project, ProjectRunnables::Allow);
+
+            assert_eq!(merged.config.memory_model.as_deref(), Some("cheap/model"));
+        }
+
+        /// The nested `config` block wins over the top-level twin, the same way
+        /// every other paired key resolves.
+        #[test]
+        fn the_documented_memory_model_json_reaches_the_config() {
+            let settings: Settings = serde_json::from_str(
+                r#"{"version":1,"memoryModel":"top/level","config":{"memoryModel":"nested/wins"}}"#,
+            )
+            .expect("the settings file must parse");
+            assert_eq!(
+                settings.effective_config().memory_model.as_deref(),
+                Some("nested/wins")
+            );
+
+            let top_only: Settings =
+                serde_json::from_str(r#"{"version":1,"memoryModel":"top/level"}"#)
+                    .expect("the settings file must parse");
+            assert_eq!(
+                top_only.effective_config().memory_model.as_deref(),
+                Some("top/level")
+            );
         }
 
         #[test]

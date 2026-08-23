@@ -59,6 +59,10 @@ pub fn unset_model_row(key: &str) -> (&'static str, &'static str) {
             NO_ADVISOR,
             "No second model reviews the work, whatever the advisor mode says.",
         ),
+        "memory_model" => (
+            USE_THE_TURNS_MODEL,
+            "Memory extraction and consolidation run on whichever model the session is using.",
+        ),
         _ => (
             USE_THE_TURNS_MODEL,
             "The summary is written by whichever model the turn is using.",
@@ -146,6 +150,8 @@ pub struct SettingsScreen {
     pub compact_model: String,
     /// The model the advisor runs on, or empty for no advisor at all.
     pub advisor_model: String,
+    /// The model the memory jobs run on, or empty for the session's own.
+    pub memory_model: String,
     /// One of `off`, `tool`, `runtime`, `both`.
     pub advisor_mode: String,
     /// How far the watcher may fall behind before the primary waits for it.
@@ -212,6 +218,7 @@ impl SettingsScreen {
             searxng_url: String::new(),
             compact_model: String::new(),
             advisor_model: String::new(),
+            memory_model: String::new(),
             advisor_mode: mikmik_core::advisor::AdvisorMode::default()
                 .as_str()
                 .to_string(),
@@ -307,6 +314,12 @@ impl SettingsScreen {
             .settings_snapshot
             .config
             .advisor_model
+            .clone()
+            .unwrap_or_default();
+        self.memory_model = self
+            .settings_snapshot
+            .config
+            .memory_model
             .clone()
             .unwrap_or_default();
         // The effective values, not the raw fields: both are unset by default,
@@ -453,6 +466,11 @@ impl SettingsScreen {
                 self.advisor_model = model.clone().unwrap_or_default();
                 self.settings_snapshot.config.advisor_model = model.clone();
                 config.advisor_model = model;
+            }
+            "memory_model" => {
+                self.memory_model = model.clone().unwrap_or_default();
+                self.settings_snapshot.config.memory_model = model.clone();
+                config.memory_model = model;
             }
             _ => return,
         }
@@ -716,6 +734,19 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
                 .into(),
             kind: SettingKind::Bool,
             value: if screen.auto_memory { "true" } else { "false" }.to_string(),
+        },
+        SettingsEntry {
+            key: "memory_model".into(),
+            label: "Memory model".into(),
+            description:
+                "The model that extracts memories and consolidates them. Both run in the background with nobody waiting, so a cheaper model than the session's usually fits."
+                    .into(),
+            kind: SettingKind::ModelPicker,
+            value: if screen.memory_model.is_empty() {
+                USE_THE_TURNS_MODEL.to_string()
+            } else {
+                screen.memory_model.clone()
+            },
         },
         SettingsEntry {
             key: "agents_md".into(),
@@ -2100,6 +2131,51 @@ mod tests {
             Some("stale"),
             "the snapshot written to disk kept the old level"
         );
+        assert_eq!(screen.save_error, None);
+    }
+
+    /// Picking a memory model has to reach the running session's `config`, or
+    /// the row saves correctly and the background jobs keep spending the
+    /// session's model until the next launch.
+    #[test]
+    fn picking_a_memory_model_reaches_the_running_session() {
+        let _guard = HomeGuard::new();
+
+        let mut screen = SettingsScreen::new();
+        screen.open();
+        let mut config = Config::default();
+
+        assert!(
+            all_entries(&screen).iter().any(|e| e.key == "memory_model"),
+            "the memory model row is missing"
+        );
+        assert!(
+            screen.memory_model.is_empty(),
+            "unset by default, so nothing changes until it is asked for"
+        );
+
+        screen.set_picked_model(
+            "memory_model",
+            Some("openai/gpt-4o-mini".into()),
+            &mut config,
+        );
+
+        assert_eq!(screen.memory_model, "openai/gpt-4o-mini");
+        assert_eq!(
+            config.memory_model.as_deref(),
+            Some("openai/gpt-4o-mini"),
+            "the background jobs kept the session's model"
+        );
+        assert_eq!(
+            screen.settings_snapshot.config.memory_model.as_deref(),
+            Some("openai/gpt-4o-mini"),
+            "the snapshot written to disk kept the old value"
+        );
+
+        // Clearing goes back to the session's own model.
+        screen.set_picked_model("memory_model", None, &mut config);
+        assert_eq!(config.memory_model, None);
+        assert!(screen.memory_model.is_empty());
         assert_eq!(screen.save_error, None);
     }
 

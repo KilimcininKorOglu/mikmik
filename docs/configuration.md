@@ -82,6 +82,7 @@ than dropping them silently.
   "showMessageTimestamps": false,
   "advisorModel": "claude-opus-4-6",
   "advisorMode": "tool",
+  "memoryModel": "claude-haiku-4-5",
   "companion": { ... },
   "remoteControl": { ... },
   "acpAgents": { ... }
@@ -1283,6 +1284,15 @@ checkout, and the model writes to it during a session.
 | Key                 | Type    | Default | Description                                               |
 |---------------------|---------|---------|-----------------------------------------------------------|
 | `autoMemoryEnabled` | boolean | false   | Keep the directory and show it to the model.              |
+| `memoryModel`       | string  | unset   | Model the memory jobs run on. Unset uses the session's.   |
+
+`memoryModel` covers both background jobs: the extraction that writes
+`session-notes.md` at the end of a turn, and the consolidation sub-agent. Nobody
+waits on either, so a cheaper model than the session's usually fits. It accepts
+a bare model ID or `"provider/model"`, and the account comes with the model
+rather than staying on the session's. Set it from `/settings` → **Memory
+model**; a project's `settings.json` cannot set it, because it names a model
+that runs on the user's account without being asked for.
 
 `/memories` reads, measures and clears the directory; see
 [Commands](commands.md#memories).

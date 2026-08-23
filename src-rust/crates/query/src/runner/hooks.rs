@@ -159,6 +159,21 @@ pub(crate) async fn fire_stop_hooks(
     );
 }
 
+/// Where the memory jobs send their requests.
+///
+/// `memoryModel` names a model; `resolve_route` turns that into an account and
+/// a model together. Unset falls back to the route the turn itself used, which
+/// is what the tree did before the key existed.
+fn memory_route(
+    config: &mikmik_core::Config,
+    turn: &mikmik_core::config::Route,
+) -> mikmik_core::config::Route {
+    match config.memory_model.as_deref().map(str::trim) {
+        Some(model) if !model.is_empty() => config.resolve_route(model),
+        _ => turn.clone(),
+    }
+}
+
 /// Everything that runs once a turn has genuinely ended.
 ///
 /// The `Stop` hooks, session-memory extraction, and the AutoDream
@@ -178,12 +193,18 @@ pub(crate) async fn fire_end_of_turn(
         return;
     }
 
+    // Which account and model the memory jobs run on. `memoryModel` names one
+    // explicitly, resolved through `resolve_route` so the account comes with
+    // it: overriding the model alone while keeping the turn's account can name
+    // a pair that account cannot serve.
+    let memory_route = memory_route(&tool_ctx.config, route);
+
     if crate::session_memory::SessionMemoryExtractor::should_extract(messages) {
         // Through the account that just served the turn, not a fresh Anthropic
         // client built from `ANTHROPIC_API_KEY`. The provider is resolved
         // inside the task because the extraction is detached and the loop's own
         // handles borrow from the caller's frame.
-        let route = route.clone();
+        let route = memory_route.clone();
         let config = tool_ctx.config.clone();
         let messages = messages.to_vec();
         let working_dir = tool_ctx.working_dir.clone();
@@ -235,7 +256,11 @@ pub(crate) async fn fire_end_of_turn(
             "max_turns": 20,
             "system_prompt": "You are performing automatic memory consolidation. Complete the task and return a brief summary.",
             "run_in_background": true,
-            "isolation": null
+            "isolation": null,
+            // `AgentTool` reads this through `resolve_subagent_model`, which
+            // falls back to the session's own route when the value is absent.
+            // A null therefore keeps the behaviour the tree had.
+            "model": tool_ctx.config.memory_model,
         });
         let ctx = tool_ctx.clone();
         tokio::spawn(async move {
@@ -578,4 +603,46 @@ pub(crate) async fn run_post_tool_hooks(
     .await;
 
     mikmik_plugins::run_global_post_tool_hook(name, input, &result.content, result.is_error).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mikmik_core::config::{Config, Route};
+
+    fn turn_route() -> Route {
+        Route {
+            account: "anthropic".to_string(),
+            model: mikmik_core::config::WireModel::literal("claude-opus-5"),
+        }
+    }
+
+    /// Unset is the behaviour the tree had before the key existed: both memory
+    /// jobs run wherever the turn ran.
+    #[test]
+    fn an_unset_memory_model_leaves_the_turns_route_alone() {
+        let turn = turn_route();
+        for value in [None, Some(String::new()), Some("   ".to_string())] {
+            let config = Config {
+                memory_model: value.clone(),
+                ..Default::default()
+            };
+            let chosen = memory_route(&config, &turn);
+            assert_eq!(chosen.account, turn.account, "{value:?}");
+            assert_eq!(chosen.model.as_str(), turn.model.as_str(), "{value:?}");
+        }
+    }
+
+    /// The account comes with the model. Overriding the model alone while
+    /// keeping the turn's account can name a pair that account cannot serve.
+    #[test]
+    fn a_set_memory_model_brings_its_own_account() {
+        let config = Config {
+            memory_model: Some("openai/gpt-4o-mini".to_string()),
+            ..Default::default()
+        };
+        let chosen = memory_route(&config, &turn_route());
+        assert_eq!(chosen.account, "openai");
+        assert_eq!(chosen.model.as_str(), "gpt-4o-mini");
+    }
 }

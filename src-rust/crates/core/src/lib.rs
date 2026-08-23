@@ -66,6 +66,7 @@ pub mod message_utils;
 
 // Per-session file modification history (T4-6).
 pub mod file_history;
+pub mod file_snapshot;
 
 // Snapshot/undo system — tracks file changes per session for /undo support.
 pub mod snapshot;
@@ -1505,6 +1506,13 @@ pub mod config {
             skip_serializing_if = "Option::is_none"
         )]
         pub advisor_mode: Option<String>,
+        /// How strictly an edit is held to what the session has read: `off`,
+        /// `stale` or `strict`.
+        ///
+        /// Unset reads as `off`, the behaviour this tree had before the guard
+        /// existed. See [`Config::effective_edit_guard`].
+        #[serde(default, rename = "editGuard", skip_serializing_if = "Option::is_none")]
+        pub edit_guard: Option<String>,
         /// How far the watcher may fall behind before the primary waits for it.
         ///
         /// `0` never waits. Any other value is a backlog threshold; the primary
@@ -2533,6 +2541,16 @@ pub mod config {
             self.advisor_immune_turns.unwrap_or(3)
         }
 
+        /// How strictly an edit is held to what the session has read. Unset
+        /// reads as `off`, the behaviour this tree had before the guard
+        /// existed.
+        pub fn effective_edit_guard(&self) -> crate::file_snapshot::EditGuard {
+            match self.edit_guard.as_deref() {
+                Some(value) => crate::file_snapshot::EditGuard::parse(value),
+                None => crate::file_snapshot::EditGuard::default(),
+            }
+        }
+
         /// Whether the project's servers start with the session. Unset means
         /// no: a session that never touches code would pay for a process it
         /// does not use.
@@ -3376,6 +3394,24 @@ pub mod config {
         /// approves them follow `runnables`.
         fn merge_with(base: Self, over: Self, runnables: ProjectRunnables) -> Self {
             let allow_runnables = runnables == ProjectRunnables::Allow;
+            /// The higher rung of the edit-guard ladder, keeping whichever
+            /// spelling produced it so the value round-trips unchanged.
+            fn stricter_edit_guard(base: Option<String>, over: Option<String>) -> Option<String> {
+                use crate::file_snapshot::EditGuard;
+                let rung = |value: &Option<String>| match value.as_deref() {
+                    Some(text) => match EditGuard::parse(text) {
+                        EditGuard::Off => 0u8,
+                        EditGuard::Stale => 1,
+                        EditGuard::Strict => 2,
+                    },
+                    None => 0,
+                };
+                if rung(&over) > rung(&base) {
+                    over
+                } else {
+                    base
+                }
+            }
             // Helper to merge two HashMaps (over wins on key collision).
             fn merge_map<K: std::hash::Hash + Eq + Clone, V: Clone>(
                 mut base: HashMap<K, V>,
@@ -3530,6 +3566,13 @@ pub mod config {
                 advisor_mode: base.config.advisor_mode,
                 advisor_sync_backlog: base.config.advisor_sync_backlog,
                 advisor_immune_turns: base.config.advisor_immune_turns,
+                // SECURITY: the stricter of the two wins. A repository may ask
+                // for more checking than the user configured, because that only
+                // costs an extra read. It may never ask for less: a checkout
+                // that could set `off` would switch off a guard the user turned
+                // on, and the first thing it would hide is a file that checkout
+                // changed underneath the agent.
+                edit_guard: stricter_edit_guard(base.config.edit_guard, over.config.edit_guard),
                 companion: over.config.companion.or(base.config.companion),
                 provider_configs: base.config.provider_configs,
                 model_overrides: merge_map(
@@ -4087,6 +4130,54 @@ pub mod config {
                 crate::advisor::AdvisorMode::Runtime
             );
             assert_eq!(merged.config.effective_advisor_sync_backlog(), 1);
+        }
+
+        /// A repository may ask the agent to check its own work harder, because
+        /// that costs an extra read and nothing else.
+        #[test]
+        fn a_project_may_tighten_the_edit_guard() {
+            let project = Settings {
+                config: Config {
+                    edit_guard: Some("strict".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let merged =
+                Settings::merge_with(Settings::default(), project, ProjectRunnables::Allow);
+
+            assert_eq!(
+                merged.config.effective_edit_guard(),
+                crate::file_snapshot::EditGuard::Strict
+            );
+        }
+
+        /// It may never loosen one. The first thing a checkout would hide by
+        /// switching the guard off is a file that same checkout changed
+        /// underneath the agent.
+        #[test]
+        fn a_project_cannot_loosen_the_edit_guard() {
+            let user = Settings {
+                config: Config {
+                    edit_guard: Some("strict".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let project = Settings {
+                config: Config {
+                    edit_guard: Some("off".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let merged = Settings::merge_with(user, project, ProjectRunnables::Allow);
+
+            assert_eq!(
+                merged.config.effective_edit_guard(),
+                crate::file_snapshot::EditGuard::Strict,
+                "the project turned the user's guard off"
+            );
         }
 
         #[test]

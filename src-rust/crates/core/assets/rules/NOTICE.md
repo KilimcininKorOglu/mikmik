@@ -24,9 +24,10 @@ note where the new form is looser or narrower than the original:
 `go-bench-loop.md`, `go-new-expr.md`, `go-range-int.md`,
 `ts-no-inline-cast-access.md`, `ts-redundant-clear-guard.md`.
 
-The rest (`git-add-all.md`, `git-destructive.md`, `no-secrets.md`,
-`rs-no-unwrap.md`, `rs-unsafe-safety.md`, `sql-parameterize.md`,
-`web-no-localstorage.md`) are this project's own.
+The rest are this project's own: `git-add-all.md`, `git-destructive.md`,
+`no-secrets.md`, `rs-no-unwrap.md`, `rs-unsafe-safety.md`,
+`sql-parameterize.md`, `web-no-localstorage.md`, and every file whose name
+starts with `py-`, `sh-`, `java-`, `cs-`, `php-`, `c-` or `cpp-`.
 
 ## MIT License
 

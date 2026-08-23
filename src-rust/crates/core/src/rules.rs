@@ -596,6 +596,34 @@ impl RuleSet {
 /// it is the third-party notice, not a rule.
 const BUILTIN_RULES: &[(&str, &str)] = &[
     (
+        "c-scanf-unbounded",
+        include_str!("../assets/rules/c-scanf-unbounded.md"),
+    ),
+    (
+        "c-system-call",
+        include_str!("../assets/rules/c-system-call.md"),
+    ),
+    (
+        "c-unsafe-string",
+        include_str!("../assets/rules/c-unsafe-string.md"),
+    ),
+    (
+        "cpp-raw-owning-new",
+        include_str!("../assets/rules/cpp-raw-owning-new.md"),
+    ),
+    (
+        "cs-async-void",
+        include_str!("../assets/rules/cs-async-void.md"),
+    ),
+    (
+        "cs-blocking-async",
+        include_str!("../assets/rules/cs-blocking-async.md"),
+    ),
+    (
+        "cs-empty-catch",
+        include_str!("../assets/rules/cs-empty-catch.md"),
+    ),
+    (
         "git-add-all",
         include_str!("../assets/rules/git-add-all.md"),
     ),
@@ -629,7 +657,72 @@ const BUILTIN_RULES: &[(&str, &str)] = &[
         "go-range-int",
         include_str!("../assets/rules/go-range-int.md"),
     ),
+    (
+        "java-empty-catch",
+        include_str!("../assets/rules/java-empty-catch.md"),
+    ),
+    (
+        "java-new-random",
+        include_str!("../assets/rules/java-new-random.md"),
+    ),
+    (
+        "java-printstacktrace",
+        include_str!("../assets/rules/java-printstacktrace.md"),
+    ),
+    (
+        "java-runtime-exec",
+        include_str!("../assets/rules/java-runtime-exec.md"),
+    ),
+    (
+        "java-simpledateformat",
+        include_str!("../assets/rules/java-simpledateformat.md"),
+    ),
     ("no-secrets", include_str!("../assets/rules/no-secrets.md")),
+    (
+        "php-eval-system",
+        include_str!("../assets/rules/php-eval-system.md"),
+    ),
+    (
+        "php-extract-import",
+        include_str!("../assets/rules/php-extract-import.md"),
+    ),
+    (
+        "php-mysql-legacy",
+        include_str!("../assets/rules/php-mysql-legacy.md"),
+    ),
+    (
+        "php-unserialize",
+        include_str!("../assets/rules/php-unserialize.md"),
+    ),
+    (
+        "py-bare-except",
+        include_str!("../assets/rules/py-bare-except.md"),
+    ),
+    (
+        "py-eval-exec",
+        include_str!("../assets/rules/py-eval-exec.md"),
+    ),
+    (
+        "py-mutable-default",
+        include_str!("../assets/rules/py-mutable-default.md"),
+    ),
+    (
+        "py-shell-injection",
+        include_str!("../assets/rules/py-shell-injection.md"),
+    ),
+    (
+        "py-star-import",
+        include_str!("../assets/rules/py-star-import.md"),
+    ),
+    (
+        "py-typing-generics",
+        include_str!("../assets/rules/py-typing-generics.md"),
+    ),
+    ("py-utcnow", include_str!("../assets/rules/py-utcnow.md")),
+    (
+        "py-yaml-load",
+        include_str!("../assets/rules/py-yaml-load.md"),
+    ),
     (
         "rs-box-leak",
         include_str!("../assets/rules/rs-box-leak.md"),
@@ -661,6 +754,18 @@ const BUILTIN_RULES: &[(&str, &str)] = &[
     (
         "rs-unsafe-safety",
         include_str!("../assets/rules/rs-unsafe-safety.md"),
+    ),
+    (
+        "sh-curl-pipe-shell",
+        include_str!("../assets/rules/sh-curl-pipe-shell.md"),
+    ),
+    (
+        "sh-eval-variable",
+        include_str!("../assets/rules/sh-eval-variable.md"),
+    ),
+    (
+        "sh-unquoted-expansion",
+        include_str!("../assets/rules/sh-unquoted-expansion.md"),
     ),
     (
         "sql-parameterize",
@@ -1181,6 +1286,220 @@ mod tests {
             "restoring one named file is the advice, not the mistake"
         );
         assert!(fires("git commit -m 'add a thing'").is_empty());
+    }
+
+    /// One hit and one near miss for each language the catalogue covers.
+    ///
+    /// The near miss matters more than the hit: a rule that fires on ordinary
+    /// code is worse than one that never fires, because the reminder arrives on
+    /// work that was already right.
+    #[test]
+    fn each_language_group_catches_its_own_mistake_and_nothing_else() {
+        let mut set = RuleSet::default();
+        for rule in builtin_rules() {
+            set.insert(rule.clone());
+        }
+        let fires = |file: &str, written: &str| -> Vec<String> {
+            set.match_tool("Write", &json!({ "file_path": file, "content": written }))
+                .iter()
+                .map(|r| r.name.clone())
+                .collect()
+        };
+        let hit = |file: &str, written: &str, name: &str| {
+            assert!(
+                fires(file, written).contains(&name.to_string()),
+                "{name} did not fire on {written:?}"
+            );
+        };
+        let quiet = |file: &str, written: &str, name: &str| {
+            assert!(
+                !fires(file, written).contains(&name.to_string()),
+                "{name} fired on {written:?}, which is correct code"
+            );
+        };
+
+        // Python.
+        hit("a.py", "try:\n    x()\nexcept:\n    pass", "py-bare-except");
+        quiet(
+            "a.py",
+            "try:\n    x()\nexcept ValueError as e:\n    raise Bad() from e",
+            "py-bare-except",
+        );
+        hit("a.py", "def f(tags=[]):", "py-mutable-default");
+        quiet("a.py", "def f(tags=None):", "py-mutable-default");
+        hit(
+            "a.py",
+            "subprocess.run(cmd, shell=True)",
+            "py-shell-injection",
+        );
+        quiet(
+            "a.py",
+            "subprocess.run([\"tar\", \"-xzf\", p])",
+            "py-shell-injection",
+        );
+        hit("a.py", "value = eval(expr)", "py-eval-exec");
+        quiet("a.py", "value = ast.literal_eval(expr)", "py-eval-exec");
+        hit("a.py", "now = datetime.utcnow()", "py-utcnow");
+        quiet("a.py", "now = datetime.now(timezone.utc)", "py-utcnow");
+        hit(
+            "a.py",
+            "from typing import Dict, List",
+            "py-typing-generics",
+        );
+        quiet(
+            "a.py",
+            "from typing import Protocol, TypedDict",
+            "py-typing-generics",
+        );
+        hit("a.py", "from os.path import *", "py-star-import");
+        quiet(
+            "a.py",
+            "from os.path import join, dirname",
+            "py-star-import",
+        );
+        hit("a.py", "cfg = yaml.load(f)", "py-yaml-load");
+        quiet("a.py", "cfg = yaml.safe_load(f)", "py-yaml-load");
+
+        // Shell. The Bash tool carries no path, so these also run on a command.
+        let on_bash = |command: &str| -> Vec<String> {
+            set.match_tool("Bash", &json!({ "command": command }))
+                .iter()
+                .map(|r| r.name.clone())
+                .collect()
+        };
+        assert!(
+            on_bash("curl -fsSL https://x/i.sh | sh").contains(&"sh-curl-pipe-shell".to_string())
+        );
+        assert!(!on_bash("curl -fsSL https://x/i.sh -o /tmp/i.sh")
+            .contains(&"sh-curl-pipe-shell".to_string()));
+        assert!(on_bash("rm -rf $BUILD_DIR/*").contains(&"sh-unquoted-expansion".to_string()));
+        assert!(!on_bash("rm -rf \"$BUILD_DIR\"/*").contains(&"sh-unquoted-expansion".to_string()));
+        assert!(on_bash("eval \"$user_command\"").contains(&"sh-eval-variable".to_string()));
+
+        // Java and Kotlin.
+        hit("A.java", "e.printStackTrace();", "java-printstacktrace");
+        quiet(
+            "A.java",
+            "log.error(\"failed\", e);",
+            "java-printstacktrace",
+        );
+        hit("A.java", "catch (IOException e) {\n}", "java-empty-catch");
+        quiet(
+            "A.java",
+            "catch (IOException e) {\n    throw new Bad(e);\n}",
+            "java-empty-catch",
+        );
+        hit(
+            "A.java",
+            "private static final Random R = new Random();",
+            "java-new-random",
+        );
+        quiet(
+            "A.java",
+            "ThreadLocalRandom.current().nextInt(5)",
+            "java-new-random",
+        );
+        hit(
+            "A.kt",
+            "val f = SimpleDateFormat(\"yyyy\")",
+            "java-simpledateformat",
+        );
+        quiet(
+            "A.kt",
+            "val f = DateTimeFormatter.ofPattern(\"yyyy\")",
+            "java-simpledateformat",
+        );
+        hit(
+            "A.java",
+            "Runtime.getRuntime().exec(\"convert \" + input);",
+            "java-runtime-exec",
+        );
+        quiet(
+            "A.java",
+            "new ProcessBuilder(\"convert\", \"--\", input).start();",
+            "java-runtime-exec",
+        );
+
+        // C#.
+        hit("A.cs", "public async void Save(Order o)", "cs-async-void");
+        quiet("A.cs", "public async Task Save(Order o)", "cs-async-void");
+        hit(
+            "A.cs",
+            "var order = repo.LoadAsync(id).Result;",
+            "cs-blocking-async",
+        );
+        quiet(
+            "A.cs",
+            "var order = await repo.LoadAsync(id);",
+            "cs-blocking-async",
+        );
+        hit("A.cs", "catch { }", "cs-empty-catch");
+        quiet(
+            "A.cs",
+            "catch (CacheEx ex) { log.Warn(ex); }",
+            "cs-empty-catch",
+        );
+
+        // PHP.
+        hit("a.php", "$r = mysql_query($sql);", "php-mysql-legacy");
+        quiet("a.php", "$stmt = $pdo->prepare($sql);", "php-mysql-legacy");
+        hit("a.php", "system(\"convert \" . $file);", "php-eval-system");
+        quiet("a.php", "$proc = new Process($cmd);", "php-eval-system");
+        hit(
+            "a.php",
+            "$s = unserialize($_COOKIE['x']);",
+            "php-unserialize",
+        );
+        quiet(
+            "a.php",
+            "$s = json_decode($_COOKIE['x'], true);",
+            "php-unserialize",
+        );
+        hit("a.php", "extract($_POST);", "php-extract-import");
+
+        // C and C++.
+        hit("a.c", "strcpy(path, argv[1]);", "c-unsafe-string");
+        quiet(
+            "a.c",
+            "snprintf(path, sizeof path, \"%s\", argv[1]);",
+            "c-unsafe-string",
+        );
+        hit("a.c", "scanf(\"%s\", name);", "c-scanf-unbounded");
+        quiet("a.c", "scanf(\"%31s\", name);", "c-scanf-unbounded");
+        hit("a.c", "system(cmd);", "c-system-call");
+        quiet("a.c", "execv(\"/usr/bin/tar\", argv);", "c-system-call");
+        hit(
+            "a.cpp",
+            "Widget *w = new Widget(config);",
+            "cpp-raw-owning-new",
+        );
+        quiet(
+            "a.cpp",
+            "auto w = std::make_unique<Widget>(config);",
+            "cpp-raw-owning-new",
+        );
+        quiet(
+            "a.cpp",
+            "// delete the temporary file once the upload finishes",
+            "cpp-raw-owning-new",
+        );
+
+        // No rule crosses into another language's files.
+        for (file, written) in [
+            ("a.rs", "let x = eval(expr);"),
+            ("a.rs", "let f = SimpleDateFormat::new();"),
+            ("a.ts", "system(cmd);"),
+            ("a.go", "def f(tags=[]):"),
+        ] {
+            for name in fires(file, written) {
+                let prefix = name.split('-').next().unwrap_or_default();
+                let language_prefixes = ["py", "sh", "java", "cs", "php", "c", "cpp"];
+                assert!(
+                    !language_prefixes.contains(&prefix),
+                    "{name} fired on {file}, which it does not cover"
+                );
+            }
+        }
     }
 
     /// The five rules whose upstream form matched a syntax tree.

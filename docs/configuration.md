@@ -1045,7 +1045,7 @@ session starts. A rule left with no usable condition is dropped.
 
 ### The rules that ship with the binary
 
-Thirty-four rules cover the mistakes a pattern can catch. They are on by
+Sixty-one rules cover the mistakes a pattern can catch. They are on by
 default. A rule of the same name in your own directories **replaces** the
 built-in one, so disagreeing with one means rewriting it rather than only
 switching it off.
@@ -1056,13 +1056,26 @@ switching it off.
 | Rust  | `rs-no-unwrap`, `rs-unsafe-safety`, `rs-box-leak`, `rs-lazylock`, `rs-parking-lot`, `rs-match-ergonomics`, `rs-future-prelude`, `rs-result-type` |
 | Go    | `go-add-cleanup`, `go-bench-loop`, `go-exp-promoted`, `go-ioutil`, `go-join-hostport`, `go-new-expr`, `go-rand-v2`, `go-range-int` |
 | TypeScript | `ts-no-any`, `ts-bare-catch`, `ts-import-type`, `ts-no-deprecated-leftovers`, `ts-no-dynamic-import`, `ts-no-inline-cast-access`, `ts-no-local-is-record`, `ts-no-return-type`, `ts-no-test-timers`, `ts-no-tiny-functions`, `ts-promise-with-resolvers`, `ts-redundant-clear-guard`, `ts-set-map` |
+| Python | `py-bare-except`, `py-mutable-default`, `py-shell-injection`, `py-eval-exec`, `py-utcnow`, `py-typing-generics`, `py-star-import`, `py-yaml-load` |
+| Shell  | `sh-curl-pipe-shell`, `sh-unquoted-expansion`, `sh-eval-variable`. These also watch the `Bash` tool, so they see a command the model runs as well as a script it writes. |
+| Java, Kotlin | `java-printstacktrace`, `java-empty-catch`, `java-new-random`, `java-simpledateformat`, `java-runtime-exec` |
+| C#     | `cs-async-void`, `cs-blocking-async`, `cs-empty-catch` |
+| PHP    | `php-mysql-legacy`, `php-eval-system`, `php-unserialize`, `php-extract-import` |
+| C, C++ | `c-unsafe-string`, `c-scanf-unbounded`, `c-system-call`, `cpp-raw-owning-new` |
 | Any language | `no-secrets`, `sql-parameterize`, `web-no-localstorage` |
 
-Most of them are adapted from the `oh-my-pi` project under the MIT License; the
-notice is in `crates/core/assets/rules/NOTICE.md`. Five of those matched a
-syntax tree upstream. A regular expression cannot tie one placeholder to
-another, so each of their conditions was rewritten to be narrow without that,
-and each file says where its version is looser.
+Twenty-seven of them are adapted from the `oh-my-pi` project under the MIT
+License; the notice is in `crates/core/assets/rules/NOTICE.md`. Five of those
+matched a syntax tree upstream. A regular expression cannot tie one placeholder
+to another, so each of their conditions was rewritten to be narrow without
+that, and each file says where its version is looser. The rest are this
+project's own.
+
+A condition is a regular expression and nothing more, so a rule can only state
+what a pattern can see. It cannot say "call X without argument Y", because the
+`regex` crate has no lookaround. Where that mattered, the rule is written the
+other way round: `py-yaml-load` names the unsafe function rather than the
+missing argument.
 
 ### Seeing what a rule would do
 

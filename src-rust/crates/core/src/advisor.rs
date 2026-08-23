@@ -865,4 +865,52 @@ mod tests {
         assert!(guidance.contains("Watch the durable queue."), "{guidance}");
         assert!(guidance.contains("<attention"), "{guidance}");
     }
+
+    /// `ADVISOR.md` is review priorities: what to be suspicious of here. In
+    /// front of an executor that is noise, and it would cost every session the
+    /// tokens whether or not an advisor runs at all.
+    #[test]
+    fn the_attention_file_is_for_the_watcher_and_nobody_else() {
+        let project = tempfile::tempdir().expect("tempdir");
+        write(
+            &project.path().join("ADVISOR.md"),
+            "Watch the durable queue.\n",
+        );
+        write(
+            &project.path().join("AGENTS.md"),
+            "Run the tests before you claim it works.\n",
+        );
+
+        let memory = crate::agentsmd::build_memory_prompt(&crate::agentsmd::load_all_memory_files(
+            project.path(),
+            crate::agentsmd::MemoryFilenames {
+                agents_md: true,
+                claude_md: true,
+            },
+        ));
+        assert!(
+            memory.contains("Run the tests"),
+            "the memory file itself stopped loading: {memory}"
+        );
+        assert!(
+            !memory.contains("Watch the durable queue."),
+            "the attention file reached the primary's prompt: {memory}"
+        );
+
+        assert!(load_advisor_guidance(project.path()).contains("Watch the durable queue."));
+    }
+
+    /// A session with the mode on and no roster still gets a watcher. Without
+    /// the fallback, `runtime` would silently do nothing until the user found
+    /// out a roster directory was expected.
+    #[test]
+    fn the_built_in_watcher_reads_and_nothing_more() {
+        let watcher = AdvisorDefinition::default_watcher();
+        assert!(watcher.enabled);
+        assert_eq!(
+            watcher.model, None,
+            "the built-in watcher runs on advisorModel"
+        );
+        assert_eq!(watcher.tools, DEFAULT_ADVISOR_TOOLS);
+    }
 }

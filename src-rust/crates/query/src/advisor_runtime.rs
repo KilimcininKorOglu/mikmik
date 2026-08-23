@@ -701,6 +701,38 @@ mod tests {
     use super::*;
     use mikmik_core::types::{ContentBlock, MessageContent, Role};
 
+    /// A watcher costs a second model per turn, so the mode and the model both
+    /// have to be right before one starts. Getting this wrong in either
+    /// direction is expensive: a session that pays for a reviewer nobody asked
+    /// for, or a `runtime` setting that silently reviews nothing.
+    #[tokio::test]
+    async fn a_watcher_starts_only_when_the_mode_and_a_model_both_say_so() {
+        let started = |mode: Option<&str>, model: Option<&str>| {
+            let mut ctx = crate::agent_tool::tests::parent_context();
+            ctx.config.advisor_mode = mode.map(str::to_string);
+            ctx.config.advisor_model = model.map(str::to_string);
+            AdvisorSession::start(
+                &ctx,
+                &crate::QueryConfig::default(),
+                mikmik_core::cost::CostTracker::new(),
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .is_some()
+        };
+
+        assert!(
+            !started(None, Some("anthropic/claude-haiku-4-5")),
+            "default"
+        );
+        assert!(!started(Some("tool"), Some("anthropic/claude-haiku-4-5")));
+        assert!(!started(Some("off"), Some("anthropic/claude-haiku-4-5")));
+        assert!(started(Some("runtime"), Some("anthropic/claude-haiku-4-5")));
+        assert!(started(Some("both"), Some("anthropic/claude-haiku-4-5")));
+
+        assert!(!started(Some("runtime"), None), "no model, no watcher");
+        assert!(!started(Some("runtime"), Some("   ")), "blank is no model");
+    }
+
     /// The watcher's session id is built from its roster name, and a session id
     /// is what transcript, file-history and snapshot paths are built from. A
     /// roster file is project data, so its name has to be unable to reach out

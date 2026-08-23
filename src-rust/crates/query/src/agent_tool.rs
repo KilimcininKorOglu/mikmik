@@ -777,7 +777,7 @@ pub fn init_team_swarm_runner() {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -800,7 +800,7 @@ mod tests {
     }
 
     /// A parent context, permissive and otherwise unremarkable.
-    fn parent_context() -> ToolContext {
+    pub(crate) fn parent_context() -> ToolContext {
         struct AllowAll;
         impl mikmik_core::permissions::PermissionHandler for AllowAll {
             fn check_permission(

@@ -173,6 +173,54 @@ freedesktop spec has no equivalent token, so the XDG backend is sent
 `message-new-instant`; a sound theme without that name leaves the notification
 silent.
 
+### Edit guard
+
+| Key         | Type   | Default | Description                                                    |
+|-------------|--------|---------|----------------------------------------------------------------|
+| `editGuard` | string | `off`   | `off`, `stale` or `strict`. How strictly an edit is held to what this session read. |
+
+Inside the `config` object, not at the top level:
+
+```json
+"config": {
+  "editGuard": "strict"
+}
+```
+
+`Edit` addresses a file by content: `old_string` is both the address and its
+own proof, because text that is not in the file cannot match. That proof covers
+one thing. It says the text is in the file **now**. It says nothing about
+whether the file is still the one the model read, and nothing about whether the
+model ever saw that text.
+
+`Read` and `Write` record the file's content hash and the line numbers they
+displayed. `editGuard` decides what the editing tools do with that record.
+
+| Level    | Refuses                                                                                          |
+|----------|--------------------------------------------------------------------------------------------------|
+| `off`    | Nothing. The behaviour this tree had before the guard existed.                                    |
+| `stale`  | An edit to a file that changed after this session read it.                                        |
+| `strict` | The above, and an edit to lines the session never displayed. The error quotes those lines back.    |
+
+Two checks are on from `stale` up and have no level of their own: an edit that
+would write back the bytes already on disk is refused, and the third identical
+failed match against one file stops repeating advice that has failed twice.
+
+Every check is silent for a file this session never read. Enforcing
+read-before-edit is a different policy and is not implemented; an edit to an
+unread file behaves exactly as it did before.
+
+A partial `Read` narrows what `strict` allows, which is the point: an
+`offset`/`limit` read of a large file used to leave every other line editable
+blind. Two partial reads add up, and a whole-file read leaves nothing unseen.
+After an edit the record follows the change, so consecutive edits to one file
+work without re-reading.
+
+A project's `settings.json` may raise this level and may never lower it. A
+checkout that could set `off` would switch off a guard the user turned on, and
+the first thing that would hide is a file the same checkout changed underneath
+the agent.
+
 ### Advisor
 
 | Key                   | Type   | Default | Description                                                                                                                                       |

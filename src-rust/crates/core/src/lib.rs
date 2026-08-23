@@ -4132,6 +4132,18 @@ pub mod config {
             assert_eq!(merged.config.effective_advisor_sync_backlog(), 1);
         }
 
+        /// The shape `docs/configuration.md` tells the user to write. A user
+        /// pastes it, so it has to parse and it has to take effect.
+        #[test]
+        fn the_documented_edit_guard_json_parses_and_takes_effect() {
+            let documented = r#"{"version":1,"config":{"editGuard":"strict"}}"#;
+            let settings: Settings = serde_json::from_str(documented).expect("documented JSON");
+            assert_eq!(
+                settings.config.effective_edit_guard(),
+                crate::file_snapshot::EditGuard::Strict
+            );
+        }
+
         /// A repository may ask the agent to check its own work harder, because
         /// that costs an extra read and nothing else.
         #[test]

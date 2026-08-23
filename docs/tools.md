@@ -114,6 +114,8 @@ Read the contents of a file from the local filesystem. Returns file contents as 
 
 Supports reading: text files, images (PNG, JPG, GIF, WEBP — returned as base64), PDF files (text extraction), and Jupyter notebooks.
 
+Each read records the file's content and the line numbers it displayed. That record is what [`editGuard`](configuration.md#edit-guard) holds a later edit to, so a read with `offset`/`limit` narrows what `strict` will let you edit. Two partial reads of one file add up; a whole-file read leaves nothing unseen.
+
 ---
 
 ### Write
@@ -148,7 +150,11 @@ Perform an exact string replacement within an existing file. Fails if `old_strin
 | `new_string`  | string  | yes      | Replacement text                         |
 | `replace_all` | boolean | no       | Replace all occurrences (default: false) |
 
-Whitespace and indentation must match exactly.
+Whitespace and indentation must match exactly. Line endings do not: matching runs against an LF-normalized view, and every untouched region keeps its own endings when the file is written back.
+
+An edit that would produce the bytes already on disk is refused rather than reported as a change. This is reachable when `old_string` and `new_string` differ only in line endings, because they normalize to the same text.
+
+`old_string` proves its own address, and nothing else. It says the text is in the file now; it says nothing about whether the file is still the one that was read, or whether that text was ever displayed. The [`editGuard`](configuration.md#edit-guard) setting adds those checks. It is `off` by default.
 
 When a language server serves the file, the result also carries the problems the
 write introduced, and the file can be formatted by that server first. Both are
@@ -167,6 +173,8 @@ Apply multiple `Edit`-style edits in a single tool call. More efficient than cal
 | `edits`   | array | yes      | Array of `{file_path, old_string, new_string, replace_all}` objects |
 
 Edits within the same file are applied in order. If any individual edit fails (string not found, not unique), the batch is aborted and no changes are written.
+
+[`editGuard`](configuration.md#edit-guard) applies here too, on the first edit that touches each file. A later edit in the same batch works on content the same call produced, so there is nothing to hold it to. Checking only `Edit` would make this tool the way around the guard.
 
 Like `Write` and `Edit`, the result carries the language server's verdict when
 `lsp_diagnostics_on_write` is on. The whole batch is reported at once: the files

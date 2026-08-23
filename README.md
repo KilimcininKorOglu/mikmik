@@ -131,6 +131,8 @@ MikMik stores everything it persists under one directory: `$MIKMIK_HOME` if set,
 
 A second model can review the work: consulted by the main model when it decides to, or reading every turn on its own and interrupting when it sees a problem. See [`/advisor`](docs/commands.md#advisor).
 
+Edits can be held to what the session actually read, so a file that changed underneath the agent, or a line it never displayed, is refused instead of silently written. See [`editGuard`](docs/configuration.md#edit-guard).
+
 ## Devcontainer setup
 
 After cloning this repository, open it in VS Code and use Reopen in Container to start the development environment.

@@ -24,12 +24,15 @@ pub fn build_tool_roster(
     let mut tools: Vec<Box<dyn Tool>> = mikmik_tools::all_tools();
     tools.push(Box::new(crate::AgentTool));
 
-    // Offer the advisor only when a model backs it, so a session without one
-    // pays neither the tool schema nor the system-prompt guideline for it.
+    // Offer the advisor only when a model backs it and the mode asks the model
+    // to consult one, so a session without either pays neither the tool schema
+    // nor the system-prompt guideline for it. `advisorMode: runtime` runs a
+    // watcher instead, which the model does not call.
     if config
         .advisor_model
         .as_deref()
         .is_some_and(|model| !model.trim().is_empty())
+        && config.effective_advisor_mode().offers_tool()
     {
         tools.push(Box::new(mikmik_tools::AdvisorTool));
     }
@@ -92,6 +95,32 @@ mod tests {
             &with_advisor(Some("claude-haiku-4-5"))
         ))
         .contains(&"Advisor"));
+    }
+
+    #[test]
+    fn the_mode_decides_whether_the_model_may_ask() {
+        let with_mode = |mode: &str| {
+            let mut config = with_advisor(Some("claude-haiku-4-5"));
+            config.advisor_mode = Some(mode.to_string());
+            names(&build_tool_roster(None, &config)).contains(&"Advisor")
+        };
+
+        assert!(with_mode("tool"), "the default keeps today's behaviour");
+        assert!(with_mode("both"));
+        assert!(!with_mode("runtime"), "a watcher is not asked, it watches");
+        assert!(!with_mode("off"));
+    }
+
+    #[test]
+    fn no_agent_is_ever_offered_the_tool_it_would_advise_itself_with() {
+        let mut config = with_advisor(Some("claude-haiku-4-5"));
+        for mode in mikmik_core::advisor::AdvisorMode::ALL {
+            config.advisor_mode = Some(mode.to_string());
+            assert!(
+                !names(&build_tool_roster(None, &config)).contains(&"Advise"),
+                "Advise belongs to a watcher's own roster, never a primary's ({mode})"
+            );
+        }
     }
 
     /// Serialises the tests that clear the memory environment variables.

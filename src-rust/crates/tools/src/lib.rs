@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 // Sub-modules – each contains a full tool implementation.
 pub mod acp_agent;
+pub mod advise;
 pub mod advisor;
 pub mod apply_patch;
 pub mod ask_user;
@@ -68,6 +69,7 @@ pub mod worktree;
 
 // Re-exports for convenience.
 pub use acp_agent::AcpAgentTool;
+pub use advise::AdviseTool;
 pub use advisor::AdvisorTool;
 pub use apply_patch::ApplyPatchTool;
 pub use ask_user::AskUserQuestionTool;
@@ -454,6 +456,14 @@ pub struct ToolContext {
     /// in headless / non-interactive mode, where nothing owns the mode, and the
     /// tool then says the switch did not happen rather than claiming it did.
     pub plan_mode_tx: Option<tokio::sync::mpsc::UnboundedSender<EnterPlanModeEvent>>,
+    /// Channel the `Advise` tool puts a note on. Set only on a watching
+    /// advisor's own context; `None` everywhere else, and `Advise` is then not
+    /// registered at all, so no primary agent can advise itself.
+    pub advisor_note_tx:
+        Option<tokio::sync::mpsc::UnboundedSender<mikmik_core::advisor::AdvisorNote>>,
+    /// The roster entry this context belongs to, when it belongs to a watcher.
+    /// It rides on each note so the primary can say which watcher spoke.
+    pub advisor_name: Option<String>,
     /// Cancellation token for the owning query loop (issue #218). The parallel
     /// tool executor selects on this to abandon in-flight tools when the user
     /// cancels, and long-running tools may observe it to bail out early. Defaults
@@ -931,6 +941,8 @@ mod tests {
             plan_approval_tx: None,
             tool_output_tx: None,
             plan_mode_tx: None,
+            advisor_note_tx: None,
+            advisor_name: None,
             cancel_token: tokio_util::sync::CancellationToken::new(),
             current_call: None,
             editor: None,

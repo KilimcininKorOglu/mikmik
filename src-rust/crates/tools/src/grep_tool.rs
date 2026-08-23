@@ -432,6 +432,8 @@ mod tests {
             plan_approval_tx: None,
             tool_output_tx: None,
             plan_mode_tx: None,
+            advisor_note_tx: None,
+            advisor_name: None,
             cancel_token: tokio_util::sync::CancellationToken::new(),
             current_call: None,
             editor: None,

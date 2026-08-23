@@ -1078,6 +1078,10 @@ async fn main() -> anyhow::Result<()> {
         } else {
             Some(plan_mode_tx)
         },
+        // A primary agent has nobody to advise. `run_query_loop` sets these on
+        // the watcher's own context, where the `Advise` tool lives.
+        advisor_note_tx: None,
+        advisor_name: None,
         // Placeholder token; `run_query_loop` rebinds it to the loop's actual
         // cancel token so the parallel tool executor honours Ctrl-C (issue #218).
         cancel_token: tokio_util::sync::CancellationToken::new(),
@@ -8903,6 +8907,8 @@ mod bang_command_tests {
             plan_approval_tx: None,
             tool_output_tx: None,
             plan_mode_tx: None,
+            advisor_note_tx: None,
+            advisor_name: None,
             cancel_token: tokio_util::sync::CancellationToken::new(),
             current_call: None,
             editor: None,

@@ -1602,23 +1602,27 @@ The `managed_agents` key stores the managed-agents architecture configuration se
   "manager_model": "anthropic/claude-opus-4-6",
   "executor_model": "anthropic/claude-sonnet-4-6",
   "executor_max_turns": 20,
-  "max_concurrent": 3,
+  "max_concurrent_executors": 3,
   "executor_isolation": true,
-  "budget_split": {
-    "type": "Percentage",
-    "manager_pct": 20
-  },
-  "total_budget_usd": 5.00
+  "total_budget_usd": 5.00,
+  "preset_name": "anthropic-tiered"
 }
 ```
 
-`budget_split` types:
+| Key                        | Type            | Description                                                                        |
+|----------------------------|-----------------|------------------------------------------------------------------------------------|
+| `enabled`                  | boolean         | Whether managed agents are on.                                                     |
+| `manager_model`            | string          | Model the session itself runs on, in `provider/model` form.                        |
+| `executor_model`           | string          | Model every sub-agent runs on.                                                     |
+| `executor_max_turns`       | integer         | Turn limit for one executor. Default: 10.                                          |
+| `max_concurrent_executors` | integer         | How many executors may run at once. Default: 4.                                    |
+| `executor_isolation`       | boolean         | Give each executor its own git worktree. Default: false.                           |
+| `total_budget_usd`         | number \| null  | One pool the manager and its executors draw from. Null means no cap.               |
+| `preset_name`              | string \| null  | Name of the preset the configuration came from, for display only.                  |
 
-| Type         | JSON                                                                 | Description                        |
-|--------------|----------------------------------------------------------------------|------------------------------------|
-| `SharedPool` | `{ "type": "SharedPool" }`                                           | All agents draw from a single pool |
-| `Percentage` | `{ "type": "Percentage", "manager_pct": 20 }`                        | Manager gets N% of total budget    |
-| `FixedCaps`  | `{ "type": "FixedCaps", "manager_usd": 0.50, "executor_usd": 2.00 }` | Hard USD caps per role             |
+`total_budget_usd` is a single pool, not a split: the manager and every executor
+draw from the same figure, and the session stops when it is spent. The
+`--max-budget-usd` flag overrides it for one run.
 
 Configure via `/managed-agents configure` or `/managed-agents preset <name>`. Set `enabled: false` to disable without removing the configuration.
 

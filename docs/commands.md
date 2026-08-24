@@ -1064,9 +1064,6 @@ Configure the manager-executor agent architecture, where a manager model delegat
 /managed-agents configure executor-turns <n>          — set executor max turns
 /managed-agents configure concurrent <n>              — set max concurrent executors
 /managed-agents configure isolation on|off            — toggle executor isolation
-/managed-agents configure budget-split shared         — shared token pool
-/managed-agents configure budget-split percentage:<n> — percentage split (manager gets n%)
-/managed-agents configure budget-split fixed:<m>:<e>  — fixed USD caps (manager / executor)
 /managed-agents budget <amount>                       — set total budget in USD (0 to clear)
 ```
 

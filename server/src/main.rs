@@ -17,6 +17,7 @@ mod api;
 mod auth;
 mod config;
 mod crypt;
+mod policy;
 mod providers;
 mod state;
 mod store;
@@ -657,6 +658,153 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn no_policy_answers_no_content_rather_than_an_empty_object() {
+        // A client has to tell "nothing configured" from "unchanged".
+        let state = test_state();
+        let token = logged_in(&state, "ayse@firma.com", false).await;
+
+        let response = authed(&state, "GET", "/api/v1/policy", &token, None).await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn a_policy_reaches_every_account_with_its_etag() {
+        let state = test_state();
+        let admin = logged_in(&state, "admin@firma.com", true).await;
+        let ayse = logged_in(&state, "ayse@firma.com", false).await;
+
+        let written = authed(
+            &state,
+            "PUT",
+            "/api/v1/admin/policy",
+            &admin,
+            Some(json!({ "config": { "model": "claude-opus-4-6" } })),
+        )
+        .await;
+        assert_eq!(written.status(), StatusCode::OK);
+        let checksum = body_json(written).await["checksum"]
+            .as_str()
+            .expect("a checksum")
+            .to_string();
+
+        let fetched = authed(&state, "GET", "/api/v1/policy", &ayse, None).await;
+        assert_eq!(fetched.status(), StatusCode::OK);
+        assert_eq!(
+            fetched
+                .headers()
+                .get(header::ETAG)
+                .and_then(|v| v.to_str().ok()),
+            Some(checksum.as_str())
+        );
+        assert_eq!(
+            body_json(fetched).await["config"]["model"],
+            "claude-opus-4-6"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_client_that_already_holds_the_policy_gets_no_body() {
+        let state = test_state();
+        let admin = logged_in(&state, "admin@firma.com", true).await;
+        let ayse = logged_in(&state, "ayse@firma.com", false).await;
+
+        let checksum = body_json(
+            authed(
+                &state,
+                "PUT",
+                "/api/v1/admin/policy",
+                &admin,
+                Some(json!({ "config": { "model": "claude-opus-4-6" } })),
+            )
+            .await,
+        )
+        .await["checksum"]
+            .as_str()
+            .expect("a checksum")
+            .to_string();
+
+        let response = app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/policy")
+                    .header(header::AUTHORIZATION, format!("Bearer {ayse}"))
+                    .header(header::IF_NONE_MATCH, &checksum)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    }
+
+    #[tokio::test]
+    async fn a_changed_policy_changes_the_etag() {
+        let state = test_state();
+        let admin = logged_in(&state, "admin@firma.com", true).await;
+
+        let first = body_json(
+            authed(
+                &state,
+                "PUT",
+                "/api/v1/admin/policy",
+                &admin,
+                Some(json!({ "config": { "model": "a" } })),
+            )
+            .await,
+        )
+        .await["checksum"]
+            .clone();
+        let second = body_json(
+            authed(
+                &state,
+                "PUT",
+                "/api/v1/admin/policy",
+                &admin,
+                Some(json!({ "config": { "model": "b" } })),
+            )
+            .await,
+        )
+        .await["checksum"]
+            .clone();
+        assert_ne!(first, second);
+    }
+
+    #[tokio::test]
+    async fn a_policy_naming_something_to_run_is_refused_with_the_key() {
+        let state = test_state();
+        let admin = logged_in(&state, "admin@firma.com", true).await;
+
+        let response = authed(
+            &state,
+            "PUT",
+            "/api/v1/admin/policy",
+            &admin,
+            Some(json!({ "hooks": { "SessionStart": [] } })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let error = body_json(response).await["error"].to_string();
+        assert!(error.contains("hooks"), "the key was not named: {error}");
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_account_cannot_write_the_policy() {
+        let state = test_state();
+        let ayse = logged_in(&state, "ayse@firma.com", false).await;
+
+        let response = authed(
+            &state,
+            "PUT",
+            "/api/v1/admin/policy",
+            &ayse,
+            Some(json!({ "config": { "model": "whatever" } })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

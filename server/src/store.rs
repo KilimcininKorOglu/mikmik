@@ -20,7 +20,11 @@ use rusqlite::Connection;
 /// Each statement is `IF NOT EXISTS`, so opening an existing database is a
 /// no-op and there is no migration step to run or forget. A module owns its
 /// own `SCHEMA` constant and is listed here.
-const SCHEMA: &[&str] = &[crate::accounts::SCHEMA, crate::providers::SCHEMA];
+const SCHEMA: &[&str] = &[
+    crate::accounts::SCHEMA,
+    crate::providers::SCHEMA,
+    crate::policy::SCHEMA,
+];
 
 pub struct Store {
     conn: Mutex<Connection>,

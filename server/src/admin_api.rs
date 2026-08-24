@@ -35,6 +35,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/v1/admin/assignments", post(assign))
         .route("/api/v1/admin/assignments/remove", post(unassign))
         .route("/api/v1/admin/users", get(list_users).post(create_user))
+        .route(
+            "/api/v1/admin/policy",
+            get(read_policy).put(write_policy).delete(clear_policy),
+        )
 }
 
 /// Reject a caller who is not an administrator.
@@ -257,5 +261,44 @@ async fn create_user(
     match accounts::create_user(&state.store, &body.email, &body.password, body.is_admin) {
         Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
         Err(error) => failed("creating the user failed", error),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Policy
+// ---------------------------------------------------------------------------
+
+async fn read_policy(State(state): State<Arc<AppState>>) -> Response {
+    match crate::policy::get(&state.store) {
+        Ok(Some(stored)) => Json(serde_json::json!({
+            "settings": stored.settings,
+            "checksum": stored.checksum,
+        }))
+        .into_response(),
+        Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => failed("reading the policy failed", error),
+    }
+}
+
+/// Store a policy, or refuse it by naming the key that made it unacceptable.
+///
+/// Refusing here rather than dropping the key on the client is the point: an
+/// administrator who is told "no" can ask why, while one whose policy is
+/// silently ignored believes it applied.
+async fn write_policy(
+    State(state): State<Arc<AppState>>,
+    Json(settings): Json<serde_json::Value>,
+) -> Response {
+    match crate::policy::set(&state.store, &settings) {
+        Ok(checksum) => Json(serde_json::json!({ "checksum": checksum })).into_response(),
+        Err(error) => failed("the policy was refused", error),
+    }
+}
+
+async fn clear_policy(State(state): State<Arc<AppState>>) -> Response {
+    match crate::policy::clear(&state.store) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => failed("clearing the policy failed", error),
     }
 }

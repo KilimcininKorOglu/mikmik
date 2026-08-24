@@ -30,6 +30,7 @@ pub fn guarded() -> Router<Arc<AppState>> {
         .route("/api/v1/me", get(me))
         .route("/api/v1/logout", post(logout))
         .route("/api/v1/providers", get(entitled_providers))
+        .route("/api/v1/policy", get(policy))
 }
 
 /// Routes that must be reachable without one.
@@ -219,6 +220,36 @@ async fn me(
         groups,
     })
     .into_response()
+}
+
+/// The organisation's settings policy, with the checksum as its `ETag`.
+///
+/// A client that already holds this version sends it back as `If-None-Match`
+/// and receives 304 with no body, which is what makes an hourly poll cheap.
+/// No policy at all answers 204, so a client can tell "nothing configured"
+/// from "unchanged" without guessing.
+async fn policy(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let stored = match crate::policy::get(&state.store) {
+        Ok(stored) => stored,
+        Err(error) => {
+            warn!(%error, "reading the policy failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let Some(stored) = stored else {
+        return StatusCode::NO_CONTENT.into_response();
+    };
+
+    let known = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim);
+    if known == Some(stored.checksum.as_str()) {
+        return (StatusCode::NOT_MODIFIED, [(header::ETAG, stored.checksum)]).into_response();
+    }
+
+    ([(header::ETAG, stored.checksum)], Json(stored.settings)).into_response()
 }
 
 /// Every provider this account may use, with its key.

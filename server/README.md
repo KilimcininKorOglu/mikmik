@@ -112,6 +112,37 @@ from `MIKMIK_SERVER_SECRET`. The server can read them, which is what lets it
 hand them out; what this buys is that a copied `.sqlite` file is not enough on
 its own. Changing the secret makes every stored key unreadable.
 
+## Settings policy
+
+An organisation writes one policy. Every client fetches it and merges it over
+its own settings, so whatever the policy names, the user cannot override.
+
+```
+PUT    /api/v1/admin/policy   the settings object; answers its checksum
+GET    /api/v1/admin/policy   read it back
+DELETE /api/v1/admin/policy   remove it
+GET    /api/v1/policy         what a client fetches, with the checksum as ETag
+```
+
+A client sends the checksum back as `If-None-Match` and receives 304 with no
+body, which is what makes an hourly poll cheap. No policy at all answers 204,
+so a client can tell "nothing configured" from "unchanged".
+
+A policy may not set any of these keys, in either spelling and at either level:
+
+```
+hooks  mcpServers  formatter  lspServers  skills  acpAgents  remoteControl  workspace
+```
+
+Each names something the client would run, fetch or connect to, so a policy
+server able to set them would be a way to execute code on every machine in the
+organisation. It may also make `permissionMode` stricter but not set it to
+`bypassPermissions`.
+
+The write is refused with the offending key named, rather than accepted and
+dropped by the client. An administrator who is told "no" can ask why; one whose
+policy is silently ignored believes it applied.
+
 ## Development
 
 ```bash

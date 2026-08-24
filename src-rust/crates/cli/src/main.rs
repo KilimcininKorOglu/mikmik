@@ -7434,25 +7434,41 @@ fn print_codex_usage() {
 // `mikmik accounts` — unified read-only list across providers
 // ---------------------------------------------------------------------------
 
+/// The accounts `mikmik accounts --json` reports.
+///
+/// Names only: the values are live credentials, and printing them to stdout
+/// would leak them into shell history and CI logs.
+fn accounts_json(store: &mikmik_core::AuthStore, active: Option<&str>) -> serde_json::Value {
+    let accounts: Vec<serde_json::Value> = store
+        .credentials
+        .iter()
+        // The workspace session is not a model account: it authenticates
+        // against the organisation's own server, which serves no completions,
+        // and nothing here could select it. `/accounts` skips it for the same
+        // reason, and `mikmik workspace status` is where it belongs.
+        .filter(|(_, credential)| {
+            !matches!(
+                credential,
+                mikmik_core::StoredCredential::WorkspaceSession { .. }
+            )
+        })
+        .map(|(id, _)| {
+            serde_json::json!({
+                "account": id,
+                "active": active == Some(id.as_str()),
+            })
+        })
+        .collect();
+    serde_json::json!({ "accounts": accounts })
+}
+
 fn handle_accounts_command(args: &[String]) {
     if args.iter().any(|a| a == "--json") {
         let store = mikmik_core::AuthStore::load();
         let active = active_account();
-        let accounts: Vec<serde_json::Value> = store
-            .credentials
-            .keys()
-            .map(|id| {
-                serde_json::json!({
-                    "account": id,
-                    "active": active.as_deref() == Some(id.as_str()),
-                })
-            })
-            .collect();
-        // Names only: the values are live credentials and printing them to
-        // stdout would leak them into shell history and CI logs.
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({ "accounts": accounts }))
+            serde_json::to_string_pretty(&accounts_json(&store, active.as_deref()))
                 .unwrap_or_else(|_| "{}".into())
         );
         return;
@@ -9229,5 +9245,54 @@ mod permission_mode_tests {
             BypassGate::Nothing,
             "the dialog is already on screen"
         );
+    }
+}
+
+#[cfg(test)]
+mod accounts_listing_tests {
+    use super::*;
+    use mikmik_core::{AuthStore, StoredCredential};
+
+    fn store() -> AuthStore {
+        let mut store = AuthStore::default();
+        store.credentials.insert(
+            "kendi-openrouter".to_string(),
+            StoredCredential::ApiKey {
+                key: "a-key".to_string(),
+            },
+        );
+        store.credentials.insert(
+            mikmik_core::auth_store::WORKSPACE_ACCOUNT.to_string(),
+            StoredCredential::WorkspaceSession {
+                url: "https://mikmik.firma.com".to_string(),
+                token: "a-session-token".to_string(),
+                expires: u64::MAX,
+            },
+        );
+        store
+    }
+
+    #[test]
+    fn the_workspace_session_is_not_listed_as_an_account() {
+        // It authenticates against the organisation's own server, which serves
+        // no completions, so nothing could select it. `/accounts` skips it for
+        // the same reason, and the two surfaces read one store.
+        let listed = accounts_json(&store(), None);
+        let names: Vec<&str> = listed["accounts"]
+            .as_array()
+            .expect("accounts")
+            .iter()
+            .filter_map(|entry| entry["account"].as_str())
+            .collect();
+        assert_eq!(names, vec!["kendi-openrouter"]);
+    }
+
+    #[test]
+    fn the_listing_never_carries_the_credential_itself() {
+        let text = serde_json::to_string(&accounts_json(&store(), Some("kendi-openrouter")))
+            .expect("serialise");
+        assert!(!text.contains("a-key"), "{text}");
+        assert!(!text.contains("a-session-token"), "{text}");
+        assert!(text.contains("\"active\":true"), "{text}");
     }
 }

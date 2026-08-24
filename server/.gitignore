@@ -1,0 +1,9 @@
+/target
+
+# MIKMIK_SERVER_SECRET decrypts every stored API key and settings backup.
+.env
+
+# The database holds the accounts and those keys.
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

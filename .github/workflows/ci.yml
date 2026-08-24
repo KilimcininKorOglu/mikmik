@@ -6,6 +6,7 @@ on:
     paths:
       - 'src-rust/**'
       - 'relay/**'
+      - 'server/**'
       - 'editors/vscode/**'
       - '.github/workflows/ci.yml'
   pull_request:
@@ -13,6 +14,7 @@ on:
     paths:
       - 'src-rust/**'
       - 'relay/**'
+      - 'server/**'
       - 'editors/vscode/**'
       - '.github/workflows/ci.yml'
 
@@ -132,6 +134,42 @@ jobs:
 
       - name: rustfmt
         working-directory: relay
+        run: cargo fmt --all --check
+
+  # The configuration server is a third separate Cargo project with its own
+  # lockfile. Same reasoning as the relay: neither of the other two builds it.
+  server:
+    runs-on: ubuntu-latest
+    name: Server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            server/target
+          key: ci-server-cargo-${{ hashFiles('server/Cargo.lock') }}
+          restore-keys: ci-server-cargo-
+
+      - name: Run tests
+        working-directory: server
+        run: cargo test --locked -- --test-threads=1
+
+      - name: Clippy
+        working-directory: server
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: rustfmt
+        working-directory: server
         run: cargo fmt --all --check
 
   # The VS Code extension is the only TypeScript in the repo, so nothing else

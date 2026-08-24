@@ -1,0 +1,37 @@
+[package]
+name = "mikmik-server"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+description = "Self-hosted configuration and identity server for mikmik installations"
+license = "MIT"
+publish = false
+
+# Deliberately NOT a member of the src-rust workspace, and not the relay
+# either. Each of the three carries a different dependency tree, and keeping
+# them apart means `cargo` in one never builds or tests the others.
+
+[dependencies]
+axum = { version = "0.8", features = ["json"] }
+tokio = { version = "1.44", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+subtle = "2.6"
+anyhow = "1"
+# `bundled` so the image needs no system sqlite. Same version the CLI
+# workspace pins, so the two do not disagree about file format.
+rusqlite = { version = "0.31", features = ["bundled"] }
+parking_lot = "0.12"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tempfile = "3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

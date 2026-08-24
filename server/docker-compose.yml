@@ -1,0 +1,42 @@
+services:
+  server:
+    # Built from the source beside this file on purpose. This service holds
+    # every user account and every provider key the organisation hands out, so
+    # running a binary you compiled from source you can read is the safer
+    # default.
+    build: .
+    image: mikmik-server:local
+    container_name: mikmik-server
+    restart: unless-stopped
+    # Read from .env, never written into this file: MIKMIK_SERVER_SECRET
+    # decrypts every stored API key.
+    environment:
+      MIKMIK_SERVER_SECRET: ${MIKMIK_SERVER_SECRET:?set MIKMIK_SERVER_SECRET in server/.env (at least 32 characters)}
+      MIKMIK_SERVER_BIND: 0.0.0.0:8420
+      MIKMIK_SERVER_DB: /data/mikmik-server.sqlite
+      RUST_LOG: ${RUST_LOG:-mikmik_server=info}
+    ports:
+      # Bound to loopback by default. The server does not terminate TLS, so
+      # publishing it on 0.0.0.0 would put passwords and API keys on the wire
+      # in plaintext. Put a TLS-terminating reverse proxy in front, or reach it
+      # over a VPN, before changing this.
+      - "127.0.0.1:8420:8420"
+    volumes:
+      - server-data:/data
+    # Not read_only: the database and its WAL are written in place. The volume
+    # is the only writable path.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      # No curl in the slim image; the server answers /healthz without a
+      # credential.
+      test: ["CMD", "/usr/local/bin/mikmik-server", "--health-check"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  server-data:

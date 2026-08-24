@@ -110,6 +110,53 @@ pub async fn pull_at_startup(client: &WorkspaceClient) {
     }
 }
 
+/// Turns a run of writes into one upload.
+///
+/// Held apart from the loop it runs in so it can be driven with times of the
+/// test's choosing. A burst of writes has to become one upload, and that is
+/// not something a loop with a real clock in it can be asked about.
+#[derive(Debug)]
+struct Debounce {
+    /// The timestamp the settings file carried when it was last looked at.
+    last_seen: Option<std::time::SystemTime>,
+    /// When the most recent write was noticed. `None` means nothing is
+    /// waiting.
+    pending_since: Option<std::time::Instant>,
+}
+
+impl Debounce {
+    fn new(last_seen: Option<std::time::SystemTime>) -> Self {
+        Self {
+            last_seen,
+            pending_since: None,
+        }
+    }
+
+    /// Answer whether the writes have stopped for long enough to upload.
+    ///
+    /// Every write restarts the wait, so two writes in a row produce one
+    /// upload rather than two.
+    fn poll(&mut self, seen: Option<std::time::SystemTime>, now: std::time::Instant) -> bool {
+        if seen != self.last_seen {
+            self.last_seen = seen;
+            self.pending_since = Some(now);
+            return false;
+        }
+        match self.pending_since {
+            Some(since) if now.duration_since(since) >= Duration::from_secs(DEBOUNCE_SECS) => {
+                self.pending_since = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Forget a wait in progress, because something else has just uploaded.
+    fn clear(&mut self) {
+        self.pending_since = None;
+    }
+}
+
 /// Run the triggers a session is configured for until it is cancelled.
 ///
 /// Three of them share one loop rather than one task each: they all end in the
@@ -117,8 +164,7 @@ pub async fn pull_at_startup(client: &WorkspaceClient) {
 /// caused itself.
 pub async fn run_triggers(client: WorkspaceClient, workspace: WorkspaceSettings, cancel: Cancel) {
     let path = Settings::global_settings_path();
-    let mut last_seen = modified_at(&path);
-    let mut pending_since: Option<std::time::Instant> = None;
+    let mut debounce = Debounce::new(modified_at(&path));
     let mut next_timer = workspace
         .sync
         .interval_minutes
@@ -144,26 +190,15 @@ pub async fn run_triggers(client: WorkspaceClient, workspace: WorkspaceSettings,
                 if !workspace.sync.on_change {
                     continue;
                 }
-                let seen = modified_at(&path);
-                if seen != last_seen {
-                    last_seen = seen;
-                    // Restart the wait on every write, so a burst of them
-                    // becomes one upload rather than several.
-                    pending_since = Some(std::time::Instant::now());
+                if !debounce.poll(modified_at(&path), std::time::Instant::now()) {
                     continue;
                 }
-                match pending_since {
-                    Some(since) if since.elapsed() >= Duration::from_secs(DEBOUNCE_SECS) => {
-                        pending_since = None;
-                        "a settings change"
-                    }
-                    _ => continue,
-                }
+                "a settings change"
             }
             _ = timer_tick => {
                 // A change made by another process, or an editor writing the
                 // file in a way the poll missed, is what the timer is for.
-                pending_since = None;
+                debounce.clear();
                 "the timer"
             }
         };
@@ -230,6 +265,144 @@ mod tests {
     #[test]
     fn an_installation_with_no_server_does_not_connect() {
         assert!(connect(&Settings::default()).is_none());
+    }
+
+    /// A timestamp `seconds` after the base, standing in for one write.
+    fn written_at(base: std::time::SystemTime, seconds: u64) -> Option<std::time::SystemTime> {
+        base.checked_add(Duration::from_secs(seconds))
+    }
+
+    #[test]
+    fn two_writes_in_a_row_become_one_upload() {
+        // An editor save, or the app writing a settings change of its own,
+        // produces several writes within seconds. Without this every one of
+        // them would be an upload.
+        let base = std::time::SystemTime::UNIX_EPOCH;
+        let start = std::time::Instant::now();
+        let mut debounce = Debounce::new(written_at(base, 0));
+
+        // First write noticed: the wait starts, nothing is uploaded.
+        assert!(!debounce.poll(written_at(base, 10), start));
+        // Second write, one poll later: the wait restarts.
+        let second = start + Duration::from_secs(POLL_SECS);
+        assert!(!debounce.poll(written_at(base, 20), second));
+
+        // The original wait would have run out here. It must not fire, because
+        // the second write pushed it back.
+        let would_have_fired = start + Duration::from_secs(DEBOUNCE_SECS);
+        assert!(
+            !debounce.poll(written_at(base, 20), would_have_fired),
+            "the second write did not restart the wait"
+        );
+
+        // Once the writes have stopped for long enough, exactly one upload.
+        let settled = second + Duration::from_secs(DEBOUNCE_SECS);
+        assert!(debounce.poll(written_at(base, 20), settled));
+        assert!(
+            !debounce.poll(written_at(base, 20), settled + Duration::from_secs(3600)),
+            "one settled change uploaded twice"
+        );
+    }
+
+    #[test]
+    fn a_file_that_never_changes_never_uploads() {
+        let base = std::time::SystemTime::UNIX_EPOCH;
+        let start = std::time::Instant::now();
+        let mut debounce = Debounce::new(written_at(base, 0));
+
+        for tick in 0..20 {
+            let now = start + Duration::from_secs(POLL_SECS * tick);
+            assert!(!debounce.poll(written_at(base, 0), now), "tick {tick}");
+        }
+    }
+
+    #[test]
+    fn the_timer_cancels_a_wait_it_has_already_covered() {
+        // The timer uploads whatever is on disk, so a wait still running would
+        // upload the same file again a moment later.
+        let base = std::time::SystemTime::UNIX_EPOCH;
+        let start = std::time::Instant::now();
+        let mut debounce = Debounce::new(written_at(base, 0));
+
+        assert!(!debounce.poll(written_at(base, 10), start));
+        debounce.clear();
+
+        let settled = start + Duration::from_secs(DEBOUNCE_SECS);
+        assert!(
+            !debounce.poll(written_at(base, 10), settled),
+            "the timer uploaded and the wait uploaded the same change again"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_server_that_cannot_be_reached_changes_no_local_configuration() {
+        // Whatever is already configured has to keep working. The pull writes
+        // nothing until the server has answered.
+        //
+        // `tokio::sync::Mutex` rather than the standard one, because the guard
+        // is held across the `.await` below and a `std` guard is `!Send`.
+        static HOME_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        let _guard = HOME_LOCK.lock().await;
+
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let saved = std::env::var_os("MIKMIK_HOME");
+        std::env::set_var("MIKMIK_HOME", tmp.path());
+
+        // Port 1 needs root to bind, so nothing is listening there.
+        const SERVER: &str = "http://127.0.0.1:1";
+        let unreachable = WorkspaceSettings {
+            url: SERVER.to_string(),
+            ..Default::default()
+        };
+        // A company provider already on the machine. The failure this guards
+        // against is reading "the server did not answer" as "nothing is
+        // assigned any more" and withdrawing it.
+        let settings = Settings {
+            providers: [
+                ("mine".to_string(), crate::config::ProviderConfig::default()),
+                (
+                    "firma-openai".to_string(),
+                    crate::config::ProviderConfig {
+                        managed_by: Some(SERVER.to_string()),
+                        ..Default::default()
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            workspace: Some(unreachable.clone()),
+            ..Default::default()
+        };
+        let write = settings.save_sync();
+        let before = std::fs::read_to_string(Settings::global_settings_path());
+
+        let client = WorkspaceClient::new(&unreachable).expect("client");
+        let pulled = pull_providers(&client).await;
+
+        let after = std::fs::read_to_string(Settings::global_settings_path());
+        let reloaded = Settings::load_sync();
+
+        match saved {
+            Some(value) => std::env::set_var("MIKMIK_HOME", value),
+            None => std::env::remove_var("MIKMIK_HOME"),
+        }
+
+        write.expect("the settings were written");
+        assert!(pulled.is_err(), "an unreachable server answered providers");
+        let reloaded = reloaded.expect("the settings still parse");
+        assert!(
+            reloaded.providers.contains_key("firma-openai"),
+            "a failed pull withdrew a company provider"
+        );
+        assert!(
+            reloaded.providers.contains_key("mine"),
+            "a failed pull removed the user's own provider"
+        );
+        assert_eq!(
+            before.expect("the file exists"),
+            after.expect("the file still exists"),
+            "a failed pull rewrote the settings file"
+        );
     }
 
     #[test]

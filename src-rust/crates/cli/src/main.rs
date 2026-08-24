@@ -298,6 +298,40 @@ enum CliInputFormat {
     StreamJson,
 }
 
+/// How long the startup pull may take before the session goes on without it.
+///
+/// A server that is up but wedged must not hold the session at the door: the
+/// providers and the policy already on disk are what a session opens with when
+/// this runs out.
+const WORKSPACE_STARTUP_BUDGET: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Refresh the organisation's providers and policy, if this installation has a
+/// server and asked for the startup pull.
+///
+/// Answers the connection so the caller can start the background triggers on
+/// it without opening a second one.
+async fn pull_workspace_at_startup() -> Option<(
+    mikmik_core::config::WorkspaceSettings,
+    mikmik_core::workspace_server::WorkspaceClient,
+)> {
+    use mikmik_core::workspace_server::session;
+
+    let settings = Settings::load_sync().ok()?;
+    let (workspace, client) = session::connect(&settings)?;
+    if workspace.sync.pull_at_startup
+        && tokio::time::timeout(WORKSPACE_STARTUP_BUDGET, session::pull_at_startup(&client))
+            .await
+            .is_err()
+    {
+        warn!(
+            server = %workspace.base(),
+            "the workspace server did not answer in time; \
+             this session uses the providers and policy already on disk"
+        );
+    }
+    Some((workspace, client))
+}
+
 fn resolve_bridge_config(
     settings: &Settings,
     auth_credential: &str,
@@ -634,6 +668,15 @@ async fn main() -> anyhow::Result<()> {
     // handling, and permission handler selection).
     let is_headless = cli.print || cli.prompt.is_some();
 
+    // Take the organisation's providers and policy before the settings are
+    // read, so this session runs on what the server says now rather than on
+    // what it said last time. Both are written to disk, which is what the load
+    // below picks up.
+    //
+    // Bounded, because a server that is up but wedged must not hold the
+    // session at the door. Whatever is already on disk is applied instead.
+    let workspace_session = pull_workspace_at_startup().await;
+
     // Load settings from disk (hierarchical: global < project). A malformed
     // global file is kept intact; interactive mode displays the error in the
     // startup dialog, while headless mode reports it on stderr.
@@ -648,6 +691,18 @@ async fn main() -> anyhow::Result<()> {
                 (Settings::default(), None, Some(message))
             }
         };
+    // Keep the settings backup current while the session runs. Headless runs
+    // are excluded: a `--print` call is over in seconds, and a loop that polls
+    // a file for a change would never reach its first upload.
+    if let Some((workspace, client)) = workspace_session {
+        if !is_headless && (workspace.sync.on_change || workspace.sync.interval_minutes.is_some()) {
+            let cancel = mikmik_core::workspace_server::session::Cancel::new();
+            tokio::spawn(mikmik_core::workspace_server::session::run_triggers(
+                client, workspace, cancel,
+            ));
+        }
+    }
+
     // `--trust-project-mcp` (and automation use cases) flip on the same global
     // trust the user could set via `trustProjectMcpServers`. Folding it into
     // `settings` here keeps a single source of truth for the gate, including

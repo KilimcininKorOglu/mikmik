@@ -8,7 +8,7 @@ use std::io::{IsTerminal, Read};
 
 use mikmik_core::config::{ProjectRunnables, Settings, WorkspaceSettings};
 use mikmik_core::workspace_server::{
-    policy, providers, sync, BackupWrite, WorkspaceClient, WorkspaceError,
+    policy, providers, session, sync, BackupWrite, WorkspaceClient, WorkspaceError,
 };
 use mikmik_core::AuthStore;
 
@@ -156,8 +156,10 @@ async fn login(args: &[String]) -> anyhow::Result<()> {
 ///
 /// Neither touches anything the user wrote, so this runs without asking.
 async fn pull(client: &WorkspaceClient) -> anyhow::Result<()> {
-    let entitled = match client.providers().await {
-        Ok(entitled) => entitled,
+    // Through `session` rather than by hand, so what a login writes and what a
+    // running session writes cannot drift into being two different things.
+    let applied = match session::pull_providers(client).await {
+        Ok(applied) => applied,
         Err(error) => {
             // The accounts already on the machine keep working. Saying so
             // beats a bare failure that reads as "your providers are gone".
@@ -168,13 +170,6 @@ async fn pull(client: &WorkspaceClient) -> anyhow::Result<()> {
             return Ok(());
         }
     };
-
-    let mut settings = Settings::load_sync().unwrap_or_default();
-    let mut auth = AuthStore::load();
-    let server = client.base().to_string();
-    let applied = providers::apply(&mut settings, &mut auth, &server, &entitled);
-    settings.save_sync()?;
-    auth.save();
 
     if !applied.written.is_empty() {
         println!("Company providers: {}", applied.written.join(", "));
@@ -342,21 +337,11 @@ fn on_off(value: bool) -> &'static str {
 
 async fn upload() -> anyhow::Result<()> {
     let settings = Settings::load_sync().unwrap_or_default();
-    let (workspace, client) = connected(&settings)?;
+    let (_, client) = connected(&settings)?;
 
-    let payload = sync::build(&settings, &AuthStore::load(), workspace.base())?;
-    // The version this machine is replacing, read now rather than remembered:
-    // a second machine may have written since.
-    let expected = client
-        .backup()
-        .await?
-        .map(|stored| stored.version)
-        .unwrap_or(0);
-
-    match client
-        .put_backup(&serde_json::to_value(&payload)?, expected)
-        .await?
-    {
+    // The same call the background triggers make, so `workspace sync` and an
+    // automatic upload cannot exclude different fields.
+    match session::upload(&client).await? {
         BackupWrite::Stored { version, .. } => {
             println!("Uploaded. The stored backup is now version {version}.");
             Ok(())

@@ -67,6 +67,13 @@ pub mod file_snapshot;
 // Credential masking for text on its way into long-lived storage.
 pub mod redact;
 
+// The organisation's configuration server: login, entitled providers, the
+// settings policy, and this account's settings backup.
+//
+// `workspace_server` rather than `workspace`, which is already the named
+// directory roots a session can reach.
+pub mod workspace_server;
+
 // Snapshot/undo system — tracks file changes per session for /undo support.
 pub mod snapshot;
 
@@ -1977,6 +1984,15 @@ pub mod config {
             skip_serializing_if = "Option::is_none"
         )]
         pub remote_control: Option<RemoteControlSettings>,
+        /// The organisation's configuration server, configured by `/workspace`.
+        ///
+        /// SECURITY: set only from the user's global settings, for the same
+        /// reason as `remote_control` above and one more. This server decides
+        /// which providers this installation may use and pushes a settings
+        /// policy the user cannot override; a repository that could name it
+        /// would choose where the agent's traffic and keys come from.
+        #[serde(default, rename = "workspace", skip_serializing_if = "Option::is_none")]
+        pub workspace: Option<WorkspaceSettings>,
         /// The companion that sits beside the input box, configured by `/buddy`.
         ///
         /// Absent means off, same as `enabled: false`. Off is the default
@@ -2285,6 +2301,135 @@ pub mod config {
         /// list. Without it the client can only show an opaque session id.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub label: Option<String>,
+    }
+
+    /// Connection details for an organisation's configuration server.
+    ///
+    /// Holds no credential. The session token lives in `auth.json`, which is
+    /// written `0o600`, while `settings.json` is an ordinary file that a user
+    /// may reasonably copy between machines or paste into a bug report.
+    #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+    pub struct WorkspaceSettings {
+        /// Base URL of the server, e.g. `https://mikmik.firma.com`.
+        #[serde(default)]
+        pub url: String,
+        /// When this installation talks to it.
+        #[serde(default)]
+        pub sync: WorkspaceSync,
+    }
+
+    /// When settings are exchanged with the workspace server.
+    ///
+    /// Every field is on by default: the only way this section exists at all is
+    /// that the user logged in to a server, and a backup that never runs is a
+    /// backup that is not there on the day the machine is rebuilt. Each one can
+    /// be turned off on its own.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct WorkspaceSync {
+        /// Upload after a local settings change, once the writes stop.
+        #[serde(default = "default_true", rename = "onChange")]
+        pub on_change: bool,
+        /// Upload on a timer as well, in minutes. Absent means no timer.
+        ///
+        /// `on_change` misses a change made by another process or by an editor
+        /// writing the file directly; a timer is what closes that gap.
+        #[serde(
+            default,
+            rename = "intervalMinutes",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub interval_minutes: Option<u64>,
+        /// Fetch the policy and the entitled providers when a session starts.
+        #[serde(default = "default_true", rename = "pullAtStartup")]
+        pub pull_at_startup: bool,
+    }
+
+    impl Default for WorkspaceSync {
+        fn default() -> Self {
+            Self {
+                on_change: true,
+                interval_minutes: None,
+                pull_at_startup: true,
+            }
+        }
+    }
+
+    /// Why a workspace configuration was refused.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum WorkspaceConfigError {
+        MissingUrl,
+        NotHttp { scheme: String },
+        Insecure,
+    }
+
+    impl std::fmt::Display for WorkspaceConfigError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::MissingUrl => write!(f, "workspace.url is empty"),
+                Self::NotHttp { scheme } => {
+                    write!(f, "workspace.url uses `{scheme}`, not http or https")
+                }
+                Self::Insecure => write!(
+                    f,
+                    "workspace.url is plain http to a host that is not local; the \
+                     password and every provider key would travel in the clear"
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for WorkspaceConfigError {}
+
+    impl WorkspaceSettings {
+        /// Accept the address only if it is safe to send a password to.
+        ///
+        /// Plain `http` is allowed to a loopback host and nowhere else, so an
+        /// operator can try the server out before the reverse proxy is up
+        /// without that concession reaching the network.
+        pub fn validate(&self) -> Result<(), WorkspaceConfigError> {
+            let url = self.url.trim();
+            if url.is_empty() {
+                return Err(WorkspaceConfigError::MissingUrl);
+            }
+            let Some((scheme, rest)) = url.split_once("://") else {
+                return Err(WorkspaceConfigError::NotHttp {
+                    scheme: url.to_string(),
+                });
+            };
+            match scheme.to_ascii_lowercase().as_str() {
+                "https" => Ok(()),
+                "http" => {
+                    // An IPv6 literal is bracketed and carries colons of its
+                    // own, so splitting on `:` first would cut `[::1]` down to
+                    // `[` and refuse the loopback address.
+                    let host = match rest.strip_prefix('[') {
+                        Some(after) => match after.split_once(']') {
+                            Some((inside, _)) => format!("[{}]", inside.to_ascii_lowercase()),
+                            None => String::new(),
+                        },
+                        None => rest
+                            .split(['/', ':', '?', '#'])
+                            .next()
+                            .unwrap_or_default()
+                            .to_ascii_lowercase(),
+                    };
+                    if host == "localhost" || host == "127.0.0.1" || host == "[::1]" {
+                        Ok(())
+                    } else {
+                        Err(WorkspaceConfigError::Insecure)
+                    }
+                }
+                other => Err(WorkspaceConfigError::NotHttp {
+                    scheme: other.to_string(),
+                }),
+            }
+        }
+
+        /// The address with any trailing slash removed, so a path can be joined
+        /// to it without producing `//api`.
+        pub fn base(&self) -> &str {
+            self.url.trim().trim_end_matches('/')
+        }
     }
 
     /// How the companion beside the input box is configured.
@@ -3730,6 +3875,12 @@ pub mod config {
                 // this would gain a channel for driving the agent on the
                 // developer's machine.
                 remote_control: base.remote_control,
+                // SECURITY: same reasoning, and one more. This server chooses
+                // which providers the installation may use and pushes a policy
+                // the user cannot override, so a checked-out repository able to
+                // name it would decide where the agent's traffic and its keys
+                // come from.
+                workspace: base.workspace,
                 // SECURITY: same reasoning. An ACP agent definition names an
                 // executable that the model can then invoke, so a checked-out
                 // repository able to add one would gain arbitrary code
@@ -4506,6 +4657,64 @@ pub mod config {
 
             let merged = Settings::merge_with(user, Settings::default(), ProjectRunnables::Deny);
             assert!(merged.remote_control_at_startup);
+        }
+
+        fn workspace() -> WorkspaceSettings {
+            WorkspaceSettings {
+                url: "https://mikmik.firma.com".to_string(),
+                sync: WorkspaceSync::default(),
+            }
+        }
+
+        /// The server names the providers this installation may use and pushes
+        /// a policy the user cannot override, so a checked-out repository able
+        /// to name one would choose where the agent's keys come from.
+        #[test]
+        fn a_project_settings_file_cannot_name_a_workspace_server() {
+            let project = Settings {
+                workspace: Some(workspace()),
+                ..Default::default()
+            };
+
+            let merged = Settings::merge_with(Settings::default(), project, ProjectRunnables::Deny);
+            assert!(
+                merged.workspace.is_none(),
+                "only the user's global settings may name a workspace server"
+            );
+        }
+
+        /// Nor may it re-point one the user already configured, which is the
+        /// worse case: the session token is already there to be spent.
+        #[test]
+        fn a_project_settings_file_cannot_repoint_a_workspace_server() {
+            let user = Settings {
+                workspace: Some(workspace()),
+                ..Default::default()
+            };
+            let project = Settings {
+                workspace: Some(WorkspaceSettings {
+                    url: "https://attacker.example".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+
+            let merged = Settings::merge_with(user, project, ProjectRunnables::Deny);
+            assert_eq!(
+                merged.workspace.map(|w| w.url).unwrap_or_default(),
+                "https://mikmik.firma.com"
+            );
+        }
+
+        #[test]
+        fn the_users_own_workspace_survives_the_merge() {
+            let user = Settings {
+                workspace: Some(workspace()),
+                ..Default::default()
+            };
+
+            let merged = Settings::merge_with(user, Settings::default(), ProjectRunnables::Deny);
+            assert!(merged.workspace.is_some());
         }
 
         /// An interface preference describes the person at the keyboard. An
@@ -10088,6 +10297,145 @@ mod remote_control_settings_tests {
         assert!(
             !json.contains("remoteControl\""),
             "an unconfigured user must not gain an empty key: {json}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod workspace_settings_tests {
+    //! `workspace` names the server that decides which providers this
+    //! installation may use, so the address is checked before a password
+    //! reaches it and it never comes from a project's settings file.
+    use crate::config::{Settings, WorkspaceConfigError, WorkspaceSettings, WorkspaceSync};
+
+    fn at(url: &str) -> WorkspaceSettings {
+        WorkspaceSettings {
+            url: url.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tls_is_accepted() {
+        assert_eq!(at("https://mikmik.firma.com").validate(), Ok(()));
+    }
+
+    #[test]
+    fn plain_http_to_a_remote_host_is_refused() {
+        // The login sends a password and the answer carries every provider key
+        // the organisation assigned; in the clear, one network hop reads both.
+        assert_eq!(
+            at("http://mikmik.firma.com").validate(),
+            Err(WorkspaceConfigError::Insecure)
+        );
+    }
+
+    #[test]
+    fn plain_http_to_a_local_host_is_allowed() {
+        // So an operator can try the server before the reverse proxy is up,
+        // without that concession reaching the network.
+        for url in [
+            "http://localhost:8420",
+            "http://127.0.0.1:8420",
+            "http://[::1]:8420",
+            "http://LOCALHOST:8420/",
+        ] {
+            assert_eq!(at(url).validate(), Ok(()), "{url} was refused");
+        }
+    }
+
+    #[test]
+    fn a_host_that_merely_starts_with_a_local_name_is_refused() {
+        // `localhost.attacker.example` resolves wherever its owner points it.
+        assert_eq!(
+            at("http://localhost.attacker.example").validate(),
+            Err(WorkspaceConfigError::Insecure)
+        );
+        assert_eq!(
+            at("http://127.0.0.1.attacker.example").validate(),
+            Err(WorkspaceConfigError::Insecure)
+        );
+    }
+
+    #[test]
+    fn an_address_that_is_not_http_is_refused() {
+        assert!(matches!(
+            at("ftp://firma.com").validate(),
+            Err(WorkspaceConfigError::NotHttp { .. })
+        ));
+        assert!(matches!(
+            at("mikmik.firma.com").validate(),
+            Err(WorkspaceConfigError::NotHttp { .. })
+        ));
+        assert_eq!(at("   ").validate(), Err(WorkspaceConfigError::MissingUrl));
+    }
+
+    #[test]
+    fn a_trailing_slash_is_dropped_from_the_base() {
+        assert_eq!(at("https://firma.com/").base(), "https://firma.com");
+        assert_eq!(at("  https://firma.com  ").base(), "https://firma.com");
+    }
+
+    #[test]
+    fn every_trigger_is_on_unless_it_is_written_off() {
+        // A backup that never runs is not there on the day the machine is
+        // rebuilt, which is the day it is wanted.
+        let defaults = WorkspaceSync::default();
+        assert!(defaults.on_change);
+        assert!(defaults.pull_at_startup);
+        assert_eq!(defaults.interval_minutes, None);
+
+        let written: WorkspaceSync =
+            serde_json::from_str(r#"{"onChange": false}"#).expect("deserialise");
+        assert!(!written.on_change);
+        assert!(written.pull_at_startup, "one flag turned off another");
+    }
+
+    #[test]
+    fn the_section_survives_a_settings_round_trip() {
+        let original = Settings {
+            workspace: Some(WorkspaceSettings {
+                url: "https://mikmik.firma.com".to_string(),
+                sync: WorkspaceSync {
+                    on_change: false,
+                    interval_minutes: Some(30),
+                    pull_at_startup: true,
+                },
+            }),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&original).expect("serialise");
+        assert!(json.contains("\"workspace\""));
+
+        let restored = serde_json::from_str::<Settings>(&json)
+            .expect("deserialise")
+            .workspace
+            .expect("section survives");
+        assert_eq!(restored.url, "https://mikmik.firma.com");
+        assert_eq!(restored.sync.interval_minutes, Some(30));
+        assert!(!restored.sync.on_change);
+    }
+
+    #[test]
+    fn the_section_never_carries_a_credential() {
+        // The token belongs in `auth.json`, which is written `0o600`.
+        // `settings.json` is a file a user may copy or paste into a report.
+        let json = serde_json::to_string(&WorkspaceSettings {
+            url: "https://mikmik.firma.com".to_string(),
+            ..Default::default()
+        })
+        .expect("serialise");
+        assert!(!json.contains("token"), "a token field exists: {json}");
+        assert!(!json.contains("password"), "{json}");
+    }
+
+    #[test]
+    fn an_unset_section_writes_no_key() {
+        let json = serde_json::to_string(&Settings::default()).expect("serialise");
+        assert!(
+            !json.contains("\"workspace\""),
+            "a user with no server must not gain an empty key: {json}"
         );
     }
 }

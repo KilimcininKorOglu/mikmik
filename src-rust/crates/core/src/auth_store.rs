@@ -34,7 +34,41 @@ pub enum StoredCredential {
     /// OpenAI Codex OAuth tokens.
     #[serde(rename = "codex-oauth")]
     CodexOAuth(crate::oauth_config::CodexTokens),
+    /// A session on an organisation's configuration server.
+    ///
+    /// Held here rather than in `settings.json` beside `workspace.url`: this
+    /// file is written `0o600`, and the token reaches every provider key the
+    /// organisation has assigned to this account.
+    ///
+    /// The address is repeated here on purpose. A token issued by one server
+    /// must never be sent to another, so the credential carries the only
+    /// address it is good for instead of trusting whatever the settings file
+    /// says at the moment it is used.
+    #[serde(rename = "workspace-session")]
+    WorkspaceSession {
+        url: String,
+        token: String,
+        /// Seconds since the Unix epoch.
+        expires: u64,
+    },
 }
+
+/// Seconds since the Unix epoch.
+///
+/// `SystemTime` rather than `Instant`: this value is written to a file and
+/// compared after a restart, which a monotonic clock cannot do.
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default()
+}
+
+/// The key `auth.json` holds the workspace session under.
+///
+/// A fixed name rather than one per server: an installation logs in to one
+/// organisation, and two entries would leave the second one silently unused.
+pub const WORKSPACE_ACCOUNT: &str = "workspace";
 
 /// Persistent credential store backed by `~/.config/mikmik/auth.json`.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -74,6 +108,9 @@ fn implied_protocol(credential: &StoredCredential) -> Option<&'static str> {
         StoredCredential::CodexOAuth(_) => Some(crate::provider_id::ProviderId::CODEX),
         StoredCredential::OAuthToken { .. } => Some("github-copilot"),
         StoredCredential::ApiKey { .. } => None,
+        // Not a model provider at all: it authenticates against the
+        // organisation's own server, which serves no completions.
+        StoredCredential::WorkspaceSession { .. } => None,
     }
 }
 
@@ -265,6 +302,46 @@ impl AuthStore {
     /// Store Codex OAuth tokens for `account_id` (persists immediately).
     pub fn set_codex_tokens(&mut self, account_id: &str, tokens: crate::oauth_config::CodexTokens) {
         self.set(account_id, StoredCredential::CodexOAuth(tokens));
+    }
+
+    /// The live workspace session for `url`, if there is one.
+    ///
+    /// Answers `None` for a session that has expired or that was issued by a
+    /// different address, so a caller cannot send one organisation's token to
+    /// another's server by changing one line of `settings.json`.
+    pub fn workspace_session(&self, url: &str) -> Option<&str> {
+        let StoredCredential::WorkspaceSession {
+            url: issued_by,
+            token,
+            expires,
+        } = self.get(WORKSPACE_ACCOUNT)?
+        else {
+            return None;
+        };
+        if issued_by.trim_end_matches('/') != url.trim().trim_end_matches('/') {
+            return None;
+        }
+        if *expires <= now_secs() {
+            return None;
+        }
+        Some(token.as_str())
+    }
+
+    /// Store a workspace session (persists immediately).
+    pub fn set_workspace_session(&mut self, url: &str, token: &str, expires_in_secs: u64) {
+        self.set(
+            WORKSPACE_ACCOUNT,
+            StoredCredential::WorkspaceSession {
+                url: url.trim().trim_end_matches('/').to_string(),
+                token: token.to_string(),
+                expires: now_secs().saturating_add(expires_in_secs),
+            },
+        );
+    }
+
+    /// Drop the workspace session (persists immediately).
+    pub fn clear_workspace_session(&mut self) {
+        self.remove(WORKSPACE_ACCOUNT);
     }
 
     /// Every account holding a credential and speaking `protocol`.
@@ -730,5 +807,144 @@ mod tests {
         );
 
         assert_eq!(store.api_key_for("openrouter").as_deref(), Some("or-key"));
+    }
+
+    // -----------------------------------------------------------------------
+    // The workspace session
+    // -----------------------------------------------------------------------
+
+    use super::{now_secs, WORKSPACE_ACCOUNT};
+
+    fn with_session(url: &str, expires: u64) -> AuthStore {
+        let mut store = AuthStore::default();
+        store.credentials.insert(
+            WORKSPACE_ACCOUNT.to_string(),
+            StoredCredential::WorkspaceSession {
+                url: url.to_string(),
+                token: "session-token".to_string(),
+                expires,
+            },
+        );
+        store
+    }
+
+    #[test]
+    fn a_live_session_is_answered() {
+        let store = with_session("https://mikmik.firma.com", now_secs() + 3600);
+        assert_eq!(
+            store.workspace_session("https://mikmik.firma.com"),
+            Some("session-token")
+        );
+    }
+
+    #[test]
+    fn a_session_is_not_handed_to_another_server() {
+        // Otherwise editing one line of `settings.json` would send the
+        // organisation's session token to an address of the editor's choosing.
+        let store = with_session("https://mikmik.firma.com", now_secs() + 3600);
+        assert_eq!(store.workspace_session("https://attacker.example"), None);
+    }
+
+    #[test]
+    fn a_trailing_slash_is_not_a_different_server() {
+        let store = with_session("https://mikmik.firma.com", now_secs() + 3600);
+        assert_eq!(
+            store.workspace_session("https://mikmik.firma.com/"),
+            Some("session-token")
+        );
+    }
+
+    #[test]
+    fn an_expired_session_is_not_answered() {
+        // The server would refuse it anyway; answering `None` here is what
+        // lets the caller say "log in again" without a round trip.
+        let store = with_session("https://mikmik.firma.com", now_secs() - 1);
+        assert_eq!(store.workspace_session("https://mikmik.firma.com"), None);
+    }
+
+    #[test]
+    fn nothing_stored_is_no_session() {
+        assert_eq!(
+            AuthStore::default().workspace_session("https://mikmik.firma.com"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_credential_of_another_shape_is_not_a_session() {
+        let mut store = AuthStore::default();
+        store.credentials.insert(
+            WORKSPACE_ACCOUNT.to_string(),
+            StoredCredential::ApiKey {
+                key: "not-a-session".to_string(),
+            },
+        );
+        assert_eq!(store.workspace_session("https://mikmik.firma.com"), None);
+    }
+
+    #[test]
+    fn the_workspace_account_is_not_a_model_provider() {
+        // It would otherwise turn up in the account list as something the
+        // model could be pointed at, and it serves no completions.
+        assert_eq!(
+            super::implied_protocol(&StoredCredential::WorkspaceSession {
+                url: "https://mikmik.firma.com".to_string(),
+                token: "session-token".to_string(),
+                expires: 0,
+            }),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stored_session_lands_in_an_owner_only_file() {
+        // The token reaches every provider key the organisation assigned to
+        // this account, so it must not be world-readable for a moment.
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Mutex;
+        static HOME_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let prev_home = std::env::var_os("MIKMIK_HOME");
+        std::env::set_var("MIKMIK_HOME", tmp.path());
+
+        let mut store = AuthStore::load();
+        store.set_workspace_session("https://mikmik.firma.com/", "session-token", 3600);
+
+        let path = AuthStore::path();
+        let mode = std::fs::metadata(&path).map(|m| m.permissions().mode() & 0o777);
+        let raw = std::fs::read_to_string(&path).unwrap_or_default();
+        let reloaded = AuthStore::load();
+        let live = reloaded
+            .workspace_session("https://mikmik.firma.com")
+            .map(str::to_string);
+
+        let mut after_logout = AuthStore::load();
+        after_logout.clear_workspace_session();
+        let gone = AuthStore::load()
+            .workspace_session("https://mikmik.firma.com")
+            .is_none();
+        let left_behind = std::fs::read_to_string(&path).unwrap_or_default();
+
+        // Restore the config root before asserting, so a failure cannot leak
+        // the override into the rest of the test binary.
+        match prev_home {
+            Some(value) => std::env::set_var("MIKMIK_HOME", value),
+            None => std::env::remove_var("MIKMIK_HOME"),
+        }
+
+        assert_eq!(mode.expect("mode"), 0o600, "the session file is readable");
+        assert_eq!(live.as_deref(), Some("session-token"));
+        assert!(
+            raw.contains("workspace-session"),
+            "the credential was not written: {raw}"
+        );
+        assert!(gone, "logging out left the session behind");
+        assert!(
+            !left_behind.contains("session-token"),
+            "the token survived a logout: {left_behind}"
+        );
     }
 }

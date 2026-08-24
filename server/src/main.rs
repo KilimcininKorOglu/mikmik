@@ -14,6 +14,7 @@ mod accounts;
 mod admin;
 mod admin_api;
 mod api;
+mod audit;
 mod auth;
 mod backup;
 mod config;
@@ -926,6 +927,140 @@ mod tests {
             .await
             .to_string();
         assert!(!body.contains("v1:"), "the sealed record leaked: {body}");
+    }
+
+    /// Read the whole audit log as an administrator.
+    async fn audit_log(state: &Arc<AppState>, admin: &str) -> serde_json::Value {
+        body_json(authed(state, "GET", "/api/v1/admin/audit?limit=500", admin, None).await).await
+    }
+
+    #[tokio::test]
+    async fn a_refused_login_is_recorded_with_the_address_and_not_the_password() {
+        let state = test_state();
+        let admin = logged_in(&state, "admin@firma.com", true).await;
+
+        app(state.clone())
+            .oneshot(post_json(
+                "/api/v1/login",
+                json!({ "email": "NOBODY@firma.com", "password": "the wrong password" }),
+            ))
+            .await
+            .expect("response");
+
+        let log = audit_log(&state, &admin).await.to_string();
+        assert!(
+            log.contains("login.refused"),
+            "the attempt was not recorded"
+        );
+        assert!(
+            log.contains("nobody@firma.com"),
+            "the address was not recorded"
+        );
+        assert!(
+            !log.contains("the wrong password"),
+            "the attempted password was kept: {log}"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_recorded_field_carries_a_secret() {
+        // One pass over every write point, checking that nothing a caller
+        // supplied as a credential reaches a row.
+        let state = test_state();
+        let admin = logged_in(&state, "admin@firma.com", true).await;
+
+        authed(
+            &state,
+            "POST",
+            "/api/v1/admin/providers",
+            &admin,
+            Some(json!({ "name": "openai", "api_key": "key-that-must-not-be-logged" })),
+        )
+        .await;
+        authed(
+            &state,
+            "POST",
+            "/api/v1/admin/users",
+            &admin,
+            Some(json!({
+                "email": "bora@firma.com",
+                "password": "password-that-must-not-be-logged"
+            })),
+        )
+        .await;
+        authed(
+            &state,
+            "PUT",
+            "/api/v1/admin/policy",
+            &admin,
+            Some(json!({ "config": { "model": "model-that-must-not-be-logged" } })),
+        )
+        .await;
+        upload(
+            &state,
+            &admin,
+            0,
+            json!({ "secret": "backup-that-must-not-be-logged" }),
+        )
+        .await;
+
+        let log = audit_log(&state, &admin).await.to_string();
+        for secret in [
+            "key-that-must-not-be-logged",
+            "password-that-must-not-be-logged",
+            "model-that-must-not-be-logged",
+            "backup-that-must-not-be-logged",
+        ] {
+            assert!(!log.contains(secret), "{secret} reached the log: {log}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_account_cannot_read_the_audit_log() {
+        let state = test_state();
+        let ayse = logged_in(&state, "ayse@firma.com", false).await;
+
+        let response = authed(&state, "GET", "/api/v1/admin/audit", &ayse, None).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn taking_a_provider_key_is_recorded() {
+        // The whole point of the log: who took what, and when.
+        let state = test_state();
+        let admin = logged_in(&state, "admin@firma.com", true).await;
+        let ayse = logged_in(&state, "ayse@firma.com", false).await;
+
+        authed(&state, "GET", "/api/v1/providers", &ayse, None).await;
+
+        let log = audit_log(&state, &admin).await;
+        let actions: Vec<&str> = log
+            .as_array()
+            .expect("an array")
+            .iter()
+            .filter_map(|entry| entry["action"].as_str())
+            .collect();
+        assert!(
+            actions.contains(&"providers.fetch"),
+            "the fetch was not recorded: {actions:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_settings_conflict_is_recorded_as_well_as_a_write() {
+        let state = test_state();
+        let admin = logged_in(&state, "admin@firma.com", true).await;
+        let ayse = logged_in(&state, "ayse@firma.com", false).await;
+
+        upload(&state, &ayse, 0, json!({ "a": 1 })).await;
+        upload(&state, &ayse, 0, json!({ "a": 2 })).await;
+
+        let log = audit_log(&state, &admin).await.to_string();
+        assert!(log.contains("settings.write"), "the write was not recorded");
+        assert!(
+            log.contains("settings.conflict"),
+            "two machines fighting over one account was not recorded"
+        );
     }
 
     #[tokio::test]

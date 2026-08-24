@@ -25,6 +25,7 @@ const SCHEMA: &[&str] = &[
     crate::providers::SCHEMA,
     crate::policy::SCHEMA,
     crate::backup::SCHEMA,
+    crate::audit::SCHEMA,
 ];
 
 pub struct Store {

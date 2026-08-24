@@ -166,6 +166,25 @@ The stored blob is sealed, because the decision was that a user's own provider
 keys ride along with their settings. Losing `MIKMIK_SERVER_SECRET` makes every
 backup unreadable rather than wrong.
 
+## Audit log
+
+Every action that changes something, and every attempt to reach something that
+needs a credential, leaves a row.
+
+```
+GET /api/v1/admin/audit?limit=100&before=<id>
+```
+
+`before` continues a listing: pass the smallest id from the previous page.
+
+A row holds who acted, what they did, and what they did it to. It never holds a
+password, an API key, a policy body or a settings backup. A refused login is
+recorded with the address it was tried with and without the password.
+
+A failed audit write fails the request. A log that silently drops entries reads
+as a complete record, and the insert shares a connection with the work, so a
+failure there means the database is unhealthy.
+
 ## Development
 
 ```bash

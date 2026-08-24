@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use crate::accounts::{self, User};
+use crate::audit::{self, Record};
 use crate::auth;
 use crate::state::AppState;
 
@@ -76,6 +77,36 @@ pub async fn require_session(
         Err(error) => {
             warn!(%error, "the session lookup failed");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Record one action for the session's account, answering an error response
+/// when the log could not be written.
+///
+/// A failed audit write fails the request: a log that silently drops entries
+/// reads as a complete record, and the insert shares a connection with the
+/// work, so a failure here means the database is unhealthy.
+fn audited(
+    state: &AppState,
+    session: &SessionUser,
+    action: &str,
+    target: Option<&str>,
+) -> Option<Response> {
+    match audit::record(
+        &state.store,
+        Record {
+            actor_id: Some(&session.user.id),
+            subject: Some(&session.user.email),
+            action,
+            target,
+            ..Record::default()
+        },
+    ) {
+        Ok(()) => None,
+        Err(error) => {
+            warn!(%error, "recording {action} failed");
+            Some(StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
     }
 }
@@ -173,6 +204,20 @@ async fn login(
     let password_ok = auth::verify_password(&body.password, &stored);
 
     let Some(user) = user.filter(|user| password_ok && !user.disabled) else {
+        // The address is recorded, never the password: a refused login that
+        // names nobody is the entry an administrator most wants to read, and
+        // the attempted password is the one thing that must not be kept.
+        if let Err(error) = audit::record(
+            &state.store,
+            Record {
+                subject: Some(&accounts::normalise_email(&body.email)),
+                action: audit::action::LOGIN_REFUSED,
+                ..Record::default()
+            },
+        ) {
+            warn!(%error, "recording the refused login failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
         return rejected_login();
     };
 
@@ -183,6 +228,19 @@ async fn login(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+
+    if let Err(error) = audit::record(
+        &state.store,
+        Record {
+            actor_id: Some(&user.id),
+            subject: Some(&user.email),
+            action: audit::action::LOGIN_OK,
+            ..Record::default()
+        },
+    ) {
+        warn!(%error, "recording the login failed");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
 
     let cookie = auth::session_cookie(
         &token,
@@ -232,7 +290,14 @@ async fn me(
 /// and receives 304 with no body, which is what makes an hourly poll cheap.
 /// No policy at all answers 204, so a client can tell "nothing configured"
 /// from "unchanged" without guessing.
-async fn policy(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+async fn policy(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::Extension(session): axum::Extension<SessionUser>,
+) -> Response {
+    if let Some(refused) = audited(&state, &session, audit::action::POLICY_FETCH, None) {
+        return refused;
+    }
     let stored = match crate::policy::get(&state.store) {
         Ok(stored) => stored,
         Err(error) => {
@@ -264,6 +329,9 @@ async fn entitled_providers(
     State(state): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<SessionUser>,
 ) -> Response {
+    if let Some(refused) = audited(&state, &session, audit::action::PROVIDERS_FETCH, None) {
+        return refused;
+    }
     match crate::providers::entitled_for_user(&state.store, &state.sealer, &session.user.id) {
         Ok(rows) => Json(rows).into_response(),
         Err(error) => {
@@ -279,6 +347,9 @@ async fn logout(
     headers: HeaderMap,
     axum::Extension(session): axum::Extension<SessionUser>,
 ) -> Response {
+    if let Some(refused) = audited(&state, &session, audit::action::LOGOUT, None) {
+        return refused;
+    }
     if let Err(error) = accounts::close_session(&state.store, &session.token) {
         warn!(%error, "closing the session failed");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -308,6 +379,9 @@ async fn read_backup(
     State(state): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<SessionUser>,
 ) -> Response {
+    if let Some(refused) = audited(&state, &session, audit::action::SETTINGS_READ, None) {
+        return refused;
+    }
     match crate::backup::get(&state.store, &state.sealer, &session.user.id) {
         Ok(Some(stored)) => Json(serde_json::json!({
             "settings": stored.settings,
@@ -346,19 +420,41 @@ async fn write_backup(
         &settings,
         expected,
     ) {
-        Ok(Ok(stored)) => Json(serde_json::json!({
-            "version": stored.version,
-            "checksum": stored.checksum,
-        }))
-        .into_response(),
-        Ok(Err(conflict)) => (
-            StatusCode::CONFLICT,
+        Ok(Ok(stored)) => {
+            if let Some(refused) = audited(
+                &state,
+                &session,
+                audit::action::SETTINGS_WRITE,
+                Some(&stored.version.to_string()),
+            ) {
+                return refused;
+            }
             Json(serde_json::json!({
-                "error": "the stored backup has moved on since you last read it",
-                "current_version": conflict.current_version,
-            })),
-        )
-            .into_response(),
+                "version": stored.version,
+                "checksum": stored.checksum,
+            }))
+            .into_response()
+        }
+        Ok(Err(conflict)) => {
+            // A conflict is recorded too: two machines fighting over one
+            // account is what an administrator would want to see.
+            if let Some(refused) = audited(
+                &state,
+                &session,
+                audit::action::SETTINGS_CONFLICT,
+                Some(&conflict.current_version.to_string()),
+            ) {
+                return refused;
+            }
+            (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "the stored backup has moved on since you last read it",
+                    "current_version": conflict.current_version,
+                })),
+            )
+                .into_response()
+        }
         Err(error) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": error.to_string() })),
@@ -376,6 +472,9 @@ async fn clear_backup(
     State(state): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<SessionUser>,
 ) -> Response {
+    if let Some(refused) = audited(&state, &session, audit::action::SETTINGS_CLEAR, None) {
+        return refused;
+    }
     match crate::backup::clear(&state.store, &session.user.id) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),

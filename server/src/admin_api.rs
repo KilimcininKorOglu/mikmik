@@ -17,6 +17,7 @@ use tracing::warn;
 
 use crate::accounts;
 use crate::api::SessionUser;
+use crate::audit::{self, Record};
 use crate::providers::{self, ProviderInput, SubjectKind};
 use crate::state::AppState;
 
@@ -39,6 +40,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/api/v1/admin/policy",
             get(read_policy).put(write_policy).delete(clear_policy),
         )
+        .route("/api/v1/admin/audit", get(read_audit))
 }
 
 /// Reject a caller who is not an administrator.
@@ -54,6 +56,32 @@ pub async fn require_admin(request: Request, next: Next) -> Result<Response, Sta
         Ok(next.run(request).await)
     } else {
         Err(StatusCode::NOT_FOUND)
+    }
+}
+
+/// Record one administrative action, answering an error response when the log
+/// could not be written.
+fn audited(
+    state: &AppState,
+    session: &SessionUser,
+    action: &str,
+    target: Option<&str>,
+) -> Option<Response> {
+    match audit::record(
+        &state.store,
+        Record {
+            actor_id: Some(&session.user.id),
+            subject: Some(&session.user.email),
+            action,
+            target,
+            ..Record::default()
+        },
+    ) {
+        Ok(()) => None,
+        Err(error) => {
+            warn!(%error, "recording {action} failed");
+            Some(StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        }
     }
 }
 
@@ -111,17 +139,44 @@ async fn list_providers(State(state): State<Arc<AppState>>) -> Response {
 
 async fn create_provider(
     State(state): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<SessionUser>,
     Json(input): Json<ProviderInput>,
 ) -> Response {
+    // The provider's name, never its key: an audit row is read by more people
+    // than the table it describes.
     match providers::create_provider(&state.store, &state.sealer, &input) {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+        Ok(id) => {
+            if let Some(refused) = audited(
+                &state,
+                &session,
+                audit::action::ADMIN_PROVIDER_CREATE,
+                Some(&input.name),
+            ) {
+                return refused;
+            }
+            (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
+        }
         Err(error) => failed("creating the provider failed", error),
     }
 }
 
-async fn delete_provider(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+async fn delete_provider(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<SessionUser>,
+    Path(id): Path<String>,
+) -> Response {
     match providers::delete_provider(&state.store, &id) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(true) => {
+            if let Some(refused) = audited(
+                &state,
+                &session,
+                audit::action::ADMIN_PROVIDER_DELETE,
+                Some(&id),
+            ) {
+                return refused;
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(error) => failed("deleting the provider failed", error),
     }
@@ -143,16 +198,44 @@ async fn list_groups(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-async fn create_group(State(state): State<Arc<AppState>>, Json(body): Json<NameBody>) -> Response {
+async fn create_group(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<SessionUser>,
+    Json(body): Json<NameBody>,
+) -> Response {
     match providers::create_group(&state.store, &body.name) {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+        Ok(id) => {
+            if let Some(refused) = audited(
+                &state,
+                &session,
+                audit::action::ADMIN_GROUP_CREATE,
+                Some(&body.name),
+            ) {
+                return refused;
+            }
+            (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
+        }
         Err(error) => failed("creating the group failed", error),
     }
 }
 
-async fn delete_group(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+async fn delete_group(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<SessionUser>,
+    Path(id): Path<String>,
+) -> Response {
     match providers::delete_group(&state.store, &id) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(true) => {
+            if let Some(refused) = audited(
+                &state,
+                &session,
+                audit::action::ADMIN_GROUP_DELETE,
+                Some(&id),
+            ) {
+                return refused;
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(error) => failed("deleting the group failed", error),
     }
@@ -170,20 +253,42 @@ struct MembershipBody {
 
 async fn add_membership(
     State(state): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<SessionUser>,
     Json(body): Json<MembershipBody>,
 ) -> Response {
     match providers::add_membership(&state.store, &body.user_id, &body.group_id) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            if let Some(refused) = audited(
+                &state,
+                &session,
+                audit::action::ADMIN_MEMBERSHIP_ADD,
+                Some(&format!("{} in {}", body.user_id, body.group_id)),
+            ) {
+                return refused;
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(error) => failed("adding the membership failed", error),
     }
 }
 
 async fn remove_membership(
     State(state): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<SessionUser>,
     Json(body): Json<MembershipBody>,
 ) -> Response {
     match providers::remove_membership(&state.store, &body.user_id, &body.group_id) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(true) => {
+            if let Some(refused) = audited(
+                &state,
+                &session,
+                audit::action::ADMIN_MEMBERSHIP_REMOVE,
+                Some(&format!("{} in {}", body.user_id, body.group_id)),
+            ) {
+                return refused;
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(error) => failed("removing the membership failed", error),
     }
@@ -200,7 +305,11 @@ struct AssignmentBody {
     subject_id: String,
 }
 
-async fn assign(State(state): State<Arc<AppState>>, Json(body): Json<AssignmentBody>) -> Response {
+async fn assign(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<SessionUser>,
+    Json(body): Json<AssignmentBody>,
+) -> Response {
     // Answering 404 for an unknown provider rather than storing a row that
     // matches nothing, because such a row is silently useless.
     match providers::provider_exists(&state.store, &body.provider_id) {
@@ -214,13 +323,24 @@ async fn assign(State(state): State<Arc<AppState>>, Json(body): Json<AssignmentB
         body.subject_kind,
         &body.subject_id,
     ) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            if let Some(refused) = audited(
+                &state,
+                &session,
+                audit::action::ADMIN_ASSIGNMENT_ADD,
+                Some(&format!("{} to {}", body.provider_id, body.subject_id)),
+            ) {
+                return refused;
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(error) => failed("assigning the provider failed", error),
     }
 }
 
 async fn unassign(
     State(state): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<SessionUser>,
     Json(body): Json<AssignmentBody>,
 ) -> Response {
     match providers::unassign(
@@ -229,7 +349,17 @@ async fn unassign(
         body.subject_kind,
         &body.subject_id,
     ) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(true) => {
+            if let Some(refused) = audited(
+                &state,
+                &session,
+                audit::action::ADMIN_ASSIGNMENT_REMOVE,
+                Some(&format!("{} from {}", body.provider_id, body.subject_id)),
+            ) {
+                return refused;
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(error) => failed("unassigning the provider failed", error),
     }
@@ -256,10 +386,22 @@ async fn list_users(State(state): State<Arc<AppState>>) -> Response {
 
 async fn create_user(
     State(state): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<SessionUser>,
     Json(body): Json<NewUserBody>,
 ) -> Response {
+    // The address, never the password.
     match accounts::create_user(&state.store, &body.email, &body.password, body.is_admin) {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+        Ok(id) => {
+            if let Some(refused) = audited(
+                &state,
+                &session,
+                audit::action::ADMIN_USER_CREATE,
+                Some(&accounts::normalise_email(&body.email)),
+            ) {
+                return refused;
+            }
+            (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
+        }
         Err(error) => failed("creating the user failed", error),
     }
 }
@@ -287,18 +429,64 @@ async fn read_policy(State(state): State<Arc<AppState>>) -> Response {
 /// silently ignored believes it applied.
 async fn write_policy(
     State(state): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<SessionUser>,
     Json(settings): Json<serde_json::Value>,
 ) -> Response {
+    // The checksum, never the policy body: a policy may name a model or a
+    // budget, and the log is read by more people than write it.
     match crate::policy::set(&state.store, &settings) {
-        Ok(checksum) => Json(serde_json::json!({ "checksum": checksum })).into_response(),
+        Ok(checksum) => {
+            if let Some(refused) = audited(
+                &state,
+                &session,
+                audit::action::ADMIN_POLICY_WRITE,
+                Some(&checksum),
+            ) {
+                return refused;
+            }
+            Json(serde_json::json!({ "checksum": checksum })).into_response()
+        }
         Err(error) => failed("the policy was refused", error),
     }
 }
 
-async fn clear_policy(State(state): State<Arc<AppState>>) -> Response {
+async fn clear_policy(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<SessionUser>,
+) -> Response {
     match crate::policy::clear(&state.store) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(true) => {
+            if let Some(refused) =
+                audited(&state, &session, audit::action::ADMIN_POLICY_CLEAR, None)
+            {
+                return refused;
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(error) => failed("clearing the policy failed", error),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Audit
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct AuditQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Continue a listing: the smallest id from the previous page.
+    #[serde(default)]
+    before: Option<i64>,
+}
+
+async fn read_audit(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(query): axum::extract::Query<AuditQuery>,
+) -> Response {
+    match audit::list(&state.store, query.limit.unwrap_or(100), query.before) {
+        Ok(rows) => Json(rows).into_response(),
+        Err(error) => failed("reading the audit log failed", error),
     }
 }

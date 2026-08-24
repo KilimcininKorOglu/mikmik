@@ -6,7 +6,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget},
+    widgets::{Paragraph, Widget},
 };
 use std::path::{Path, PathBuf};
 
@@ -674,15 +674,8 @@ fn render_agents_list(state: &AgentsMenuState, area: Rect, buf: &mut Buffer) {
                 .fg(MIKMIK_ACCENT)
                 .add_modifier(Modifier::BOLD),
         )]));
-        for agent in state.active_agents.iter().take(3) {
-            lines.push(Line::from(vec![
-                Span::styled(" ", Style::default().fg(MIKMIK_MUTED)),
-                Span::styled(agent.name.clone(), Style::default().fg(MIKMIK_TEXT)),
-                Span::styled(
-                    format!("  {}", agent.status.label()),
-                    Style::default().fg(agent.status.color()),
-                ),
-            ]));
+        for agent in state.active_agents.iter().take(5) {
+            lines.push(active_agent_line(agent));
         }
         lines.push(Line::from(""));
     }
@@ -917,97 +910,241 @@ fn agent_list_row(title: String, meta: String, selected: bool, width: u16) -> Li
 }
 
 // ---------------------------------------------------------------------------
-// Rendering: Coordinator status inline widget
+// Rendering: one live agent
 // ---------------------------------------------------------------------------
 
-/// Render an inline coordinator + sub-agent status widget.
+/// The prefix `AgentTool` gives a sub-agent's registry entry.
+const SUBAGENT_TASK_PREFIX: &str = "subagent: ";
+
+/// The agents a session is running right now, as the menu shows them.
 ///
-/// Shows: coordinator status, then each sub-agent with its current tool.
-/// Suitable for embedding in the main TUI layout (e.g., below the message list).
-pub fn render_coordinator_status(agents: &[AgentInfo], area: Rect, buf: &mut Buffer) {
-    if agents.is_empty() {
-        return;
+/// Read from the background-task registry rather than from a field the TUI
+/// keeps: no `QueryEvent` reports a sub-agent's progress, and `AgentTool`
+/// hands its sub-agent a `None` event channel, so a TUI-side field had
+/// nothing to fill it.
+///
+/// The registry knows a task's name and status and nothing else, so
+/// `current_tool`, `turns_completed` and `cost_usd` stay empty. Filling them
+/// needs an event the sub-agent does not emit today.
+pub fn live_agents(
+    tasks: &[mikmik_core::tasks::BackgroundTask],
+    managed: Option<&mikmik_core::ManagedAgentConfig>,
+    session_id: &str,
+) -> Vec<AgentInfo> {
+    let managed = managed.filter(|config| config.enabled);
+
+    let mut agents: Vec<AgentInfo> = tasks
+        .iter()
+        .filter(|task| task.is_running())
+        .filter_map(|task| {
+            let name = task.name.strip_prefix(SUBAGENT_TASK_PREFIX)?;
+            Some(AgentInfo {
+                id: task.id.clone(),
+                name: name.to_string(),
+                status: AgentStatus::Running,
+                current_tool: None,
+                turns_completed: 0,
+                last_output: task.output.last().cloned(),
+                agent_role: match managed {
+                    Some(_) => AgentRole::Executor {
+                        parent_id: session_id.to_string(),
+                    },
+                    None => AgentRole::Normal,
+                },
+                model_name: managed.map(|config| config.executor_model.clone()),
+                cost_usd: 0.0,
+            })
+        })
+        .collect();
+
+    // The manager is the session itself, so it has no registry entry. It is
+    // only worth a row while it has something to manage.
+    if let (Some(config), false) = (managed, agents.is_empty()) {
+        agents.insert(
+            0,
+            AgentInfo {
+                id: session_id.to_string(),
+                name: "manager".to_string(),
+                status: AgentStatus::Running,
+                current_tool: None,
+                turns_completed: 0,
+                last_output: None,
+                agent_role: AgentRole::Manager,
+                model_name: Some(config.manager_model.clone()),
+                cost_usd: 0.0,
+            },
+        );
     }
 
-    Block::default()
-        .title(" Active Agents ")
-        .borders(Borders::TOP)
-        .style(Style::default().fg(Color::DarkGray))
-        .render(area, buf);
+    agents
+}
 
-    let inner = Rect {
-        x: area.x + 1,
-        y: area.y + 1,
-        width: area.width.saturating_sub(2),
-        height: area.height.saturating_sub(1),
+/// One row describing a running agent: role badge, name, model, status.
+///
+/// A line rather than a widget, so the agents menu can lay it out with
+/// everything else it draws instead of reserving an area for a second block.
+pub fn active_agent_line(agent: &AgentInfo) -> Line<'static> {
+    let (prefix, role_badge, role_color, indent) = match &agent.agent_role {
+        AgentRole::Manager => ("\u{25cf} ", "[MGR]", Color::Magenta, ""),
+        AgentRole::Executor { .. } => ("  \u{25cb} ", "[EXE]", Color::Cyan, "  "),
+        AgentRole::Normal => ("  \u{25cb} ", "", Color::DarkGray, "  "),
+    };
+    let tool_str = agent
+        .current_tool
+        .as_deref()
+        .map(|t| format!(" \u{2192} {}", t))
+        .unwrap_or_default();
+    let model_str = agent
+        .model_name
+        .as_deref()
+        .map(|m| format!(" ({})", m))
+        .unwrap_or_default();
+    let cost_str = if agent.cost_usd > 0.0 {
+        format!("  ${:.4}", agent.cost_usd)
+    } else {
+        String::new()
     };
 
-    for (i, agent) in agents.iter().enumerate() {
-        if i as u16 >= inner.height {
-            break;
-        }
-        let y = inner.y + i as u16;
-        let row_area = Rect {
-            x: inner.x,
-            y,
-            width: inner.width,
-            height: 1,
-        };
-
-        let (prefix, role_badge, role_color, indent) = match &agent.agent_role {
-            AgentRole::Manager => ("● ", "[MGR]", Color::Magenta, ""),
-            AgentRole::Executor { .. } => ("  ○ ", "[EXE]", Color::Cyan, "  "),
-            AgentRole::Normal => ("  ○ ", "", Color::DarkGray, "  "),
-        };
-        let tool_str = agent
-            .current_tool
-            .as_deref()
-            .map(|t| format!(" → {}", t))
-            .unwrap_or_default();
-        let model_str = agent
-            .model_name
-            .as_deref()
-            .map(|m| format!(" ({})", m))
-            .unwrap_or_default();
-        let cost_str = if agent.cost_usd > 0.0 {
-            format!("  ${:.4}", agent.cost_usd)
-        } else {
-            String::new()
-        };
-
-        let mut spans = vec![
-            Span::styled(indent.to_string(), Style::default()),
-            Span::styled(prefix, Style::default().fg(agent.status.color())),
-        ];
-        if !role_badge.is_empty() {
-            spans.push(Span::styled(
-                format!("{} ", role_badge),
-                Style::default().fg(role_color).add_modifier(Modifier::BOLD),
-            ));
-        }
-        spans.extend(vec![
-            Span::styled(agent.name.clone(), Style::default().fg(Color::White)),
-            Span::styled(model_str, Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!(" [{}]", agent.status.label()),
-                Style::default().fg(agent.status.color()),
-            ),
-            Span::styled(
-                format!(" {} turns", agent.turns_completed),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(tool_str, Style::default().fg(Color::Yellow)),
-            Span::styled(cost_str, Style::default().fg(Color::DarkGray)),
-        ]);
-
-        let line = Line::from(spans);
-        Paragraph::new(line).render(row_area, buf);
+    let mut spans = vec![
+        Span::styled(indent.to_string(), Style::default()),
+        Span::styled(prefix, Style::default().fg(agent.status.color())),
+    ];
+    if !role_badge.is_empty() {
+        spans.push(Span::styled(
+            format!("{} ", role_badge),
+            Style::default().fg(role_color).add_modifier(Modifier::BOLD),
+        ));
     }
+    spans.extend(vec![
+        Span::styled(agent.name.clone(), Style::default().fg(MIKMIK_TEXT)),
+        Span::styled(model_str, Style::default().fg(MIKMIK_MUTED)),
+        Span::styled(
+            format!(" [{}]", agent.status.label()),
+            Style::default().fg(agent.status.color()),
+        ),
+        Span::styled(tool_str, Style::default().fg(Color::Yellow)),
+        Span::styled(cost_str, Style::default().fg(MIKMIK_MUTED)),
+    ]);
+
+    Line::from(spans)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn running_subagent(name: &str) -> mikmik_core::tasks::BackgroundTask {
+        mikmik_core::tasks::BackgroundTask::new(format!("{}{}", SUBAGENT_TASK_PREFIX, name))
+    }
+
+    fn managed_config() -> mikmik_core::ManagedAgentConfig {
+        mikmik_core::ManagedAgentConfig {
+            enabled: true,
+            manager_model: "anthropic/claude-opus-4-6".to_string(),
+            executor_model: "anthropic/claude-sonnet-4-6".to_string(),
+            executor_max_turns: 10,
+            max_concurrent_executors: 4,
+            total_budget_usd: None,
+            preset_name: None,
+            executor_isolation: false,
+        }
+    }
+
+    /// The menu used to read a field nothing ever wrote, so it was always
+    /// empty however many agents were running.
+    #[test]
+    fn a_running_sub_agent_reaches_the_menu() {
+        let tasks = vec![running_subagent("review the auth module")];
+        let agents = live_agents(&tasks, None, "sess-1");
+
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].name, "review the auth module");
+        assert_eq!(agents[0].status, AgentStatus::Running);
+    }
+
+    #[test]
+    fn a_finished_agent_is_not_active_any_more() {
+        let mut task = running_subagent("done already");
+        task.status = mikmik_core::tasks::TaskStatus::Completed;
+
+        assert!(live_agents(&[task], None, "sess-1").is_empty());
+    }
+
+    /// The registry holds every background task, not only sub-agents.
+    #[test]
+    fn an_unrelated_background_task_is_not_an_agent() {
+        let task = mikmik_core::tasks::BackgroundTask::new("cargo build");
+
+        assert!(live_agents(&[task], None, "sess-1").is_empty());
+    }
+
+    #[test]
+    fn managed_mode_names_the_manager_and_its_executors() {
+        let tasks = vec![running_subagent("write the tests")];
+        let config = managed_config();
+        let agents = live_agents(&tasks, Some(&config), "sess-1");
+
+        assert_eq!(agents.len(), 2);
+        assert_eq!(agents[0].agent_role, AgentRole::Manager);
+        assert_eq!(
+            agents[0].model_name.as_deref(),
+            Some("anthropic/claude-opus-4-6")
+        );
+        assert_eq!(
+            agents[1].agent_role,
+            AgentRole::Executor {
+                parent_id: "sess-1".to_string()
+            }
+        );
+        assert_eq!(
+            agents[1].model_name.as_deref(),
+            Some("anthropic/claude-sonnet-4-6")
+        );
+    }
+
+    /// A manager with nothing to manage is not worth a row.
+    #[test]
+    fn managed_mode_shows_no_manager_without_executors() {
+        assert!(live_agents(&[], Some(&managed_config()), "sess-1").is_empty());
+    }
+
+    #[test]
+    fn a_configured_but_inactive_managed_mode_names_no_roles() {
+        let mut config = managed_config();
+        config.enabled = false;
+        let tasks = vec![running_subagent("plain sub-agent")];
+
+        let agents = live_agents(&tasks, Some(&config), "sess-1");
+
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].agent_role, AgentRole::Normal);
+        assert_eq!(agents[0].model_name, None);
+    }
+
+    /// The badge is the whole point of naming the roles.
+    #[test]
+    fn each_role_draws_its_own_badge() {
+        let agents = live_agents(
+            &[running_subagent("scout")],
+            Some(&managed_config()),
+            "sess-1",
+        );
+
+        let manager: String = active_agent_line(&agents[0])
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        let executor: String = active_agent_line(&agents[1])
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+
+        assert!(manager.contains("[MGR]"), "{manager}");
+        assert!(executor.contains("[EXE]"), "{executor}");
+        assert!(executor.contains("scout"), "{executor}");
+    }
 
     fn write_agent(dir: &std::path::Path, file: &str, body: &str) {
         std::fs::create_dir_all(dir).expect("agent dir");

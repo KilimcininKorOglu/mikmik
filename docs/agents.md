@@ -84,6 +84,22 @@ mikmik --agent plan --provider openai --model o3 "review this architecture"
 Definitions live in `.mikmik/agents/` and in `settings.json`. Agents with
 `visible: false` are left out of the listing.
 
+### What "Active now" shows
+
+The menu opens with an **Active now** block above the definitions, listing up to
+five agents that are running at that moment. The list is read from the task
+registry each time the menu opens, so it is a snapshot, not a live feed. An
+agent leaves the block as soon as it finishes, fails, or is cancelled.
+
+With managed agents off, each row is a plain name. With managed agents on, the
+session itself heads the list as `[MGR]` with the manager model, and every
+running sub-agent is indented below it as `[EXE]` with the executor model. The
+manager row appears only while it has at least one executor to manage.
+
+Two columns of the row stay empty: the tool an agent runs right now, and its
+cost. The registry carries neither, and reporting them needs the agents to
+stream events back to the session.
+
 ---
 
 ## Custom Agent Definitions

@@ -211,6 +211,26 @@ fn subagent_model_for(config: &mikmik_core::Config, chosen: Option<&str>) -> Str
     config.canonical_model(&route.account, &route.model)
 }
 
+/// How a finished sub-agent looks to the task registry.
+///
+/// Classified from the outcome rather than from the text `format_outcome`
+/// produced, because a message's wording is not a contract.
+fn task_status_for(outcome: &QueryOutcome) -> mikmik_core::tasks::TaskStatus {
+    use mikmik_core::tasks::TaskStatus;
+    match outcome {
+        QueryOutcome::EndTurn { .. } | QueryOutcome::MaxTokens { .. } => TaskStatus::Completed,
+        QueryOutcome::Cancelled => TaskStatus::Cancelled,
+        QueryOutcome::Error(err) => TaskStatus::Failed(err.to_string()),
+        QueryOutcome::BudgetExceeded {
+            cost_usd,
+            limit_usd,
+        } => TaskStatus::Failed(format!(
+            "budget limit ${:.4} exceeded (spent ${:.4})",
+            limit_usd, cost_usd
+        )),
+    }
+}
+
 /// One word for how a run ended, for a hook payload.
 pub(crate) fn outcome_label(outcome: &QueryOutcome) -> &'static str {
     match outcome {
@@ -601,17 +621,11 @@ impl Tool for AgentTool {
                     Some(mikmik_core::tasks::TaskStatus::Cancelled)
                 );
 
+                let status = task_status_for(&outcome);
                 let result_text = format_outcome(outcome);
                 mikmik_core::tasks::global_registry().append_output(&agent_id_bg, &result_text);
 
                 if !cancelled {
-                    let status = if result_text.starts_with("[Agent error:")
-                        || result_text.starts_with("[Agent stopped:")
-                    {
-                        mikmik_core::tasks::TaskStatus::Failed(result_text.clone())
-                    } else {
-                        mikmik_core::tasks::TaskStatus::Completed
-                    };
                     mikmik_core::tasks::global_registry().update_status(&agent_id_bg, status);
                 }
 
@@ -658,6 +672,14 @@ impl Tool for AgentTool {
 
         // Held until the run returns; dropping it releases the address.
         let _inbox_guard = inbox_guard;
+        // Register the run so it appears beside background agents while it is
+        // live. Only the background branch used to register, so a foreground
+        // sub-agent was invisible for its whole run.
+        let mut task =
+            mikmik_core::tasks::BackgroundTask::new(format!("subagent: {}", params.description));
+        task.id = agent_id.clone();
+        let _ = mikmik_core::tasks::global_registry().register(task);
+
         let sub_ctx = subagent_context(ctx, sub_address);
         let outcome = run_query_loop(
             client.as_ref(),
@@ -671,6 +693,8 @@ impl Tool for AgentTool {
             None, // no pending message queue for sub-agents
         )
         .await;
+
+        mikmik_core::tasks::global_registry().update_status(&agent_id, task_status_for(&outcome));
 
         // Cleanup worktree if one was created.
         if let (Some(root), Some(wt)) = (git_root, worktree_path) {

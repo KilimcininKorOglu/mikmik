@@ -182,8 +182,8 @@ pub mod voice_mode_notice;
 // ---------------------------------------------------------------------------
 
 pub use agents_view::{
-    load_agent_definitions, render_agents_menu, render_coordinator_status, AgentDefinition,
-    AgentInfo, AgentStatus, AgentsMenuState,
+    live_agents, load_agent_definitions, render_agents_menu, AgentDefinition, AgentInfo,
+    AgentStatus, AgentsMenuState,
 };
 pub use app::{try_copy_to_clipboard, App};
 pub use bypass_permissions_dialog::{
@@ -721,30 +721,32 @@ mod tests {
         assert!(!app.diff_viewer.visible);
     }
 
+    /// The menu reads the background-task registry, because that is the only
+    /// place that knows a sub-agent is running.
     #[test]
     fn test_agents_slash_command_populates_active_agents() {
         let mut app = make_app();
-        app.agent_status = vec![
-            ("Mendel".to_string(), "running".to_string()),
-            ("Aristotle".to_string(), "waiting".to_string()),
-            ("Plato".to_string(), "done".to_string()),
-        ];
+        let registry = mikmik_core::tasks::global_registry();
+        let running = registry.register(mikmik_core::tasks::BackgroundTask::new(
+            "subagent: Mendel counts peas",
+        ));
+        let mut finished = mikmik_core::tasks::BackgroundTask::new("subagent: Plato left the cave");
+        finished.status = mikmik_core::tasks::TaskStatus::Completed;
+        registry.register(finished);
 
         assert!(app.intercept_slash_command("agents"));
         assert!(app.agents_menu.visible);
-        assert_eq!(app.agents_menu.active_agents.len(), 3);
-        assert_eq!(
-            app.agents_menu.active_agents[0].status,
-            AgentStatus::Running
-        );
-        assert_eq!(
-            app.agents_menu.active_agents[1].status,
-            AgentStatus::WaitingForTool
-        );
-        assert_eq!(
-            app.agents_menu.active_agents[2].status,
-            AgentStatus::Complete
-        );
+
+        let names: Vec<&str> = app
+            .agents_menu
+            .active_agents
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert!(names.contains(&"Mendel counts peas"), "{names:?}");
+        assert!(!names.contains(&"Plato left the cave"), "{names:?}");
+
+        registry.cancel(&running);
     }
 
     #[test]

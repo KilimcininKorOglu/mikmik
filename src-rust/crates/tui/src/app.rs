@@ -24,7 +24,7 @@ use crate::stats_dialog::StatsDialogState;
 use crate::tasks_overlay::TasksOverlay;
 use crate::theme_screen::ThemeScreen;
 use crate::{
-    agents_view::{AgentInfo, AgentStatus, AgentsMenuState, AgentsRoute},
+    agents_view::{AgentsMenuState, AgentsRoute},
     diff_viewer::DiffPane,
 };
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
@@ -1295,7 +1295,6 @@ pub struct App {
     /// Set by `cycle_agent_mode` so the main loop can update the query config
     /// and tool list to match the newly-selected agent.
     pub agent_mode_changed: bool,
-    pub agent_status: Vec<(String, String)>,
     pub history_search: Option<HistorySearch>,
     pub keybindings: KeybindingResolver,
 
@@ -1796,7 +1795,6 @@ pub struct App {
     /// Cost breakdown for managed agent sessions: (manager_usd, executors_usd, total_usd).
     pub managed_agent_cost_breakdown: Option<(f64, f64, f64)>,
     /// Whether managed agent mode is currently active.
-    pub managed_agents_active: bool,
     /// Timestamp of the first exit key press that showed confirmation (valid for ~2 seconds).
     pub last_exit_key_warning: Option<std::time::Instant>,
     /// Which exit key ('c' or 'd') started the current confirmation sequence.
@@ -1891,7 +1889,6 @@ impl App {
             agent_mode: None,
             agent_mode_changed: false,
             accent_color: ACCENT_BUILD,
-            agent_status: Vec::new(),
             history_search: None,
             keybindings: KeybindingResolver::new(&user_keybindings),
             cursor_pos: 0,
@@ -2128,7 +2125,6 @@ impl App {
             timeline_turn_started_at_ms: None,
             update_available: None,
             managed_agent_cost_breakdown: None,
-            managed_agents_active: false,
             last_exit_key_warning: None,
             exit_key_sequence_start: None,
         }
@@ -3724,28 +3720,14 @@ impl App {
     fn open_agents_menu(&mut self) {
         let root = self.project_root();
         self.agents_menu.open(&root);
-        self.agents_menu.active_agents = self
-            .agent_status
-            .iter()
-            .enumerate()
-            .map(|(idx, (name, status))| AgentInfo {
-                id: format!("agent-{}", idx + 1),
-                name: name.clone(),
-                status: match status.as_str() {
-                    "running" => AgentStatus::Running,
-                    "waiting" | "waiting_for_tool" => AgentStatus::WaitingForTool,
-                    "complete" | "completed" | "done" => AgentStatus::Complete,
-                    "failed" | "error" => AgentStatus::Failed,
-                    _ => AgentStatus::Idle,
-                },
-                current_tool: None,
-                turns_completed: 0,
-                last_output: Some(status.clone()),
-                agent_role: crate::agents_view::AgentRole::Normal,
-                model_name: None,
-                cost_usd: 0.0,
-            })
-            .collect();
+        // A snapshot taken as the menu opens. The registry is the only place
+        // that knows a sub-agent is running, because nothing forwards a
+        // sub-agent's events to this session.
+        self.agents_menu.active_agents = crate::agents_view::live_agents(
+            &mikmik_core::tasks::global_registry().list(),
+            self.config.managed_agents.as_ref(),
+            &self.session_id,
+        );
     }
 
     /// Add a message directly (e.g. from a non-streaming source).

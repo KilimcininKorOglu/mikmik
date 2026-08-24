@@ -23,6 +23,7 @@ mod policy;
 mod providers;
 mod state;
 mod store;
+mod web;
 
 use std::sync::Arc;
 
@@ -53,6 +54,10 @@ pub fn app(state: Arc<AppState>) -> Router {
 
     guarded
         .merge(public)
+        // The page has to load before anyone can sign in, so it sits outside
+        // the session layer too. It carries nothing an anonymous visitor could
+        // not already see: everything it fills in comes from the API.
+        .merge(web::routes())
         // Liveness sits outside the session layer so a health check needs no
         // credential.
         .route("/healthz", axum::routing::get(healthz))
@@ -1061,6 +1066,150 @@ mod tests {
             log.contains("settings.conflict"),
             "two machines fighting over one account was not recorded"
         );
+    }
+
+    /// Send a request authenticated the way a browser does it, with an
+    /// optional CSRF token.
+    async fn by_cookie(
+        state: &Arc<AppState>,
+        method: &str,
+        uri: &str,
+        token: &str,
+        csrf: Option<&str>,
+    ) -> axum::response::Response {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::COOKIE, format!("{}={token}", auth::COOKIE_NAME));
+        if let Some(csrf) = csrf {
+            builder = builder.header(auth::CSRF_HEADER, csrf);
+        }
+        app(state.clone())
+            .oneshot(builder.body(Body::empty()).expect("request"))
+            .await
+            .expect("response")
+    }
+
+    /// The CSRF token the page is handed for a session.
+    async fn csrf_for(state: &Arc<AppState>, token: &str) -> String {
+        body_json(authed(state, "GET", "/api/v1/me", token, None).await).await["csrf_token"]
+            .as_str()
+            .expect("a csrf token")
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn a_cookie_write_without_the_csrf_token_is_refused() {
+        // Another origin can make the browser attach the cookie. It cannot
+        // read this token, so this is what tells our own page from theirs.
+        let state = test_state();
+        let token = logged_in(&state, "ayse@firma.com", false).await;
+
+        let response = by_cookie(&state, "POST", "/api/v1/logout", &token, None).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        // And the session it tried to end is still open.
+        let after = authed(&state, "GET", "/api/v1/me", &token, None).await;
+        assert_eq!(after.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_cookie_write_with_the_wrong_csrf_token_is_refused() {
+        let state = test_state();
+        let token = logged_in(&state, "ayse@firma.com", false).await;
+        let other = logged_in(&state, "bora@firma.com", false).await;
+        let borrowed = csrf_for(&state, &other).await;
+
+        for presented in ["invented", borrowed.as_str(), ""] {
+            let response =
+                by_cookie(&state, "POST", "/api/v1/logout", &token, Some(presented)).await;
+            assert_eq!(
+                response.status(),
+                StatusCode::FORBIDDEN,
+                "{presented:?} was accepted"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cookie_write_with_the_right_csrf_token_goes_through() {
+        let state = test_state();
+        let token = logged_in(&state, "ayse@firma.com", false).await;
+        let csrf = csrf_for(&state, &token).await;
+
+        let response = by_cookie(&state, "POST", "/api/v1/logout", &token, Some(&csrf)).await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn a_cookie_read_needs_no_csrf_token() {
+        // Requiring one on a read would break the first page load, which has
+        // no token yet and is exactly where the page asks for one.
+        let state = test_state();
+        let token = logged_in(&state, "ayse@firma.com", false).await;
+
+        let response = by_cookie(&state, "GET", "/api/v1/me", &token, None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_bearer_write_needs_no_csrf_token() {
+        // The CLI holds a token in a file. No other origin can make it send
+        // that header, so there is nothing here for a CSRF check to add.
+        let state = test_state();
+        let token = logged_in(&state, "ayse@firma.com", false).await;
+
+        let response = authed(&state, "POST", "/api/v1/logout", &token, None).await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn the_administration_surface_stays_shut_to_a_browser_session() {
+        // The page draws the administration panel from what `/me` says, but
+        // what it may actually do is decided here.
+        let state = test_state();
+        let token = logged_in(&state, "ayse@firma.com", false).await;
+        let csrf = csrf_for(&state, &token).await;
+
+        let listed = by_cookie(&state, "GET", "/api/v1/admin/users", &token, None).await;
+        assert_eq!(listed.status(), StatusCode::NOT_FOUND);
+
+        let created = app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/admin/groups")
+                    .header(header::COOKIE, format!("{}={token}", auth::COOKIE_NAME))
+                    .header(auth::CSRF_HEADER, csrf)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({ "name": "backend" }).to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(created.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_page_is_reachable_and_the_api_behind_it_is_not() {
+        let state = test_state();
+        for (path, expected) in [
+            ("/", StatusCode::OK),
+            ("/app.js", StatusCode::OK),
+            ("/style.css", StatusCode::OK),
+            ("/api/v1/me", StatusCode::UNAUTHORIZED),
+        ] {
+            let response = app(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), expected, "{path}");
+        }
     }
 
     #[tokio::test]

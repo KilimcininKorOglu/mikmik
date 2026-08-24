@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mikmik server</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>mikmik server</h1>
+  <div id="who" hidden>
+    <span id="who-email"></span>
+    <button id="logout" type="button">Sign out</button>
+  </div>
+</header>
+
+<main>
+  <section id="signin">
+    <h2>Sign in</h2>
+    <form id="signin-form">
+      <label>Email <input id="signin-email" type="email" autocomplete="username" required></label>
+      <label>Password <input id="signin-password" type="password" autocomplete="current-password" required></label>
+      <button type="submit">Sign in</button>
+    </form>
+    <p class="note">This page holds nothing. The session lives in a cookie the page cannot read.</p>
+  </section>
+
+  <section id="not-admin" hidden>
+    <h2>Signed in</h2>
+    <p>This account is not an administrator, so there is nothing to manage here.
+       Your mikmik installation reads what it needs on its own.</p>
+  </section>
+
+  <div id="admin" hidden>
+    <nav>
+      <button type="button" data-panel="providers" class="active">Providers</button>
+      <button type="button" data-panel="groups">Groups</button>
+      <button type="button" data-panel="users">Users</button>
+      <button type="button" data-panel="policy">Policy</button>
+      <button type="button" data-panel="audit">Audit</button>
+    </nav>
+
+    <section id="panel-providers">
+      <h2>Providers</h2>
+      <table id="providers-table">
+        <thead><tr><th>Name</th><th>Protocol</th><th>Base URL</th><th>Assigned to</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+
+      <h3>Add a provider</h3>
+      <form id="provider-form">
+        <label>Name <input id="provider-name" required placeholder="openai"></label>
+        <label>Protocol <input id="provider-protocol" placeholder="openai"></label>
+        <label>Base URL <input id="provider-base" placeholder="https://api.openai.com/v1"></label>
+        <label>API key <input id="provider-key" type="password" required></label>
+        <label>Models <input id="provider-models" placeholder="gpt-5, gpt-5-mini"></label>
+        <button type="submit">Add</button>
+      </form>
+
+      <h3>Assign</h3>
+      <form id="assign-form">
+        <label>Provider <select id="assign-provider"></select></label>
+        <label>To <select id="assign-subject"></select></label>
+        <button type="submit">Assign</button>
+        <button type="button" id="unassign">Remove</button>
+      </form>
+    </section>
+
+    <section id="panel-groups" hidden>
+      <h2>Groups</h2>
+      <table id="groups-table">
+        <thead><tr><th>Name</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+
+      <h3>Add a group</h3>
+      <form id="group-form">
+        <label>Name <input id="group-name" required placeholder="backend"></label>
+        <button type="submit">Add</button>
+      </form>
+
+      <h3>Membership</h3>
+      <form id="membership-form">
+        <label>User <select id="membership-user"></select></label>
+        <label>Group <select id="membership-group"></select></label>
+        <button type="submit">Add</button>
+        <button type="button" id="membership-remove">Remove</button>
+      </form>
+    </section>
+
+    <section id="panel-users" hidden>
+      <h2>Users</h2>
+      <table id="users-table">
+        <thead><tr><th>Email</th><th>Role</th><th>State</th></tr></thead>
+        <tbody></tbody>
+      </table>
+
+      <h3>Add a user</h3>
+      <form id="user-form">
+        <label>Email <input id="user-email" type="email" required></label>
+        <label>Password <input id="user-password" type="password" required
+                minlength="12" autocomplete="new-password"></label>
+        <label class="inline"><input id="user-admin" type="checkbox"> Administrator</label>
+        <button type="submit">Add</button>
+      </form>
+      <p class="note">At least 12 characters. The password is sent once and stored only as an argon2 hash.</p>
+    </section>
+
+    <section id="panel-policy" hidden>
+      <h2>Policy</h2>
+      <p class="note">Every installation merges this over its own settings, so whatever it names, the user cannot override.</p>
+      <form id="policy-form">
+        <label>Settings JSON
+          <textarea id="policy-body" rows="14" spellcheck="false"></textarea>
+        </label>
+        <button type="submit">Save</button>
+        <button type="button" id="policy-clear">Remove</button>
+      </form>
+      <p class="note">A policy may not name hooks, MCP servers, formatters, language servers,
+        skills, ACP agents, the relay or this server. Each names something the client would run.</p>
+    </section>
+
+    <section id="panel-audit" hidden>
+      <h2>Audit</h2>
+      <table id="audit-table">
+        <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <button type="button" id="audit-more">Older</button>
+    </section>
+  </div>
+</main>
+
+<p id="message" role="status" hidden></p>
+<script src="/app.js"></script>
+</body>
+</html>

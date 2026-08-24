@@ -185,6 +185,18 @@ A failed audit write fails the request. A log that silently drops entries reads
 as a complete record, and the insert shares a connection with the work, so a
 failure there means the database is unhealthy.
 
+## Web interface
+
+The server serves its own administration page at `/`. It is three embedded files with no build step: open the server's address in a browser and sign in with an administrator account. The page covers providers, groups, users, membership, assignment, the policy and the audit log.
+
+An ordinary account may sign in and sees a page with nothing to manage. That is a courtesy, not a control: what an account may do is decided by the API, which answers 404 to every administration route it is not entitled to.
+
+The page keeps nothing in the browser. The session is the `HttpOnly` cookie, which no script can read, and the CSRF token lives in a variable that dies with the tab.
+
+Every unsafe request authenticated by the cookie must carry the CSRF token in an `x-csrf-token` header, and `GET /api/v1/me` is where the page gets one. Without it the server answers 403. A request authenticated by a bearer token needs none: no other origin can make a browser attach an `Authorization` header.
+
+The assets are served under `default-src 'none'` with no `unsafe-inline`, so an injected script cannot run even if a value ever reached the page as markup. Nothing on the page builds markup from a value; every value goes in with `textContent`.
+
 ## Development
 
 ```bash

@@ -100,6 +100,26 @@ pub fn token_hash(token: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// The CSRF token that goes with a session.
+///
+/// Derived rather than stored: it is a keyed digest of the session token's
+/// own digest, so it needs no table and cannot be produced by anyone who does
+/// not already hold both the session and the server secret.
+///
+/// The session cookie is `HttpOnly`, so a page script cannot read it and
+/// cannot forge this. A cross-site request carries the cookie only if the
+/// browser ignores `SameSite=Strict`; this is the second lock on that door.
+pub fn csrf_token(secret: &str, session_token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"mikmik-server-csrf-v1");
+    hasher.update(secret.as_bytes());
+    hasher.update(token_hash(session_token).as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// Name of the header the web interface sends its CSRF token in.
+pub const CSRF_HEADER: &str = "x-csrf-token";
+
 /// Compare two hex digests in constant time.
 ///
 /// A short-circuiting `==` leaks the length of the matching prefix through
@@ -240,6 +260,24 @@ mod tests {
         assert!(!digest_matches(&hash, &hash[..hash.len() - 1]));
         assert!(!digest_matches(&hash, &format!("{hash}0")));
         assert!(!digest_matches(&hash, ""));
+    }
+
+    #[test]
+    fn a_csrf_token_is_bound_to_its_session_and_to_the_secret() {
+        let one = new_session_token().expect("token");
+        let two = new_session_token().expect("token");
+
+        assert_eq!(csrf_token("secret-a", &one), csrf_token("secret-a", &one));
+        assert_ne!(csrf_token("secret-a", &one), csrf_token("secret-a", &two));
+        assert_ne!(csrf_token("secret-a", &one), csrf_token("secret-b", &one));
+    }
+
+    #[test]
+    fn a_csrf_token_is_not_the_session_token() {
+        let token = new_session_token().expect("token");
+        let csrf = csrf_token("secret", &token);
+        assert_ne!(csrf, token);
+        assert_ne!(csrf, token_hash(&token));
     }
 
     #[test]

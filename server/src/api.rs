@@ -57,13 +57,32 @@ pub async fn require_session(
     mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let presented = presented_token(request.headers()).map(str::to_string);
+    let presented =
+        presented_token(request.headers()).map(|(token, cookie)| (token.to_string(), cookie));
     // Not the check that rejects an anonymous request: the lookup below finds
     // nothing for a token that is not there and answers 401 either way. This
     // only spares the database a query per unauthenticated request.
-    let Some(token) = presented else {
+    let Some((token, via_cookie)) = presented else {
         return Err(StatusCode::UNAUTHORIZED);
     };
+
+    // A write authenticated by the cookie has to prove it came from our own
+    // page. The token is derived from the session and the server secret, and
+    // the session cookie is `HttpOnly`, so a page on another origin can produce
+    // neither. A bearer token needs no such proof: a browser cannot be made to
+    // attach an `Authorization` header cross-origin without a preflight this
+    // server never answers.
+    if via_cookie && is_unsafe_method(request.method()) {
+        let expected = auth::csrf_token(&state.secret, &token);
+        let presented_csrf = request
+            .headers()
+            .get(auth::CSRF_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if !auth::digest_matches(&expected, presented_csrf) {
+            return Err(StatusCode::FORBIDDEN);
+        }
+    }
 
     match accounts::session_user(&state.store, &token) {
         Ok(Some(user)) => {
@@ -111,18 +130,28 @@ fn audited(
     }
 }
 
-/// The token a request carries, from either place it may live.
-fn presented_token(headers: &HeaderMap) -> Option<&str> {
-    headers
+/// The token a request carries, and which place it came from.
+fn presented_token(headers: &HeaderMap) -> Option<(&str, bool)> {
+    if let Some(bearer) = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(auth::bearer_from_header)
-        .or_else(|| {
-            headers
-                .get(header::COOKIE)
-                .and_then(|value| value.to_str().ok())
-                .and_then(auth::token_from_cookies)
-        })
+    {
+        return Some((bearer, false));
+    }
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(auth::token_from_cookies)
+        .map(|token| (token, true))
+}
+
+/// Whether a method changes something.
+fn is_unsafe_method(method: &axum::http::Method) -> bool {
+    !matches!(
+        *method,
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    )
 }
 
 /// What the layer hands to a guarded handler.
@@ -173,6 +202,9 @@ struct MeView {
     email: String,
     is_admin: bool,
     groups: Vec<crate::providers::Group>,
+    /// What the web interface must send back on a write. The CLI ignores it:
+    /// a bearer token needs no such proof.
+    csrf_token: String,
 }
 
 /// Exchange an address and a password for a session token.
@@ -280,6 +312,7 @@ async fn me(
         email: session.user.email.clone(),
         is_admin: session.user.is_admin,
         groups,
+        csrf_token: auth::csrf_token(&state.secret, &session.token),
     })
     .into_response()
 }

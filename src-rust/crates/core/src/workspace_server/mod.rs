@@ -15,6 +15,7 @@
 pub mod client;
 pub mod policy;
 pub mod providers;
+pub mod sync;
 
 pub use client::{
     Account, BackupWrite, EntitledProvider, Group, Identity, PolicyFetch, Session, StoredBackup,

@@ -67,7 +67,7 @@ impl Tool for ComputerUseTool {
     }
 
     fn name(&self) -> &str {
-        "computer"
+        mikmik_core::constants::TOOL_NAME_COMPUTER_USE
     }
 
     fn description(&self) -> &str {

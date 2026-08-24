@@ -279,7 +279,9 @@ User → Manager model
          └─ Executor 3 (e.g., updating docs)
 ```
 
-The manager model does not execute tools itself — it delegates to executor agents and synthesizes their outputs. Executors can run concurrently up to the `concurrent` limit.
+The manager model does not execute tools itself — it delegates to executor agents and synthesizes their outputs. Enabling managed agents removes `Bash`, `PowerShell`, `REPL`, `computer`, `Write`, `Edit`, `BatchEdit`, `NotebookEdit` and `ApplyPatch` from the manager's roster; reading, searching, delegating and task tracking all stay. See [Agents](./agents.md#managed-agents-preview) for the full table.
+
+Executors can run concurrently up to the `concurrent` limit.
 
 ### Configuration
 

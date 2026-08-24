@@ -234,7 +234,7 @@ impl Tool for ReplTool {
     }
 
     fn name(&self) -> &str {
-        "REPL"
+        mikmik_core::constants::TOOL_NAME_REPL
     }
 
     fn description(&self) -> &str {

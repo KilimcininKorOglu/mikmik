@@ -5497,6 +5497,9 @@ pub mod constants {
     pub const TOOL_NAME_APPLY_PATCH: &str = "ApplyPatch";
     pub const TOOL_NAME_TEAM_CREATE: &str = "TeamCreate";
     pub const TOOL_NAME_TEAM_DELETE: &str = "TeamDelete";
+    pub const TOOL_NAME_POWERSHELL: &str = "PowerShell";
+    pub const TOOL_NAME_REPL: &str = "REPL";
+    pub const TOOL_NAME_COMPUTER_USE: &str = "computer";
 
     // Session ID prefixes
     pub const SESSION_ID_PREFIX_BASH: &str = "b";

@@ -242,7 +242,16 @@ concurrency limits and budget splits, see
 
 Managed agents provide a formal **manager-executor** architecture. The manager reasons about the plan and delegates; the executors carry out individual tasks. You configure a model and a turn limit for each role, a concurrency limit, and one budget the whole session draws from.
 
-The manager does not execute tools itself. Executors run concurrently up to the `concurrent` limit, and `isolation` gives each one its own worktree.
+The manager does not execute tools itself: while managed agents are enabled, its tool roster is missing everything that does the work.
+
+| Withheld from the manager | Kept |
+|---|---|
+| `Bash`, `PowerShell`, `REPL`, `computer` | `Read`, `Glob`, `Grep`, `WebFetch`, `WebSearch` |
+| `Write`, `Edit`, `BatchEdit`, `NotebookEdit`, `ApplyPatch` | `Agent`, `TeamCreate`, `Task*`, `SendMessage`, `monitor`, `TodoWrite`, `EnterWorktree` |
+
+Your own shell is unaffected, because `!command` does not go through the model's roster.
+
+Executors run concurrently up to the `concurrent` limit, and `isolation` gives each one its own worktree.
 
 ### Enabling and configuring
 

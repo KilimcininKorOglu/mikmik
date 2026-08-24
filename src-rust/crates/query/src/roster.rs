@@ -57,8 +57,42 @@ pub fn build_tool_roster(
         debug!(total_tools = tools.len(), "MCP tools registered");
     }
 
+    // The manager plans and delegates, so it holds nothing that does the work
+    // itself. Its system prompt and the documentation both said so already;
+    // only the roster did not.
+    if config
+        .managed_agents
+        .as_ref()
+        .is_some_and(|managed| managed.enabled)
+    {
+        let before = tools.len();
+        tools.retain(|t| !MANAGER_DENIED_TOOLS.contains(&t.name()));
+        debug!(
+            removed = before - tools.len(),
+            "managed mode: withheld the tools that do the work"
+        );
+    }
+
     Arc::new(tools)
 }
+
+/// What a manager does not get while managed mode is on.
+///
+/// Reading, searching, delegating and tracking all stay: the manager still has
+/// to understand the work before it can split it up. The user's own shell is
+/// untouched, because the TUI reaches `PtyBashTool` directly rather than
+/// through this roster.
+const MANAGER_DENIED_TOOLS: &[&str] = &[
+    mikmik_core::constants::TOOL_NAME_BASH,
+    mikmik_core::constants::TOOL_NAME_POWERSHELL,
+    mikmik_core::constants::TOOL_NAME_REPL,
+    mikmik_core::constants::TOOL_NAME_COMPUTER_USE,
+    mikmik_core::constants::TOOL_NAME_FILE_WRITE,
+    mikmik_core::constants::TOOL_NAME_FILE_EDIT,
+    mikmik_core::constants::TOOL_NAME_BATCH_EDIT,
+    mikmik_core::constants::TOOL_NAME_NOTEBOOK_EDIT,
+    mikmik_core::constants::TOOL_NAME_APPLY_PATCH,
+];
 
 #[cfg(test)]
 mod tests {
@@ -75,6 +109,54 @@ mod tests {
             advisor_model: model.map(str::to_string),
             ..Default::default()
         }
+    }
+
+    fn managed(enabled: bool) -> Config {
+        Config {
+            managed_agents: Some(mikmik_core::ManagedAgentConfig {
+                enabled,
+                manager_model: "anthropic/claude-opus-4-6".to_string(),
+                executor_model: "anthropic/claude-sonnet-4-6".to_string(),
+                executor_max_turns: 10,
+                max_concurrent_executors: 4,
+                total_budget_usd: None,
+                preset_name: None,
+                executor_isolation: false,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// The prompt and the documentation both claimed the manager does not
+    /// execute tools. Only the roster decides that.
+    #[test]
+    fn a_manager_holds_nothing_that_does_the_work() {
+        let tools = build_tool_roster(None, &managed(true));
+        let names = names(&tools);
+
+        for denied in MANAGER_DENIED_TOOLS {
+            assert!(!names.contains(denied), "{denied} reached the manager");
+        }
+    }
+
+    #[test]
+    fn a_manager_still_reads_searches_and_delegates() {
+        let tools = build_tool_roster(None, &managed(true));
+        let names = names(&tools);
+
+        assert!(names.contains(&"Read"), "{names:?}");
+        assert!(names.contains(&"Grep"), "{names:?}");
+        assert!(names.contains(&"Agent"), "{names:?}");
+        assert!(names.contains(&"TodoWrite"), "{names:?}");
+    }
+
+    #[test]
+    fn a_configured_but_inactive_managed_mode_changes_nothing() {
+        let tools = build_tool_roster(None, &managed(false));
+        let names = names(&tools);
+
+        assert!(names.contains(&"Bash"), "{names:?}");
+        assert!(names.contains(&"Write"), "{names:?}");
     }
 
     #[test]

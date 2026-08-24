@@ -85,7 +85,7 @@ impl Tool for PowerShellTool {
     }
 
     fn name(&self) -> &str {
-        "PowerShell"
+        mikmik_core::constants::TOOL_NAME_POWERSHELL
     }
 
     fn description(&self) -> &str {

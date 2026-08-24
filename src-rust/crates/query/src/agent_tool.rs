@@ -114,6 +114,32 @@ fn subagent_context(parent: &ToolContext, inbox: mikmik_tools::AgentAddress) -> 
     ctx
 }
 
+/// Tools that reach the agent runner.
+///
+/// Excluding `Agent` alone does not stop a sub-agent from spawning: a team
+/// runs through the same `AGENT_RUNNER`, so a sub-agent holding `TeamCreate`
+/// opens the door that excluding `Agent` was meant to close, and nothing
+/// bounds how deep that goes.
+const SPAWNING_TOOLS: &[&str] = &[
+    mikmik_core::constants::TOOL_NAME_AGENT,
+    mikmik_core::constants::TOOL_NAME_TEAM_CREATE,
+];
+
+/// The tools a sub-agent may hold.
+///
+/// The spawn filter comes first and an allowlist narrows what is left, so a
+/// model that asks for a spawning tool by name does not receive one.
+fn subagent_tools(allowed: Option<&Vec<String>>) -> Vec<Box<dyn Tool>> {
+    mikmik_tools::all_tools()
+        .into_iter()
+        .filter(|t| !SPAWNING_TOOLS.contains(&t.name()))
+        .filter(|t| match allowed {
+            Some(names) => names.contains(&t.name().to_string()),
+            None => true,
+        })
+        .collect()
+}
+
 /// The model string the subagent's own `QueryConfig` will carry.
 ///
 /// Canonical, because the subagent resolves it against its own config and a
@@ -322,18 +348,7 @@ impl Tool for AgentTool {
         );
         let model_registry = Arc::new(build_model_registry());
 
-        // Build the tool list for the sub-agent.
-        // Always exclude AgentTool itself to prevent unbounded recursion.
-        let all = mikmik_tools::all_tools();
-        let agent_tools: Vec<Box<dyn Tool>> = if let Some(ref allowed) = params.tools {
-            all.into_iter()
-                .filter(|t| allowed.contains(&t.name().to_string()))
-                .collect()
-        } else {
-            all.into_iter()
-                .filter(|t| t.name() != mikmik_core::constants::TOOL_NAME_AGENT)
-                .collect()
-        };
+        let agent_tools = subagent_tools(params.tools.as_ref());
 
         // Resolve model: explicit override > managed config executor model > provider default.
         let model = resolve_subagent_model(&params, ctx);
@@ -501,11 +516,10 @@ impl Tool for AgentTool {
             task.cancel_token = Some(cancel.clone());
             let _ = mikmik_core::tasks::global_registry().register(task);
 
-            // Re-create the tool list inside the closure so it is owned and Send.
-            let agent_tools_bg: Vec<Box<dyn Tool>> = mikmik_tools::all_tools()
-                .into_iter()
-                .filter(|t| t.name() != mikmik_core::constants::TOOL_NAME_AGENT)
-                .collect();
+            // Re-create the tool list inside the closure so it is owned and
+            // Send. It honours the caller's allowlist, which the background
+            // branch used to ignore.
+            let agent_tools_bg = subagent_tools(params.tools.as_ref());
 
             let client_bg = client.clone();
             let ctx_bg = subagent_context(ctx, sub_address);
@@ -745,18 +759,7 @@ pub fn init_team_swarm_runner() {
                 );
                 let model_registry = Arc::new(build_model_registry());
 
-                // Build the tool list, filtering to the allowlist if provided.
-                let all = mikmik_tools::all_tools();
-                let agent_tools: Vec<Box<dyn mikmik_tools::Tool>> = if let Some(ref allowed) = tools
-                {
-                    all.into_iter()
-                        .filter(|t| allowed.contains(&t.name().to_string()))
-                        .collect()
-                } else {
-                    all.into_iter()
-                        .filter(|t| t.name() != mikmik_core::constants::TOOL_NAME_AGENT)
-                        .collect()
-                };
+                let agent_tools = subagent_tools(tools.as_ref());
 
                 let model = resolve_subagent_model(
                     &AgentInput {
@@ -835,6 +838,59 @@ pub fn init_team_swarm_runner() {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    fn names_of(tools: &[Box<dyn Tool>]) -> Vec<&str> {
+        tools.iter().map(|t| t.name()).collect()
+    }
+
+    /// A sub-agent that held `TeamCreate` could spawn through the same runner
+    /// `Agent` was excluded to close off, and nothing bounds how deep that
+    /// goes.
+    #[test]
+    fn a_sub_agent_holds_no_tool_that_spawns_agents() {
+        let tools = subagent_tools(None);
+        let names = names_of(&tools);
+
+        assert!(!names.contains(&mikmik_core::constants::TOOL_NAME_AGENT));
+        assert!(!names.contains(&mikmik_core::constants::TOOL_NAME_TEAM_CREATE));
+    }
+
+    /// Messaging is how an executor reports back, and neither of these spawns
+    /// anything, so the filter must not take them.
+    #[test]
+    fn a_sub_agent_keeps_the_tools_that_only_coordinate() {
+        let tools = subagent_tools(None);
+        let names = names_of(&tools);
+
+        assert!(names.contains(&"SendMessage"));
+        assert!(names.contains(&mikmik_core::constants::TOOL_NAME_TEAM_DELETE));
+        assert!(names.contains(&mikmik_core::constants::TOOL_NAME_TASK_STOP));
+    }
+
+    /// An allowlist narrows what is left after the spawn filter. Applying it
+    /// the other way round would hand back a spawning tool on request.
+    #[test]
+    fn an_allowlist_cannot_ask_for_a_spawning_tool() {
+        let asked = vec![
+            mikmik_core::constants::TOOL_NAME_TEAM_CREATE.to_string(),
+            mikmik_core::constants::TOOL_NAME_FILE_READ.to_string(),
+        ];
+        let tools = subagent_tools(Some(&asked));
+        let names = names_of(&tools);
+
+        assert_eq!(names, vec![mikmik_core::constants::TOOL_NAME_FILE_READ]);
+    }
+
+    #[test]
+    fn an_allowlist_still_narrows_the_rest() {
+        let asked = vec![mikmik_core::constants::TOOL_NAME_GREP.to_string()];
+        let tools = subagent_tools(Some(&asked));
+
+        assert_eq!(
+            names_of(&tools),
+            vec![mikmik_core::constants::TOOL_NAME_GREP]
+        );
+    }
 
     #[test]
     fn an_agent_definition_becomes_a_prompt_section() {

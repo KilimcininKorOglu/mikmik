@@ -208,7 +208,7 @@ fn default_parallel() -> bool {
 #[async_trait]
 impl Tool for TeamCreateTool {
     fn name(&self) -> &str {
-        "TeamCreate"
+        mikmik_core::constants::TOOL_NAME_TEAM_CREATE
     }
 
     fn description(&self) -> &str {
@@ -491,7 +491,7 @@ struct TeamDeleteInput {
 #[async_trait]
 impl Tool for TeamDeleteTool {
     fn name(&self) -> &str {
-        "TeamDelete"
+        mikmik_core::constants::TOOL_NAME_TEAM_DELETE
     }
 
     fn description(&self) -> &str {

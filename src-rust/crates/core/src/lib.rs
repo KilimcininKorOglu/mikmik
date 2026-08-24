@@ -5509,6 +5509,8 @@ pub mod constants {
     pub const TOOL_NAME_NOTEBOOK_EDIT: &str = "NotebookEdit";
     pub const TOOL_NAME_BATCH_EDIT: &str = "BatchEdit";
     pub const TOOL_NAME_APPLY_PATCH: &str = "ApplyPatch";
+    pub const TOOL_NAME_TEAM_CREATE: &str = "TeamCreate";
+    pub const TOOL_NAME_TEAM_DELETE: &str = "TeamDelete";
 
     // Session ID prefixes
     pub const SESSION_ID_PREFIX_BASH: &str = "b";

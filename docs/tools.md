@@ -553,7 +553,9 @@ Run a sub-agent on a task of its own. The sub-agent gets a fresh context and rep
 | `isolation`         | string  | no       | `worktree` runs the agent in its own git worktree                    |
 | `run_in_background` | boolean | no       | Return an `agent_id` at once instead of waiting                      |
 
-An agent never receives the `Agent` tool, so it cannot spawn further agents. `isolation: worktree` is what keeps parallel agents from writing over each other. A background agent is polled through `monitor` with `action=status` or `action=output` and `task_id` set to the returned `agent_id`, and reached with [`SendMessage`](#sendmessage) using the `agent_name` the call returns.
+An agent never receives `Agent` or `TeamCreate`, so it cannot spawn further agents by either route, and `tools` cannot ask for one back. It keeps the tools that only coordinate, `SendMessage` among them, so it can report to whoever started it.
+
+`isolation: worktree` is what keeps parallel agents from writing over each other. A background agent is polled through `monitor` with `action=status` or `action=output` and `task_id` set to the returned `agent_id`, and reached with [`SendMessage`](#sendmessage) using the `agent_name` the call returns. `tools` applies in background mode too, which it did not before.
 
 ---
 

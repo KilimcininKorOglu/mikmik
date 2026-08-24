@@ -16,6 +16,7 @@ mod codex_oauth_flow;
 mod oauth_flow;
 mod status_line;
 mod upgrade;
+mod workspace_cli;
 
 // ---------------------------------------------------------------------------
 // Build-time metadata (embedded via build.rs)
@@ -501,6 +502,12 @@ async fn main() -> anyhow::Result<()> {
     // OpenAI Codex (ChatGPT) accounts. Mirrors `mikmik auth` for symmetry.
     if raw_args.get(1).map(|s| s.as_str()) == Some("codex") {
         return handle_codex_account_command(&raw_args[2..]).await;
+    }
+
+    // Fast-path: `mikmik workspace <login|logout|status>` — the organisation's
+    // configuration server. Ahead of the parser for the same reason as `auth`.
+    if raw_args.get(1).map(|s| s.as_str()) == Some("workspace") {
+        return workspace_cli::run(&raw_args[2..]).await;
     }
 
     // Fast-path: `mikmik accounts` — list all stored accounts across providers.

@@ -15,11 +15,12 @@ use std::path::Path;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-/// Statements every slice's tables are appended to.
+/// Every module's tables, applied in order at open.
 ///
-/// Each is `IF NOT EXISTS`, so opening an existing database is a no-op and
-/// there is no migration step to run or forget.
-const SCHEMA: &str = "";
+/// Each statement is `IF NOT EXISTS`, so opening an existing database is a
+/// no-op and there is no migration step to run or forget. A module owns its
+/// own `SCHEMA` constant and is listed here.
+const SCHEMA: &[&str] = &[crate::accounts::SCHEMA];
 
 pub struct Store {
     conn: Mutex<Connection>,
@@ -63,8 +64,8 @@ impl Store {
         // WAL lets a reader run while a writer commits, which matters as soon
         // as the web interface polls while a client uploads.
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        if !SCHEMA.is_empty() {
-            conn.execute_batch(SCHEMA)?;
+        for statements in SCHEMA {
+            conn.execute_batch(statements)?;
         }
         Ok(())
     }

@@ -34,7 +34,44 @@ docker compose up -d
 | `MIKMIK_SERVER_SECRET` | none, required | Encryption and session key, 32 characters or more |
 | `MIKMIK_SERVER_BIND` | `0.0.0.0:8420` | Listen address |
 | `MIKMIK_SERVER_DB` | `mikmik-server.sqlite` | Database path; the image sets `/data/mikmik-server.sqlite` |
+| `MIKMIK_SERVER_SESSION_TTL_SECS` | `2592000` (30 days) | How long a login lasts |
 | `RUST_LOG` | `mikmik_server=info` | Log filter |
+
+## Opening the first account
+
+The web interface needs an account to log in with, so it cannot open the first
+one. The binary does, against the same database:
+
+```bash
+echo 'a long enough password' | mikmik-server admin create ayse@firma.com --admin
+mikmik-server admin list
+```
+
+The password is read from stdin and never from the command line, because the
+shell records its history and `ps` shows arguments to every user on the
+machine. A password must be at least 12 characters.
+
+In the container:
+
+```bash
+docker compose exec -T server mikmik-server admin create ayse@firma.com --admin
+```
+
+## Logging in
+
+```
+POST /api/v1/login   {"email": "...", "password": "..."}  answers a token
+GET  /api/v1/me      Bearer <token>                       answers the account
+POST /api/v1/logout  Bearer <token>                       ends the session
+```
+
+The token also comes back as a `mikmik_session` cookie, marked `HttpOnly` and
+`SameSite=Strict`, and `Secure` when a reverse proxy reports TLS. A guarded
+route accepts either.
+
+A failed login always answers the same 401, whether the password was wrong, the
+address unknown, or the account disabled. Telling them apart would make this a
+way to find out who works here.
 
 ## Development
 

@@ -61,7 +61,15 @@ pub struct Config {
     pub secret: String,
     pub bind: String,
     pub db_path: PathBuf,
+    /// How long a session lives, in seconds.
+    pub session_ttl_secs: i64,
 }
+
+/// Default session lifetime: 30 days.
+///
+/// Long enough that a developer is not logging in every morning, short enough
+/// that an abandoned laptop stops reaching the server within a month.
+pub const DEFAULT_SESSION_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 
 /// Default listen address.
 ///
@@ -93,7 +101,26 @@ impl Config {
             secret,
             bind: bind_from_env(),
             db_path,
+            session_ttl_secs: env_positive_i64(
+                "MIKMIK_SERVER_SESSION_TTL_SECS",
+                DEFAULT_SESSION_TTL_SECS,
+            ),
         })
+    }
+}
+
+/// Read a positive integer from the environment, warning rather than failing
+/// on nonsense, because a mistyped lifetime should not stop the server.
+pub fn env_positive_i64(name: &str, default: i64) -> i64 {
+    match std::env::var(name) {
+        Ok(raw) => match raw.trim().parse::<i64>() {
+            Ok(value) if value > 0 => value,
+            _ => {
+                warn!(name, value = %raw, "ignoring unparseable duration; using the default");
+                default
+            }
+        },
+        Err(_) => default,
     }
 }
 
@@ -107,21 +134,6 @@ pub fn health_check_target(bind: &str) -> String {
             format!("127.0.0.1:{port}")
         }
         _ => bind.to_string(),
-    }
-}
-
-/// Read a positive integer from the environment, falling back on nonsense.
-#[allow(dead_code)]
-pub fn env_usize(name: &str, default: usize) -> usize {
-    match std::env::var(name) {
-        Ok(raw) => match raw.trim().parse::<usize>() {
-            Ok(value) if value > 0 => value,
-            _ => {
-                warn!(name, value = %raw, "ignoring unparseable size; using the default");
-                default
-            }
-        },
-        Err(_) => default,
     }
 }
 

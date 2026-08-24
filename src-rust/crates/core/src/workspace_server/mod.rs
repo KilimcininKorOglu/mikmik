@@ -15,6 +15,7 @@
 pub mod client;
 pub mod policy;
 pub mod providers;
+pub mod session;
 pub mod sync;
 
 pub use client::{

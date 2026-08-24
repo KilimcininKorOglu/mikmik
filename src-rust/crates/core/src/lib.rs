@@ -1038,6 +1038,21 @@ pub mod config {
             skip_serializing_if = "Option::is_none"
         )]
         pub request_timeout_secs: Option<u64>,
+        /// The workspace server this account came from, if it was not added
+        /// here by hand.
+        ///
+        /// Three things read it. A managed account is left out of the settings
+        /// backup, because the organisation already holds it and the backup is
+        /// the user's own. `workspace logout` removes exactly these and leaves
+        /// the user's own accounts alone. And `/workspace` lists them apart, so
+        /// nobody edits an entry the next pull will overwrite.
+        #[serde(
+            default,
+            rename = "managedBy",
+            alias = "managed_by",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub managed_by: Option<String>,
     }
 
     impl Default for ProviderConfig {
@@ -1051,6 +1066,7 @@ pub mod config {
                 models_synced_at: None,
                 options: HashMap::new(),
                 request_timeout_secs: None,
+                managed_by: None,
             }
         }
     }

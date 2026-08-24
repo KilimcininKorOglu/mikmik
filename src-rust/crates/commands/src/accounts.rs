@@ -171,6 +171,16 @@ impl SlashCommand for AccountsCommand {
         // credential itself, because that is the only place it is stored.
         let mut by_protocol: std::collections::BTreeMap<String, Vec<String>> = Default::default();
         for (account_id, credential) in &store.credentials {
+            // The workspace session is not a model account: it authenticates
+            // against the organisation's own server, which serves no
+            // completions, and `/switch` could not do anything with it.
+            // `/workspace status` is where it belongs.
+            if matches!(
+                credential,
+                mikmik_core::StoredCredential::WorkspaceSession { .. }
+            ) {
+                continue;
+            }
             let protocol = settings
                 .providers
                 .get(account_id)
@@ -230,7 +240,9 @@ fn describe(credential: &mikmik_core::StoredCredential) -> String {
             .as_deref()
             .map(|id| format!("  {}", id))
             .unwrap_or_default(),
-        C::OAuthToken { .. } | C::ApiKey { .. } => String::new(),
+        // The listing above skips the workspace session, so its arm here is
+        // only what the compiler needs to see the match is complete.
+        C::OAuthToken { .. } | C::ApiKey { .. } | C::WorkspaceSession { .. } => String::new(),
     }
 }
 

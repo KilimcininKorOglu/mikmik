@@ -13,6 +13,7 @@
 //! named directory roots a session can reach.
 
 pub mod client;
+pub mod providers;
 
 pub use client::{
     Account, BackupWrite, EntitledProvider, Group, Identity, PolicyFetch, Session, StoredBackup,

@@ -29,6 +29,7 @@ pub fn guarded() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/v1/me", get(me))
         .route("/api/v1/logout", post(logout))
+        .route("/api/v1/providers", get(entitled_providers))
 }
 
 /// Routes that must be reachable without one.
@@ -129,6 +130,15 @@ impl From<&User> for UserView {
     }
 }
 
+/// `/me`, which adds the groups the account belongs to.
+#[derive(Debug, Serialize)]
+struct MeView {
+    id: String,
+    email: String,
+    is_admin: bool,
+    groups: Vec<crate::providers::Group>,
+}
+
 /// Exchange an address and a password for a session token.
 ///
 /// Every failure answers 401 with the same body. A wrong password, an unknown
@@ -190,9 +200,42 @@ fn rejected_login() -> Response {
         .into_response()
 }
 
-/// Who the caller is.
-async fn me(axum::Extension(session): axum::Extension<SessionUser>) -> Response {
-    Json(UserView::from(&session.user)).into_response()
+/// Who the caller is, and which groups they belong to.
+async fn me(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<SessionUser>,
+) -> Response {
+    let groups = match crate::providers::groups_for_user(&state.store, &session.user.id) {
+        Ok(groups) => groups,
+        Err(error) => {
+            warn!(%error, "listing the groups failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    Json(MeView {
+        id: session.user.id.clone(),
+        email: session.user.email.clone(),
+        is_admin: session.user.is_admin,
+        groups,
+    })
+    .into_response()
+}
+
+/// Every provider this account may use, with its key.
+///
+/// The key is what makes the entitlement real: a provider nobody assigned is
+/// not merely hidden from the client, it has no credential to be used with.
+async fn entitled_providers(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<SessionUser>,
+) -> Response {
+    match crate::providers::entitled_for_user(&state.store, &state.sealer, &session.user.id) {
+        Ok(rows) => Json(rows).into_response(),
+        Err(error) => {
+            warn!(%error, "listing the entitled providers failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 /// End this session.

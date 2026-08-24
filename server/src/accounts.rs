@@ -25,7 +25,11 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 ";
 
 /// An account, as every caller outside this module sees it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serialisable on purpose and deliberately without the password hash: the
+/// administration surface answers with this type, so a field added here
+/// reaches an HTTP response.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct User {
     pub id: String,
     pub email: String,
@@ -113,6 +117,25 @@ pub fn any_user_exists(store: &Store) -> anyhow::Result<bool> {
     let count: i64 =
         store.with(|conn| conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0)))?;
     Ok(count > 0)
+}
+
+/// Every account, for the administration surface. Never a password hash.
+pub fn list_users(store: &Store) -> anyhow::Result<Vec<User>> {
+    store.with(|conn| {
+        let mut statement =
+            conn.prepare("SELECT id, email, is_admin, disabled_at FROM users ORDER BY created_at")?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(User {
+                    id: row.get(0)?,
+                    email: row.get(1)?,
+                    is_admin: row.get::<_, i64>(2)? != 0,
+                    disabled: row.get::<_, Option<i64>>(3)?.is_some(),
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })
 }
 
 /// Record a session and answer the token the caller must present.

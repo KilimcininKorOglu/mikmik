@@ -12,9 +12,12 @@
 
 mod accounts;
 mod admin;
+mod admin_api;
 mod api;
 mod auth;
 mod config;
+mod crypt;
+mod providers;
 mod state;
 mod store;
 
@@ -35,12 +38,13 @@ use store::Store;
 /// route by route, so a route added there later cannot be left unguarded by
 /// accident.
 pub fn app(state: Arc<AppState>) -> Router {
-    let guarded = api::guarded()
-        .with_state(state.clone())
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            api::require_session,
-        ));
+    // The admin layer sits inside the session layer, so a handler in the admin
+    // group can assume both a live session and an administrator behind it.
+    let admin = admin_api::routes().layer(middleware::from_fn(admin_api::require_admin));
+
+    let guarded = api::guarded().merge(admin).with_state(state.clone()).layer(
+        middleware::from_fn_with_state(state.clone(), api::require_session),
+    );
 
     let public = api::public().with_state(state);
 
@@ -104,7 +108,11 @@ async fn main() -> anyhow::Result<()> {
         return admin::run(&store, &args[2..]);
     }
 
-    let state = Arc::new(AppState::new(store, config.session_ttl_secs));
+    let state = Arc::new(AppState::new(
+        store,
+        &config.secret,
+        config.session_ttl_secs,
+    ));
     tokio::spawn(sweep_loop(state.clone()));
 
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
@@ -138,9 +146,14 @@ mod tests {
     use tower::ServiceExt;
 
     const PASSWORD: &str = "correct horse battery";
+    const TEST_SECRET: &str = "0123456789abcdef0123456789abcdef";
 
     fn test_state() -> Arc<AppState> {
-        Arc::new(AppState::new(Store::open_in_memory().expect("store"), 3600))
+        Arc::new(AppState::new(
+            Store::open_in_memory().expect("store"),
+            TEST_SECRET,
+            3600,
+        ))
     }
 
     async fn body_json(response: axum::response::Response) -> serde_json::Value {
@@ -165,6 +178,22 @@ mod tests {
     /// Open an account and log in, answering the token.
     async fn logged_in(state: &Arc<AppState>, email: &str, is_admin: bool) -> String {
         accounts::create_user(&state.store, email, PASSWORD, is_admin).expect("created");
+        let response = app(state.clone())
+            .oneshot(post_json(
+                "/api/v1/login",
+                json!({ "email": email, "password": PASSWORD }),
+            ))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        body_json(response).await["token"]
+            .as_str()
+            .expect("a token")
+            .to_string()
+    }
+
+    /// Log in to an account that already exists.
+    async fn logged_in_existing(state: &Arc<AppState>, email: &str) -> String {
         let response = app(state.clone())
             .oneshot(post_json(
                 "/api/v1/login",
@@ -398,9 +427,245 @@ mod tests {
         assert_eq!(after.status(), StatusCode::UNAUTHORIZED);
     }
 
+    /// Send an authenticated JSON request and answer the response.
+    async fn authed(
+        state: &Arc<AppState>,
+        method: &str,
+        uri: &str,
+        token: &str,
+        body: Option<serde_json::Value>,
+    ) -> axum::response::Response {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"));
+        let body = match body {
+            Some(value) => {
+                builder = builder.header(header::CONTENT_TYPE, "application/json");
+                Body::from(value.to_string())
+            }
+            None => Body::empty(),
+        };
+        app(state.clone())
+            .oneshot(builder.body(body).expect("request"))
+            .await
+            .expect("response")
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_account_cannot_see_the_administration_surface() {
+        // 404 rather than 403: the surface does not confirm it exists.
+        let state = test_state();
+        let token = logged_in(&state, "ayse@firma.com", false).await;
+
+        let response = authed(&state, "GET", "/api/v1/admin/providers", &token, None).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_administration_surface_needs_a_session_at_all() {
+        let state = test_state();
+        let response = app(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/providers")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn an_administrator_defines_a_provider_and_a_user_receives_it() {
+        let state = test_state();
+        let admin = logged_in(&state, "admin@firma.com", true).await;
+
+        let created = authed(
+            &state,
+            "POST",
+            "/api/v1/admin/providers",
+            &admin,
+            Some(json!({
+                "name": "openai",
+                "protocol": "openai",
+                "api_base": "https://api.example",
+                "api_key": "key-for-openai",
+                "models": ["gpt-x"]
+            })),
+        )
+        .await;
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let provider_id = body_json(created).await["id"]
+            .as_str()
+            .expect("an id")
+            .to_string();
+
+        let ayse_id =
+            accounts::create_user(&state.store, "ayse@firma.com", PASSWORD, false).expect("user");
+        let ayse = logged_in_existing(&state, "ayse@firma.com").await;
+
+        // Before the assignment there is nothing to receive.
+        let before = authed(&state, "GET", "/api/v1/providers", &ayse, None).await;
+        assert_eq!(body_json(before).await, json!([]));
+
+        let assigned = authed(
+            &state,
+            "POST",
+            "/api/v1/admin/assignments",
+            &admin,
+            Some(json!({
+                "provider_id": provider_id,
+                "subject_kind": "user",
+                "subject_id": ayse_id
+            })),
+        )
+        .await;
+        assert_eq!(assigned.status(), StatusCode::NO_CONTENT);
+
+        let after = body_json(authed(&state, "GET", "/api/v1/providers", &ayse, None).await).await;
+        assert_eq!(after[0]["name"], "openai");
+        assert_eq!(after[0]["api_key"], "key-for-openai");
+        assert_eq!(after[0]["models"][0], "gpt-x");
+    }
+
+    #[tokio::test]
+    async fn the_administration_listing_never_answers_with_a_key() {
+        let state = test_state();
+        let admin = logged_in(&state, "admin@firma.com", true).await;
+        authed(
+            &state,
+            "POST",
+            "/api/v1/admin/providers",
+            &admin,
+            Some(json!({ "name": "openai", "api_key": "key-for-openai" })),
+        )
+        .await;
+
+        let listed =
+            body_json(authed(&state, "GET", "/api/v1/admin/providers", &admin, None).await)
+                .await
+                .to_string();
+        assert!(!listed.contains("key-for-openai"), "a key leaked: {listed}");
+    }
+
+    #[tokio::test]
+    async fn a_group_assignment_reaches_a_member_over_http() {
+        let state = test_state();
+        let admin = logged_in(&state, "admin@firma.com", true).await;
+        let ayse_id =
+            accounts::create_user(&state.store, "ayse@firma.com", PASSWORD, false).expect("user");
+        let ayse = logged_in_existing(&state, "ayse@firma.com").await;
+
+        let provider_id = body_json(
+            authed(
+                &state,
+                "POST",
+                "/api/v1/admin/providers",
+                &admin,
+                Some(json!({ "name": "openai", "api_key": "key-for-openai" })),
+            )
+            .await,
+        )
+        .await["id"]
+            .as_str()
+            .expect("an id")
+            .to_string();
+
+        let group_id = body_json(
+            authed(
+                &state,
+                "POST",
+                "/api/v1/admin/groups",
+                &admin,
+                Some(json!({ "name": "backend" })),
+            )
+            .await,
+        )
+        .await["id"]
+            .as_str()
+            .expect("an id")
+            .to_string();
+
+        authed(
+            &state,
+            "POST",
+            "/api/v1/admin/assignments",
+            &admin,
+            Some(json!({
+                "provider_id": provider_id,
+                "subject_kind": "group",
+                "subject_id": group_id
+            })),
+        )
+        .await;
+        authed(
+            &state,
+            "POST",
+            "/api/v1/admin/memberships",
+            &admin,
+            Some(json!({ "user_id": ayse_id, "group_id": group_id })),
+        )
+        .await;
+
+        let entitled =
+            body_json(authed(&state, "GET", "/api/v1/providers", &ayse, None).await).await;
+        assert_eq!(entitled[0]["name"], "openai");
+
+        // `/me` reports the membership that made it reachable.
+        let me = body_json(authed(&state, "GET", "/api/v1/me", &ayse, None).await).await;
+        assert_eq!(me["groups"][0]["name"], "backend");
+    }
+
+    #[tokio::test]
+    async fn assigning_a_provider_that_does_not_exist_is_refused() {
+        // A stored row naming nothing would look like a working assignment.
+        let state = test_state();
+        let admin = logged_in(&state, "admin@firma.com", true).await;
+
+        let response = authed(
+            &state,
+            "POST",
+            "/api/v1/admin/assignments",
+            &admin,
+            Some(json!({
+                "provider_id": "invented",
+                "subject_kind": "user",
+                "subject_id": "invented"
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_subject_kind_is_refused_at_the_edge() {
+        let state = test_state();
+        let admin = logged_in(&state, "admin@firma.com", true).await;
+
+        let response = authed(
+            &state,
+            "POST",
+            "/api/v1/admin/assignments",
+            &admin,
+            Some(json!({
+                "provider_id": "x",
+                "subject_kind": "team",
+                "subject_id": "y"
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
     #[tokio::test]
     async fn an_expired_session_no_longer_opens_a_guarded_route() {
-        let state = Arc::new(AppState::new(Store::open_in_memory().expect("store"), -1));
+        let state = Arc::new(AppState::new(
+            Store::open_in_memory().expect("store"),
+            TEST_SECRET,
+            -1,
+        ));
         let token = logged_in(&state, "ayse@firma.com", false).await;
 
         let response = app(state)

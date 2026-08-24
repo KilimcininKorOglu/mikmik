@@ -73,6 +73,45 @@ A failed login always answers the same 401, whether the password was wrong, the
 address unknown, or the account disabled. Telling them apart would make this a
 way to find out who works here.
 
+## Providers, groups and assignment
+
+An organisation defines each provider once, with its key, and decides who may
+use it. A user reaches a provider either because it is assigned to them
+directly or because it is assigned to a group they belong to.
+
+```
+POST   /api/v1/admin/providers          define a provider (name, protocol, api_base, api_key, models)
+GET    /api/v1/admin/providers          list them, with who they are assigned to, never with a key
+DELETE /api/v1/admin/providers/{id}     remove one; its assignments go with it
+POST   /api/v1/admin/groups             create a group
+GET    /api/v1/admin/groups             list them
+DELETE /api/v1/admin/groups/{id}        remove one; its memberships go with it
+POST   /api/v1/admin/memberships        {"user_id": ..., "group_id": ...}
+POST   /api/v1/admin/memberships/remove the same body
+POST   /api/v1/admin/assignments        {"provider_id": ..., "subject_kind": "user"|"group", "subject_id": ...}
+POST   /api/v1/admin/assignments/remove the same body
+GET    /api/v1/admin/users              list the accounts
+POST   /api/v1/admin/users              {"email": ..., "password": ..., "is_admin": false}
+```
+
+Every one of these needs an administrator. A request from an ordinary account
+answers 404 rather than 403, so the administration surface does not confirm its
+own existence.
+
+A user reads their own entitlement:
+
+```
+GET /api/v1/providers   Bearer <token>   the definitions and keys they may use
+```
+
+The key is what makes the entitlement real. A provider nobody assigned is not
+merely hidden from the client; the client has no credential to use it with.
+
+Provider keys are stored encrypted with XChaCha20-Poly1305 under a key derived
+from `MIKMIK_SERVER_SECRET`. The server can read them, which is what lets it
+hand them out; what this buys is that a copied `.sqlite` file is not enough on
+its own. Changing the secret makes every stored key unreadable.
+
 ## Development
 
 ```bash

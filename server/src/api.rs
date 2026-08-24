@@ -31,6 +31,10 @@ pub fn guarded() -> Router<Arc<AppState>> {
         .route("/api/v1/logout", post(logout))
         .route("/api/v1/providers", get(entitled_providers))
         .route("/api/v1/policy", get(policy))
+        .route(
+            "/api/v1/settings",
+            get(read_backup).put(write_backup).delete(clear_backup),
+        )
 }
 
 /// Routes that must be reachable without one.
@@ -281,4 +285,103 @@ async fn logout(
     }
     let cookie = auth::cleared_cookie(auth::is_secure_request(&headers));
     (StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// The settings backup
+// ---------------------------------------------------------------------------
+
+/// The version a client says it is replacing.
+///
+/// Required rather than optional: a write with no `If-Match` is a client that
+/// has not read what is stored, and letting it through is exactly the silent
+/// overwrite the version exists to stop. Zero means "I expect nothing stored".
+fn expected_version(headers: &HeaderMap) -> Option<i64> {
+    headers
+        .get(header::IF_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .and_then(|raw| raw.parse::<i64>().ok())
+}
+
+async fn read_backup(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<SessionUser>,
+) -> Response {
+    match crate::backup::get(&state.store, &state.sealer, &session.user.id) {
+        Ok(Some(stored)) => Json(serde_json::json!({
+            "settings": stored.settings,
+            "version": stored.version,
+            "checksum": stored.checksum,
+        }))
+        .into_response(),
+        Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            warn!(%error, "reading the backup failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn write_backup(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::Extension(session): axum::Extension<SessionUser>,
+    Json(settings): Json<serde_json::Value>,
+) -> Response {
+    let Some(expected) = expected_version(&headers) else {
+        return (
+            StatusCode::PRECONDITION_REQUIRED,
+            Json(serde_json::json!({
+                "error": "send If-Match with the version you are replacing, or 0 for the first upload"
+            })),
+        )
+            .into_response();
+    };
+
+    match crate::backup::put(
+        &state.store,
+        &state.sealer,
+        &session.user.id,
+        &settings,
+        expected,
+    ) {
+        Ok(Ok(stored)) => Json(serde_json::json!({
+            "version": stored.version,
+            "checksum": stored.checksum,
+        }))
+        .into_response(),
+        Ok(Err(conflict)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "the stored backup has moved on since you last read it",
+                "current_version": conflict.current_version,
+            })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Remove this account's own backup.
+///
+/// A user who no longer wants their settings held on the server can say so
+/// without an administrator, because the settings and the keys inside them are
+/// theirs.
+async fn clear_backup(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<SessionUser>,
+) -> Response {
+    match crate::backup::clear(&state.store, &session.user.id) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            warn!(%error, "clearing the backup failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }

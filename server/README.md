@@ -143,6 +143,29 @@ The write is refused with the offending key named, rather than accepted and
 dropped by the client. An administrator who is told "no" can ask why; one whose
 policy is silently ignored believes it applied.
 
+## Settings backup
+
+Each account holds one backup. A client uploads what it has and restores it on
+a new machine.
+
+```
+GET    /api/v1/settings                     the backup, its version and its checksum
+PUT    /api/v1/settings   If-Match: <n>     upload, replacing version n; 0 for the first
+DELETE /api/v1/settings                     remove it
+```
+
+`If-Match` is required. A write without it is a client that has not read what
+is stored, and letting it through is the silent overwrite the version exists to
+stop; the server answers 428 instead.
+
+Two machines syncing one account is the normal case. A write against a version
+that has moved on answers 409 with the current version in the body, and nothing
+is written. The client re-reads and decides what to keep.
+
+The stored blob is sealed, because the decision was that a user's own provider
+keys ride along with their settings. Losing `MIKMIK_SERVER_SECRET` makes every
+backup unreadable rather than wrong.
+
 ## Development
 
 ```bash

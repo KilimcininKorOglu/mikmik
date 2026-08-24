@@ -15,6 +15,7 @@ mod admin;
 mod admin_api;
 mod api;
 mod auth;
+mod backup;
 mod config;
 mod crypt;
 mod policy;
@@ -805,6 +806,126 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Upload a backup with an explicit expected version.
+    async fn upload(
+        state: &Arc<AppState>,
+        token: &str,
+        version: i64,
+        settings: serde_json::Value,
+    ) -> axum::response::Response {
+        app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/settings")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::IF_MATCH, version.to_string())
+                    .body(Body::from(settings.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response")
+    }
+
+    #[tokio::test]
+    async fn no_backup_answers_no_content() {
+        let state = test_state();
+        let token = logged_in(&state, "ayse@firma.com", false).await;
+
+        let response = authed(&state, "GET", "/api/v1/settings", &token, None).await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn a_backup_uploads_and_comes_back() {
+        let state = test_state();
+        let token = logged_in(&state, "ayse@firma.com", false).await;
+
+        let written = upload(&state, &token, 0, json!({ "config": { "model": "m" } })).await;
+        assert_eq!(written.status(), StatusCode::OK);
+        assert_eq!(body_json(written).await["version"], 1);
+
+        let read = body_json(authed(&state, "GET", "/api/v1/settings", &token, None).await).await;
+        assert_eq!(read["settings"]["config"]["model"], "m");
+        assert_eq!(read["version"], 1);
+    }
+
+    #[tokio::test]
+    async fn a_write_without_if_match_is_refused() {
+        // A client that has not read what is stored must not overwrite it.
+        let state = test_state();
+        let token = logged_in(&state, "ayse@firma.com", false).await;
+
+        let response = authed(
+            &state,
+            "PUT",
+            "/api/v1/settings",
+            &token,
+            Some(json!({ "a": 1 })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
+    }
+
+    #[tokio::test]
+    async fn a_second_machine_writing_a_stale_version_is_told_the_current_one() {
+        let state = test_state();
+        let token = logged_in(&state, "ayse@firma.com", false).await;
+
+        upload(&state, &token, 0, json!({ "a": 1 })).await;
+        upload(&state, &token, 1, json!({ "a": 2 })).await;
+
+        // The second machine still believes the backup is at version 1.
+        let response = upload(&state, &token, 1, json!({ "a": 3 })).await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let body = body_json(response).await;
+        assert_eq!(body["current_version"], 2);
+
+        // And nothing was written.
+        let read = body_json(authed(&state, "GET", "/api/v1/settings", &token, None).await).await;
+        assert_eq!(read["settings"], json!({ "a": 2 }));
+    }
+
+    #[tokio::test]
+    async fn one_account_never_sees_another_backup() {
+        let state = test_state();
+        let ayse = logged_in(&state, "ayse@firma.com", false).await;
+        let bora = logged_in(&state, "bora@firma.com", false).await;
+
+        upload(&state, &ayse, 0, json!({ "secret": "ayse only" })).await;
+
+        let response = authed(&state, "GET", "/api/v1/settings", &bora, None).await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn a_user_can_remove_their_own_backup() {
+        let state = test_state();
+        let token = logged_in(&state, "ayse@firma.com", false).await;
+        upload(&state, &token, 0, json!({ "a": 1 })).await;
+
+        let removed = authed(&state, "DELETE", "/api/v1/settings", &token, None).await;
+        assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+
+        let after = authed(&state, "GET", "/api/v1/settings", &token, None).await;
+        assert_eq!(after.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn a_backup_never_answers_with_the_sealed_form() {
+        // The client needs the settings, not the record they were stored in.
+        let state = test_state();
+        let token = logged_in(&state, "ayse@firma.com", false).await;
+        upload(&state, &token, 0, json!({ "a": 1 })).await;
+
+        let body = body_json(authed(&state, "GET", "/api/v1/settings", &token, None).await)
+            .await
+            .to_string();
+        assert!(!body.contains("v1:"), "the sealed record leaked: {body}");
     }
 
     #[tokio::test]

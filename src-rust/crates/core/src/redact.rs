@@ -63,6 +63,9 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
         Rule::new("google", r"AIza[A-Za-z0-9_\-]{30,}", 0),
         Rule::new("aws", r"(?:AKIA|ASIA)[A-Z0-9]{16}", 0),
         Rule::new("huggingface", r"hf_[A-Za-z0-9]{30,}", 0),
+        // Stripe names its environment in the key, and the underscore keeps it
+        // clear of the `sk-` rule above.
+        Rule::new("stripe", r"(?:sk|rk)_(?:test|live|prod)_[A-Za-z0-9]{10,}", 0),
         // A JWT anchored on the base64 of `{"alg"`, so an ordinary dotted
         // triple such as a version string or a package path stays put.
         Rule::new(
@@ -184,6 +187,7 @@ mod tests {
             ("google", shaped("AIz", "a", 35)),
             ("aws", shaped("AKI", "A", 16)),
             ("huggingface", shaped("hf", "_", 36)),
+            ("stripe", shaped("sk", "_live_", 24)),
         ];
 
         for (class, literal) in cases {

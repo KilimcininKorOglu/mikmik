@@ -16,15 +16,18 @@
 //     Use the `monitor` tool to check completion status/output.
 
 use async_trait::async_trait;
+use dashmap::DashMap;
 use mikmik_api::client::ClientConfig;
 use mikmik_api::{AnthropicClient, ModelRegistry, ProviderRegistry};
 use mikmik_core::types::Message;
 use mikmik_tools::{PermissionLevel, Tool, ToolContext, ToolResult};
+use once_cell::sync::Lazy;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, info, warn};
 
 use crate::{run_query_loop, QueryConfig, QueryOutcome};
@@ -112,6 +115,41 @@ fn subagent_context(parent: &ToolContext, inbox: mikmik_tools::AgentAddress) -> 
     // its own or the two would drain the same inbox.
     ctx.inbox = inbox;
     ctx
+}
+
+/// How many executors a session may run at once, one semaphore per session.
+///
+/// Per session rather than per process, because the ACP server holds a
+/// `SessionRegistry` and a limit set in one session must not throttle another.
+static EXECUTOR_SLOTS: Lazy<DashMap<String, Arc<Semaphore>>> = Lazy::new(DashMap::new);
+
+/// A permit to run as one of a session's concurrent executors.
+///
+/// `None` unless managed mode is on: with no configured limit there is nothing
+/// to bound, and taking a permit would only add a wait to today's behaviour.
+///
+/// Only an agent that runs *beside* its parent takes one. A foreground
+/// sub-agent blocks its parent for its whole run, so it is already alone.
+/// Nothing that holds a permit can ask for a second one, because a sub-agent
+/// receives no tool that spawns agents; that is what makes this deadlock-free.
+///
+/// The limit is read when a session first spawns an executor. Changing
+/// `concurrent` afterwards reaches the next session, not this one.
+async fn executor_permit(ctx: &ToolContext) -> Option<OwnedSemaphorePermit> {
+    let limit = ctx
+        .managed_agent_config
+        .as_ref()
+        .filter(|managed| managed.enabled)
+        .map(|managed| managed.max_concurrent_executors.max(1) as usize)?;
+
+    // Clone the Arc out from under the shard guard, then await on it: never
+    // hold a DashMap lock across an `.await`.
+    let slots = EXECUTOR_SLOTS
+        .entry(ctx.session_id.clone())
+        .or_insert_with(|| Arc::new(Semaphore::new(limit)))
+        .clone();
+
+    slots.acquire_owned().await.ok()
 }
 
 /// Tools that reach the agent runner.
@@ -533,6 +571,9 @@ impl Tool for AgentTool {
                 // Moved in so the address stays claimed for the whole run and
                 // is released the moment the task ends, however it ends.
                 let _inbox_guard = inbox_guard;
+                // Wait for a slot before the first request goes out, so the
+                // configured limit bounds spend rather than only wall-clock.
+                let _slot = executor_permit(&ctx_bg).await;
                 let mut messages = vec![Message::user(prompt_bg)];
                 let outcome = run_query_loop(
                     client_bg.as_ref(),
@@ -732,6 +773,9 @@ pub fn init_team_swarm_runner() {
                 // is exactly the case messaging is for.
                 let (agent_name, inbox_guard) =
                     mikmik_tools::register_named(&ctx.session_id, Some(&name), &description);
+                // Team members run beside each other, so they queue on the
+                // session's executor slots exactly as background agents do.
+                let _slot = executor_permit(&ctx).await;
                 let anthropic_key = ctx.config.resolve_anthropic_api_key().unwrap_or_default();
                 let anthropic_base = ctx.config.resolve_anthropic_api_base();
                 let client =
@@ -841,6 +885,92 @@ pub(crate) mod tests {
 
     fn names_of(tools: &[Box<dyn Tool>]) -> Vec<&str> {
         tools.iter().map(|t| t.name()).collect()
+    }
+
+    /// A context whose session may run `limit` executors at once.
+    fn managed_context(session: &str, enabled: bool, limit: u32) -> ToolContext {
+        let mut ctx = parent_context();
+        ctx.session_id = session.to_string();
+        ctx.managed_agent_config = Some(mikmik_core::ManagedAgentConfig {
+            enabled,
+            manager_model: "anthropic/claude-opus-4-6".to_string(),
+            executor_model: "anthropic/claude-sonnet-4-6".to_string(),
+            executor_max_turns: 10,
+            max_concurrent_executors: limit,
+            total_budget_usd: None,
+            preset_name: None,
+            executor_isolation: false,
+        });
+        ctx
+    }
+
+    /// The limit reached the model as a sentence in its prompt and bound
+    /// nothing, so a manager that ignored it spent without a ceiling.
+    #[tokio::test]
+    async fn a_second_executor_waits_for_the_first_to_finish() {
+        let ctx = managed_context("sess-slots-one", true, 1);
+
+        let first = executor_permit(&ctx).await;
+        assert!(first.is_some(), "the first executor took a slot");
+
+        let waited =
+            tokio::time::timeout(std::time::Duration::from_millis(50), executor_permit(&ctx)).await;
+        assert!(waited.is_err(), "a second executor ran past the limit");
+
+        drop(first);
+        let after =
+            tokio::time::timeout(std::time::Duration::from_millis(500), executor_permit(&ctx))
+                .await;
+        assert!(
+            matches!(after, Ok(Some(_))),
+            "the slot was not released when the first finished"
+        );
+    }
+
+    #[tokio::test]
+    async fn executors_up_to_the_limit_run_together() {
+        let ctx = managed_context("sess-slots-three", true, 3);
+
+        let held: Vec<_> = vec![
+            executor_permit(&ctx).await,
+            executor_permit(&ctx).await,
+            executor_permit(&ctx).await,
+        ];
+        assert!(held.iter().all(Option::is_some));
+
+        let extra =
+            tokio::time::timeout(std::time::Duration::from_millis(50), executor_permit(&ctx)).await;
+        assert!(extra.is_err(), "a fourth executor ran past a limit of 3");
+    }
+
+    /// Without managed mode there is no limit to honour, so taking a permit
+    /// would only add a wait to what the tree already does.
+    #[tokio::test]
+    async fn an_unmanaged_session_takes_no_slot() {
+        let ctx = managed_context("sess-slots-off", false, 1);
+
+        assert!(executor_permit(&ctx).await.is_none());
+        assert!(executor_permit(&ctx).await.is_none());
+    }
+
+    /// One process serves several sessions under ACP, and a limit set in one
+    /// must not throttle another.
+    #[tokio::test]
+    async fn one_session_does_not_hold_up_another() {
+        let mine = managed_context("sess-slots-mine", true, 1);
+        let theirs = managed_context("sess-slots-theirs", true, 1);
+
+        let _held = executor_permit(&mine).await;
+        let other = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            executor_permit(&theirs),
+        )
+        .await;
+
+        assert!(
+            matches!(other, Ok(Some(_))),
+            "another session queued behind this one"
+        );
     }
 
     /// A sub-agent that held `TeamCreate` could spawn through the same runner

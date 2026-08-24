@@ -251,7 +251,9 @@ The manager does not execute tools itself: while managed agents are enabled, its
 
 Your own shell is unaffected, because `!command` does not go through the model's roster.
 
-Executors run concurrently up to the `concurrent` limit, and `isolation` gives each one its own worktree.
+Executors run concurrently up to the `concurrent` limit: an executor past the limit waits for a running one to finish rather than starting beside it. The limit covers background sub-agents and `TeamCreate` members, which are the two ways agents run at the same time. A foreground sub-agent takes no slot, because it blocks the manager for its whole run and is already alone. Changing `concurrent` applies from the next session.
+
+`isolation` gives each executor its own worktree.
 
 ### Enabling and configuring
 

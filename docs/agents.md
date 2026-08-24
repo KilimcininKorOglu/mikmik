@@ -189,7 +189,7 @@ An agent never receives the `Agent` tool, so it cannot spawn further agents.
 `/tasks` asks the model to list the tasks and their status.
 
 For a manager and executors on different models, with their own turn budgets,
-concurrency limits and budget splits, see
+concurrency limits and one shared budget, see
 [Managed agents](#managed-agents-preview) below.
 
 ---

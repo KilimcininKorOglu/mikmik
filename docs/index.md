@@ -60,7 +60,7 @@ Run named agents (`build`, `plan`, `explore`), or let the model spawn parallel s
 Set a durable objective with `/goal` and MikMik works autonomously across turns until the goal is verified complete — using the `GoalComplete` tool for audited completion rather than just stopping.
 
 ### Managed agents (preview)
-Configure a manager-executor architecture with `/managed-agents` where a manager model delegates subtasks to parallel executor agents with full budget split controls.
+Configure a manager-executor architecture with `/managed-agents` where a manager model delegates subtasks to parallel executor agents under one shared budget.
 
 ### Output styles
 Pick the voice the model writes in with `/output-style` or from the settings screen: controlled technical writing (`asd-ste100`), or a persona at three intensities (`caveman`, `rocky`).

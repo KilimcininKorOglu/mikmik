@@ -19,7 +19,6 @@ pub mod command_queue;
 pub mod compact;
 pub mod context_analyzer;
 pub mod continuation;
-pub mod coordinator;
 pub mod cron_scheduler;
 pub mod goal_loop;
 pub mod managed_orchestrator;

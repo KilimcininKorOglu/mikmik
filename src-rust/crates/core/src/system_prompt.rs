@@ -221,8 +221,6 @@ pub struct SystemPromptOptions {
     /// If true and `custom_system_prompt` is set, the entire default prompt is
     /// replaced — only the custom text + dynamic boundary are emitted.
     pub replace_system_prompt: bool,
-    /// Inject the coordinator-mode section.
-    pub coordinator_mode: bool,
     /// Skip auto-injecting platform/shell/date env info (set true only in tests).
     pub skip_env_info: bool,
     /// Active goal addendum (injected in dynamic section when a goal is running).
@@ -291,11 +289,6 @@ pub fn build_system_prompt(opts: &SystemPromptOptions) -> String {
         .or_else(|| opts.output_style.prompt_suffix())
     {
         parts.push(format!("\n## Output Style\n{}", style_text));
-    }
-
-    // 8. Coordinator mode (cacheable: content is constant)
-    if opts.coordinator_mode {
-        parts.push(COORDINATOR_SYSTEM_PROMPT.to_string());
     }
 
     // 9. Custom system prompt addition (appended to cacheable block)
@@ -631,14 +624,6 @@ const SAFETY_GUIDELINES: &str = r#"
 /// No security guardrails injected.
 const CYBER_RISK_INSTRUCTION: &str = "";
 
-const COORDINATOR_SYSTEM_PROMPT: &str = r#"
-## Coordinator Mode
-
-You are operating as an orchestrator. Spawn parallel worker agents using the Agent tool.
-Each worker prompt must be fully self-contained. Synthesize findings before delegating
-follow-up work. Use TaskCreate/TaskUpdate to track parallel work.
-"#;
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -782,17 +767,6 @@ mod tests {
         // None of the style suffixes should appear
         assert!(!prompt.contains("maximally concise"));
         assert!(!prompt.contains("This user is learning"));
-    }
-
-    #[test]
-    fn test_coordinator_mode_section() {
-        let opts = SystemPromptOptions {
-            coordinator_mode: true,
-            ..Default::default()
-        };
-        let prompt = build_system_prompt(&opts);
-        assert!(prompt.contains("Coordinator Mode"));
-        assert!(prompt.contains("orchestrator"));
     }
 
     #[test]

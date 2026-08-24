@@ -75,8 +75,6 @@ pub struct AgentInfo {
     pub current_tool: Option<String>,
     /// Number of turns completed.
     pub turns_completed: u32,
-    /// Is this the coordinator?
-    pub is_coordinator: bool,
     /// Brief description or last output snippet.
     pub last_output: Option<String>,
     /// Role in the managed agent architecture.
@@ -959,13 +957,7 @@ pub fn render_coordinator_status(agents: &[AgentInfo], area: Rect, buf: &mut Buf
         let (prefix, role_badge, role_color, indent) = match &agent.agent_role {
             AgentRole::Manager => ("● ", "[MGR]", Color::Magenta, ""),
             AgentRole::Executor { .. } => ("  ○ ", "[EXE]", Color::Cyan, "  "),
-            AgentRole::Normal => {
-                if agent.is_coordinator {
-                    ("● ", "", Color::Green, "")
-                } else {
-                    ("  ○ ", "", Color::DarkGray, "  ")
-                }
-            }
+            AgentRole::Normal => ("  ○ ", "", Color::DarkGray, "  "),
         };
         let tool_str = agent
             .current_tool

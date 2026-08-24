@@ -3740,7 +3740,6 @@ impl App {
                 },
                 current_tool: None,
                 turns_completed: 0,
-                is_coordinator: false,
                 last_output: Some(status.clone()),
                 agent_role: crate::agents_view::AgentRole::Normal,
                 model_name: None,

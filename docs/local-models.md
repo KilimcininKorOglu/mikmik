@@ -254,15 +254,10 @@ A few UI details confuse people running local models:
 
 ---
 
-## `MIKMIK_COORDINATOR_MODE=1` does nothing
+## There is no "agentic mode" switch
 
-The name exists in the source, as a constant in
-`crates/query/src/coordinator.rs`. Nothing reads it: the module has no caller,
-and the system-prompt builder leaves `coordinator_mode` at `false`. Exporting
-the variable has no observable effect.
-
-You do not need it. MikMik plans and calls tools on every run; there is no
-separate switch that turns agentic behaviour on.
+MikMik plans and calls tools on every run. No environment variable and no
+setting turns that on, so there is nothing to export.
 
 For parallel sub-agents, the model spawns them itself with the `Agent` tool, and
 [`/managed-agents`](commands) puts a manager and its executors on separate

@@ -24,7 +24,6 @@ pub fn build_system_prompt(config: &QueryConfig) -> SystemPrompt {
         // All other fields use sensible defaults:
         // - prefix:                auto-detect from env
         // - replace_system_prompt: false (additive mode)
-        // - coordinator_mode:      false
         memory_content: memory_content(config),
         output_style: config.output_style,
         custom_output_style_prompt: config.output_style_prompt.clone(),

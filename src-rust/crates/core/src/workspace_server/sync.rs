@@ -223,11 +223,13 @@ mod tests {
     }
 
     fn machine() -> (Settings, AuthStore) {
-        let mut settings = Settings::default();
-        settings.workspace = Some(WorkspaceSettings {
-            url: SERVER.to_string(),
+        let mut settings = Settings {
+            workspace: Some(WorkspaceSettings {
+                url: SERVER.to_string(),
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         settings
             .providers
             .insert("mine".to_string(), ProviderConfig::default());
@@ -393,7 +395,7 @@ mod tests {
     fn a_restore_keeps_the_organisations_providers() {
         // They came from this machine's own login. A backup taken before the
         // entitlement existed must not remove them.
-        let restore = read(&serde_json::to_value(&built()).expect("serialise")).expect("readable");
+        let restore = read(&serde_json::to_value(built()).expect("serialise")).expect("readable");
         let (mut settings, mut auth) = machine();
 
         apply(&restore, &mut settings, &mut auth);
@@ -423,7 +425,7 @@ mod tests {
     fn a_restore_never_replaces_a_credential_this_machine_holds() {
         // The machine is using it. A restore is a way to get accounts back,
         // not to swap the one in front of you.
-        let restore = read(&serde_json::to_value(&built()).expect("serialise")).expect("readable");
+        let restore = read(&serde_json::to_value(built()).expect("serialise")).expect("readable");
         let (mut settings, mut auth) = machine();
         auth.credentials
             .insert("mine".to_string(), key("the-one-in-use"));
@@ -438,7 +440,7 @@ mod tests {
 
     #[test]
     fn a_restore_onto_a_bare_machine_brings_the_account_back() {
-        let restore = read(&serde_json::to_value(&built()).expect("serialise")).expect("readable");
+        let restore = read(&serde_json::to_value(built()).expect("serialise")).expect("readable");
         let (mut settings, mut auth) = (Settings::default(), AuthStore::default());
 
         apply(&restore, &mut settings, &mut auth);

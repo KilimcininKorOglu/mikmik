@@ -251,6 +251,15 @@ impl QueryConfig {
             output_style_prompt: cfg.resolve_output_style_prompt(),
             working_directory: cfg.project_dir.as_ref().map(|p| p.display().to_string()),
             managed_agents: cfg.managed_agents.clone(),
+            // One pool for the manager and every executor: a sub-agent runs on
+            // the parent's `CostTracker`, so the loop's own cap already counts
+            // what they spend together. A `--max-budget-usd` flag is applied
+            // after this and still wins.
+            max_budget_usd: cfg
+                .managed_agents
+                .as_ref()
+                .filter(|ma| ma.enabled)
+                .and_then(|ma| ma.total_budget_usd),
             effort_level: cfg.effective_effort_level(),
             max_turns: cfg
                 .max_turns
@@ -281,6 +290,15 @@ impl QueryConfig {
             output_style_prompt: cfg.resolve_output_style_prompt(),
             working_directory: cfg.project_dir.as_ref().map(|p| p.display().to_string()),
             managed_agents: cfg.managed_agents.clone(),
+            // One pool for the manager and every executor: a sub-agent runs on
+            // the parent's `CostTracker`, so the loop's own cap already counts
+            // what they spend together. A `--max-budget-usd` flag is applied
+            // after this and still wins.
+            max_budget_usd: cfg
+                .managed_agents
+                .as_ref()
+                .filter(|ma| ma.enabled)
+                .and_then(|ma| ma.total_budget_usd),
             effort_level: cfg.effective_effort_level(),
             max_turns: cfg
                 .max_turns
@@ -2303,6 +2321,48 @@ impl StreamHandler for ChannelStreamHandler {
 mod tests {
     use super::*;
     use mikmik_api::SystemPrompt;
+
+    fn managed_config(total_budget_usd: Option<f64>, enabled: bool) -> mikmik_core::Config {
+        mikmik_core::Config {
+            managed_agents: Some(mikmik_core::ManagedAgentConfig {
+                enabled,
+                manager_model: "anthropic/claude-opus-4-6".to_string(),
+                executor_model: "anthropic/claude-sonnet-4-6".to_string(),
+                executor_max_turns: 10,
+                max_concurrent_executors: 4,
+                total_budget_usd,
+                preset_name: None,
+                executor_isolation: false,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// The setting used to reach the model as prompt text and nothing else, so
+    /// the run went past the figure the user had set.
+    #[test]
+    fn a_managed_budget_becomes_the_loop_s_own_cap() {
+        let config = QueryConfig::from_config(&managed_config(Some(5.0), true));
+        assert_eq!(config.max_budget_usd, Some(5.0));
+    }
+
+    #[test]
+    fn a_disabled_managed_config_sets_no_cap() {
+        let config = QueryConfig::from_config(&managed_config(Some(5.0), false));
+        assert_eq!(config.max_budget_usd, None);
+    }
+
+    #[test]
+    fn a_managed_config_without_a_budget_sets_no_cap() {
+        let config = QueryConfig::from_config(&managed_config(None, true));
+        assert_eq!(config.max_budget_usd, None);
+    }
+
+    #[test]
+    fn a_session_without_managed_agents_sets_no_cap() {
+        let config = QueryConfig::from_config(&mikmik_core::Config::default());
+        assert_eq!(config.max_budget_usd, None);
+    }
 
     /// Every field spelled out because `ToolContext` has no `Default`; the
     /// address is what these tests are actually about.

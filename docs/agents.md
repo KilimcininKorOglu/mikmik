@@ -240,7 +240,7 @@ concurrency limits and budget splits, see
 
 ## Managed Agents (Preview)
 
-Managed agents provide a formal **manager-executor** architecture. The manager reasons about the plan and delegates; the executors carry out individual tasks. You configure separate models, turn budgets, concurrency limits and budget splits for each role.
+Managed agents provide a formal **manager-executor** architecture. The manager reasons about the plan and delegates; the executors carry out individual tasks. You configure a model and a turn limit for each role, a concurrency limit, and one budget the whole session draws from.
 
 The manager does not execute tools itself. Executors run concurrently up to the `concurrent` limit, and `isolation` gives each one its own worktree.
 

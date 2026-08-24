@@ -73,7 +73,6 @@ mod tests {
             executor_model: "anthropic/claude-sonnet-4-6".to_string(),
             executor_max_turns: 8,
             max_concurrent_executors: 3,
-            budget_split: mikmik_core::BudgetSplitPolicy::SharedPool,
             total_budget_usd: Some(10.0),
             preset_name: None,
             executor_isolation: true,

@@ -293,15 +293,11 @@ The manager model does not execute tools itself — it delegates to executor age
 
 Model format: `provider/model` (e.g., `anthropic/claude-opus-4-6`, `openai/gpt-4o`).
 
-### Budget split policies
+### Budget
 
-Control how the total token/cost budget is divided between the manager and executors:
+The manager and every executor draw from one pool, because a sub-agent runs on its parent's cost tracker. When the pool is spent the run stops and reports what it cost against what was allowed.
 
-| Policy       | Command                                            | Description                                     |
-|--------------|----------------------------------------------------|-------------------------------------------------|
-| `shared`     | `/managed-agents configure budget-split shared`     | All agents draw from a single shared pool       |
-| `percentage` | `/managed-agents configure budget-split percentage:20` | Manager gets 20%, executors share the rest   |
-| `fixed`      | `/managed-agents configure budget-split fixed:0.50:2.00` | Manager capped at $0.50, each executor at $2.00 |
+`--max-budget-usd` on the command line overrides the configured budget for that run.
 
 ```
 /managed-agents budget 5.00           — set a total $5 budget (0 to clear)

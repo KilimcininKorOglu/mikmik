@@ -29,7 +29,6 @@ impl SlashCommand for ManagedAgentsCommand {
            configure executor-turns <n>           — set executor max turns\n\
            configure concurrent <n>               — set max concurrent executors\n\
            configure isolation on|off             — set executor isolation\n\
-           configure budget-split shared|percentage:<pct>|fixed:<mgr>:<exe>\n\
            budget <amount>                        — set total budget in USD (0 to clear)\n\
            enable                                 — enable managed agents\n\
            disable                                — disable managed agents\n\
@@ -37,7 +36,7 @@ impl SlashCommand for ManagedAgentsCommand {
     }
 
     async fn execute(&self, args: &str, ctx: &mut CommandContext) -> CommandResult {
-        use mikmik_core::{builtin_managed_agent_presets, BudgetSplitPolicy, ManagedAgentConfig};
+        use mikmik_core::{builtin_managed_agent_presets, ManagedAgentConfig};
 
         let args = args.trim();
 
@@ -58,28 +57,15 @@ impl SlashCommand for ManagedAgentsCommand {
                         Some(b) => format!("${:.2} total", b),
                         None => "no cap".to_string(),
                     };
-                    let split_str = match &c.budget_split {
-                        BudgetSplitPolicy::SharedPool => "shared pool".to_string(),
-                        BudgetSplitPolicy::Percentage { manager_pct } => {
-                            format!("{}% manager", manager_pct)
-                        }
-                        BudgetSplitPolicy::FixedCaps {
-                            manager_usd,
-                            executor_usd,
-                        } => {
-                            format!("${:.2} mgr / ${:.2} exe", manager_usd, executor_usd)
-                        }
-                    };
                     let preset = c.preset_name.as_deref().unwrap_or("custom");
                     let isolation = if c.executor_isolation { "on" } else { "off" };
                     format!(
-                        "Managed Agents: {}\n  Manager:    {}\n  Executor:   {}\n  Preset:     {}\n  Budget:     {}  |  split: {}\n  Exec limits: {} turns, {} concurrent, isolation: {}\n\nRun /managed-agents <subcommand> — presets | setup | configure | enable | disable | budget | reset",
+                        "Managed Agents: {}\n  Manager:    {}\n  Executor:   {}\n  Preset:     {}\n  Budget:     {}\n  Exec limits: {} turns, {} concurrent, isolation: {}\n\nRun /managed-agents <subcommand> — presets | setup | configure | enable | disable | budget | reset",
                         state,
                         c.manager_model,
                         c.executor_model,
                         preset,
                         budget_str,
-                        split_str,
                         c.executor_max_turns,
                         c.max_concurrent_executors,
                         isolation,
@@ -139,7 +125,6 @@ impl SlashCommand for ManagedAgentsCommand {
                         executor_model: p.executor_model.to_string(),
                         executor_max_turns: p.executor_max_turns,
                         max_concurrent_executors: p.max_concurrent_executors,
-                        budget_split: BudgetSplitPolicy::SharedPool,
                         total_budget_usd: None,
                         preset_name: Some(p.name.to_string()),
                         executor_isolation: false,
@@ -172,7 +157,6 @@ impl SlashCommand for ManagedAgentsCommand {
                     executor_model: String::new(),
                     executor_max_turns: 10,
                     max_concurrent_executors: 4,
-                    budget_split: BudgetSplitPolicy::SharedPool,
                     total_budget_usd: None,
                     preset_name: None,
                     executor_isolation: false,
@@ -200,51 +184,9 @@ impl SlashCommand for ManagedAgentsCommand {
                     "off" => cfg.executor_isolation = false,
                     _ => return CommandResult::Error("Use 'on' or 'off'".to_string()),
                 }
-            } else if let Some(val) = rest.strip_prefix("budget-split ").map(str::trim) {
-                if val == "shared" {
-                    cfg.budget_split = BudgetSplitPolicy::SharedPool;
-                } else if let Some(pct_str) = val.strip_prefix("percentage:") {
-                    match pct_str.parse::<u8>() {
-                        Ok(pct) => {
-                            cfg.budget_split = BudgetSplitPolicy::Percentage { manager_pct: pct }
-                        }
-                        Err(_) => {
-                            return CommandResult::Error(format!(
-                                "Invalid percentage: '{}'",
-                                pct_str
-                            ))
-                        }
-                    }
-                } else if let Some(caps_str) = val.strip_prefix("fixed:") {
-                    let parts: Vec<&str> = caps_str.splitn(2, ':').collect();
-                    if parts.len() == 2 {
-                        match (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
-                            (Ok(m), Ok(e)) => {
-                                cfg.budget_split = BudgetSplitPolicy::FixedCaps {
-                                    manager_usd: m,
-                                    executor_usd: e,
-                                }
-                            }
-                            _ => {
-                                return CommandResult::Error(
-                                    "Invalid fixed caps format. Use fixed:<manager>:<executor>"
-                                        .to_string(),
-                                )
-                            }
-                        }
-                    } else {
-                        return CommandResult::Error(
-                            "Invalid fixed caps format. Use fixed:<manager>:<executor>".to_string(),
-                        );
-                    }
-                } else {
-                    return CommandResult::Error(
-                        "Use: shared | percentage:<pct> | fixed:<manager>:<executor>".to_string(),
-                    );
-                }
             } else {
                 return CommandResult::Error(format!(
-                    "Unknown configure option: '{}'\nOptions: manager-model, executor-model, executor-turns, concurrent, isolation, budget-split",
+                    "Unknown configure option: '{}'\nOptions: manager-model, executor-model, executor-turns, concurrent, isolation",
                     rest
                 ));
             }

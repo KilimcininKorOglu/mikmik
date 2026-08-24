@@ -100,9 +100,9 @@ pub mod share_export;
 // Re-export commonly used types at the crate root
 pub use config::{
     builtin_managed_agent_presets, default_agents, strip_jsonc_comments, substitute_env_vars,
-    AcpAgentConfig, AgentDefinition, BudgetSplitPolicy, CommandTemplate, Config, FormatterConfig,
-    ManagedAgentConfig, ManagedAgentPreset, McpServerConfig, McpServerOrigin, OutputFormat,
-    PermissionMode, ProviderConfig, Settings, SkillsConfig, Theme,
+    AcpAgentConfig, AgentDefinition, CommandTemplate, Config, FormatterConfig, ManagedAgentConfig,
+    ManagedAgentPreset, McpServerConfig, McpServerOrigin, OutputFormat, PermissionMode,
+    ProviderConfig, Settings, SkillsConfig, Theme,
 };
 pub use error::{ClaudeError, Result};
 pub use import_config::{
@@ -868,20 +868,6 @@ pub mod config {
 
     // ---- ManagedAgentConfig ----------------------------------------------
 
-    /// Budget allocation strategy between manager and executor agents.
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-    #[serde(tag = "type", rename_all = "snake_case")]
-    #[derive(Default)]
-    pub enum BudgetSplitPolicy {
-        /// Shared pool — no split (default).
-        #[default]
-        SharedPool,
-        /// Manager gets manager_pct% of total budget.
-        Percentage { manager_pct: u8 },
-        /// Hard USD caps per role.
-        FixedCaps { manager_usd: f64, executor_usd: f64 },
-    }
-
     /// Configuration for manager-executor agent architecture.
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct ManagedAgentConfig {
@@ -894,8 +880,8 @@ pub mod config {
         pub executor_max_turns: u32,
         #[serde(default = "default_max_concurrent_executors")]
         pub max_concurrent_executors: u32,
-        #[serde(default)]
-        pub budget_split: BudgetSplitPolicy,
+        /// A single pool the manager and every executor draw from, enforced as
+        /// the query loop's own budget cap.
         #[serde(default)]
         pub total_budget_usd: Option<f64>,
         #[serde(default)]
@@ -9470,7 +9456,6 @@ mod tests {
             executor_model: "anthropic/claude-sonnet-4-6".to_string(),
             executor_max_turns: 10,
             max_concurrent_executors: 4,
-            budget_split: BudgetSplitPolicy::Percentage { manager_pct: 30 },
             total_budget_usd: Some(5.0),
             preset_name: Some("anthropic-tiered".to_string()),
             executor_isolation: false,
@@ -9481,12 +9466,15 @@ mod tests {
         assert_eq!(decoded.executor_max_turns, 10);
     }
 
+    /// A settings file written before these fields existed still loads, and
+    /// lands on the same limits a preset would have set.
     #[test]
-    fn budget_split_policy_defaults_to_shared_pool() {
+    fn a_managed_config_without_limits_takes_the_defaults() {
         let json = r#"{"enabled":true,"manager_model":"a/b","executor_model":"a/c"}"#;
         let cfg: ManagedAgentConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(cfg.budget_split, BudgetSplitPolicy::SharedPool);
         assert_eq!(cfg.executor_max_turns, 10);
+        assert_eq!(cfg.max_concurrent_executors, 4);
+        assert_eq!(cfg.total_budget_usd, None);
     }
 
     #[test]

@@ -242,6 +242,7 @@ For more info on how to configure MikMik, [head over to our docs](https://kilimc
 | [tools.md](docs/tools.md) · [agents.md](docs/agents.md) | Built-in tools; subagents and teams |
 | [mcp.md](docs/mcp.md) · [plugins.md](docs/plugins.md) · [hooks.md](docs/hooks.md) | Extending MikMik |
 | [remote-control.md](docs/remote-control.md) | Driving a session from your phone |
+| [workspace-server.md](docs/workspace-server.md) | A company's own server: accounts, providers, policy, backups |
 | [advanced.md](docs/advanced.md) | Everything else |
 
 >**PS:** The original breakdown of the findings from Claude Code's source that started this project is on [my blog](https://kuber.studio/blog/AI/Claude-Code's-Entire-Source-Code-Got-Leaked-via-a-Sourcemap-in-npm,-Let's-Talk-About-it) - the full technical writeup of what was found, how the leak happened, and what it revealed.

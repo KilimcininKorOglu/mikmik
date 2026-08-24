@@ -21,7 +21,7 @@ This document is the complete reference for every slash command available in Mik
 13. [Display & Terminal](#display--terminal) — `/theme`, `/output-style`, `/statusline`, `/timeline`, `/vim`, `/terminal-setup`, `/mobile`, `/color`, `/stickers`, `/buddy`
 14. [Diagnostics & Info](#diagnostics--info) — `/doctor`, `/version`, `/update`
 15. [Export & Sharing](#export--sharing) — `/export`, `/copy`
-16. [Advanced & Internal](#advanced--internal) — `/thinking`, `/connect`, `/fork`, `/effort`, `/summary`, `/remote-control`, `/remote-env`, `/sandbox-toggle`, `/think-back`, `/thinkback-play`
+16. [Advanced & Internal](#advanced--internal) — `/thinking`, `/connect`, `/fork`, `/effort`, `/summary`, `/remote-control`, `/remote-env`, `/workspace`, `/sandbox-toggle`, `/think-back`, `/thinkback-play`
 17. [Command Availability](#command-availability)
 
 ---
@@ -1579,6 +1579,32 @@ Manage the bridge that lets a phone or browser drive this session through a rela
 With no argument it reports the relay address it resolved and which source each value came from, so a session configured through `settings.json` and one redirected by `MIKMIK_BRIDGE_URL` are told apart. A token shorter than 32 characters is reported as unusable and the bridge does not start.
 
 `start` and `stop` change the setting only. The bridge connects on the next launch.
+
+---
+
+### /workspace
+**Aliases:** `ws`
+
+Show the organisation's configuration server: the providers it assigns you, the
+settings policy it enforces, and your own settings backup. See
+[Workspace server](workspace-server.md).
+
+```
+/workspace          — server, session, providers, policy and sync settings
+/workspace sync     — upload this machine's settings now
+/workspace pull     — take the providers and the policy again now
+```
+
+The listing separates the company's providers from your own. Editing a company
+one is undone by the next pull, so the two have to be told apart at a glance. It
+also names the keys the policy decides, because a setting that will not take
+otherwise leaves you debugging your own config.
+
+A policy fetched by `pull` applies from the next session: the settings layers
+were merged when this one opened.
+
+Signing in and out is `mikmik workspace login` and `mikmik workspace logout`. A
+password does not belong in a prompt this transcript records.
 
 ---
 

@@ -198,4 +198,5 @@ See [Slash Commands](commands) for the complete reference.
 - [Agents](agents) — multi-agent orchestration
 - [Hooks](hooks) — event-driven automation
 - [Remote Control](remote-control) — drive a session from your phone through a self-hosted relay
+- [Workspace Server](workspace-server) — a company's own server for accounts, providers, policy and backups
 - [Advanced Features](advanced) — extended thinking, sessions, and more

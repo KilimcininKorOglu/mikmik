@@ -51,7 +51,7 @@ Project-defined `mcpServers` follow the same shape through their own prompt.
 **Never taken from the project file.** `permission_mode`, `permissionRules`,
 `api_key`, `provider`, `provider_configs`, `providers`, `searxngUrl`, `env`,
 `custom_system_prompt`, `append_system_prompt`, `workspace_paths`,
-`additional_dirs`, `statusLine`, `acpAgents`, `remoteControl`,
+`additional_dirs`, `statusLine`, `acpAgents`, `remoteControl`, `workspace`,
 `trustProjectMcpServers`, `skipDangerousModePermissionPrompt` and
 `allowedBashPrefixes`. These decide whether a tool asks before acting, where
 the conversation and the credential are sent, what the model is told before you
@@ -85,6 +85,7 @@ than dropping them silently.
   "memoryModel": "claude-haiku-4-5",
   "companion": { ... },
   "remoteControl": { ... },
+  "workspace": { ... },
   "acpAgents": { ... }
 }
 ```
@@ -341,6 +342,50 @@ There is no separate remote permission policy. `config.permission_mode` decides 
 This block is read from the user settings file only. A project settings file cannot set it, because pointing the bridge at a relay is a decision about the machine, not about the repository.
 
 `MIKMIK_BRIDGE_URL` and `MIKMIK_BRIDGE_TOKEN` override it when set.
+
+### Workspace server
+
+The organisation's configuration server: the providers it assigns you, the
+settings policy it enforces, and your own settings backup. See
+[Workspace server](workspace-server.md).
+
+| Key    | Type   | Default  | Description                                                                        |
+|--------|--------|----------|------------------------------------------------------------------------------------|
+| `url`  | string | unset    | Base address of the server, for example `https://mikmik.firma.com`. A trailing slash is trimmed. |
+| `sync` | object | see below| When this installation talks to it.                                                 |
+
+The address must be `https`, unless the host is `localhost`, `127.0.0.1` or
+`[::1]`. Signing in sends a password, and the answer carries every provider key
+the organisation assigned you; in the clear, one network hop reads both.
+
+No credential lives here. The session token goes to `auth.json`, which is
+written `0o600`, and it carries the address it was issued for, so a token good
+for one organisation is never sent to another.
+
+| `sync` key        | Type          | Default | Description                                                                       |
+|-------------------|---------------|---------|-------------------------------------------------------------------------------------|
+| `onChange`        | boolean       | `true`  | Upload once the writes to `settings.json` stop.                                      |
+| `intervalMinutes` | number \| null| unset   | Upload on a timer as well. Values below 5 are raised to 5.                          |
+| `pullAtStartup`   | boolean       | `true`  | Take the providers and the policy when a session starts.                            |
+
+```json
+"workspace": {
+  "url": "https://mikmik.firma.com",
+  "sync": {
+    "onChange": true,
+    "intervalMinutes": 60,
+    "pullAtStartup": true
+  }
+}
+```
+
+Every trigger is on unless it is written off: the section exists only because
+you signed in to a server, and a backup that never runs is not there on the day
+the machine is rebuilt.
+
+This block is read from the user settings file only. A project settings file
+cannot set it, because the server it names decides which providers this
+installation may use and pushes a policy the user cannot override.
 
 ### External ACP agents
 

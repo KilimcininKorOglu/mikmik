@@ -219,15 +219,29 @@ impl ProjectTrustStore {
 
     /// Whether `fingerprint` has been approved for `project_root`.
     pub fn is_approved(&self, project_root: &Path, fingerprint: &str) -> bool {
-        self.approvals
-            .get(&project_key(project_root))
-            .is_some_and(|set| set.contains(fingerprint))
+        self.is_key_approved(&project_key(project_root), fingerprint)
     }
 
     /// Record an approval for `project_root`.
     pub fn approve(&mut self, project_root: &Path, fingerprint: &str) {
+        self.approve_key(&project_key(project_root), fingerprint);
+    }
+
+    /// Whether `fingerprint` has been approved under `key`.
+    ///
+    /// Not every source of runnable settings is a directory. A settings backup
+    /// restored from the organisation's server is one, and the address it came
+    /// from is what identifies it; a path would have to be invented for it.
+    pub fn is_key_approved(&self, key: &str, fingerprint: &str) -> bool {
         self.approvals
-            .entry(project_key(project_root))
+            .get(key)
+            .is_some_and(|set| set.contains(fingerprint))
+    }
+
+    /// Record an approval under `key`.
+    pub fn approve_key(&mut self, key: &str, fingerprint: &str) {
+        self.approvals
+            .entry(key.to_string())
             .or_default()
             .insert(fingerprint.to_string());
     }

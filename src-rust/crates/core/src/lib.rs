@@ -8372,8 +8372,6 @@ pub mod output_styles;
 pub mod paths;
 pub mod prompt_history;
 pub mod ps_classifier;
-pub mod remote_settings;
-pub mod settings_sync;
 pub mod system_prompt;
 pub mod tips;
 pub mod voice;

@@ -166,7 +166,7 @@ mod tests {
     /// source, not the program: a contiguous `hf_AAAA…` in a test file is a
     /// Hugging Face token as far as GitHub push protection is concerned, and
     /// the push is rejected. Splitting the prefix from the body means the
-    /// pattern exists only in memory. `team_memory_sync.rs` does the same.
+    /// pattern exists only in memory.
     fn shaped(prefix: &str, joint: &str, fill: usize) -> String {
         format!("{prefix}{joint}{}", "A".repeat(fill))
     }

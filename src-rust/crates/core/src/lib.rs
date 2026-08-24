@@ -8098,8 +8098,7 @@ pub mod oauth {
 pub use oauth::OAuthTokens;
 
 // ---------------------------------------------------------------------------
-// New modules: keybindings, voice, analytics, lsp, team_memory_sync,
-//              system_prompt, memdir, oauth_config
+// New modules: keybindings, voice, lsp, system_prompt, memdir, oauth_config
 // ---------------------------------------------------------------------------
 pub mod accounts;
 pub mod bash_classifier;
@@ -8120,7 +8119,6 @@ pub mod ps_classifier;
 pub mod remote_settings;
 pub mod settings_sync;
 pub mod system_prompt;
-pub mod team_memory_sync;
 pub mod tips;
 pub mod voice;
 

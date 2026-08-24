@@ -257,6 +257,8 @@ mod session;
 pub use session::*;
 mod remote;
 pub use remote::*;
+mod workspace;
+pub use workspace::*;
 mod history;
 pub use history::*;
 mod sandbox;
@@ -1509,6 +1511,7 @@ pub fn all_commands() -> Vec<Box<dyn SlashCommand>> {
         }),
         // Batch-1 new commands
         Box::new(RemoteControlCommand),
+        Box::new(WorkspaceCommand),
         Box::new(RemoteEnvCommand),
         Box::new(ContextCommand),
         Box::new(CopyCommand),

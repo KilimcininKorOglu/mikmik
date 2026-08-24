@@ -8112,7 +8112,6 @@ pub mod keywords;
 pub mod lsp;
 pub mod mcp_trust;
 pub mod memdir;
-pub mod migrations;
 pub mod oauth_config;
 pub mod output_styles;
 pub mod paths;

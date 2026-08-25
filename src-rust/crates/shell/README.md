@@ -20,6 +20,21 @@ A model writes `ls`, `cat`, `sort`, `head`, `wc`, `sed`, `find` and `jq` without
 
 The dispatch flag counts in the first argument position only. `echo --invoke-bundled ls` stays an `echo`.
 
+## What it cost
+
+Measured on an Apple laptop with `examples/shim_check`, release build.
+
+| | Before | After |
+|---|---|---|
+| One trivial command | 3.14 ms (`bash -c true`) | 34 µs |
+| Release binary | 35.3 MiB | 51.8 MiB |
+| Cold build of the 83 `uu_*` crates | — | 17 min 40 s, once |
+| Warm `cargo check --workspace` | 17 s | 17 s |
+
+The 16.5 MiB is what the bundled utilities weigh. The compile cost is paid once per machine and then cached; a warm check is unchanged.
+
+The per-command figure was almost lost to the safeguard rather than the shell. Listing this process's children before each command through `pgrep -P` cost 27 ms, which is why `children.rs` asks the platform directly instead.
+
 ## What it does not do
 
 An external program is still a real process. brush removes the shell process and its built-ins from the hot path; it does not remove the `cargo`, `git` or `npm` the model asked for.

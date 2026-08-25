@@ -13,6 +13,7 @@ members = [
     "crates/buddy",
     "crates/plugins",
     "crates/acp",
+    "crates/shell",
 ]
 
 [workspace.package]
@@ -133,6 +134,15 @@ mikmik-mcp = { path = "crates/mcp" }
 mikmik-bridge = { path = "crates/bridge" }
 mikmik-buddy = { path = "crates/buddy" }
 mikmik-plugins = { path = "crates/plugins" }
+mikmik-shell = { path = "crates/shell" }
+
+# The embedded shell. `brush-core` parses and executes; `brush-builtins`
+# supplies the shell built-ins that used to come from the bash binary. Both
+# are MIT and both build on Windows, which is the point: the same shell runs
+# everywhere rather than degrading to `cmd`.
+brush-core = "0.5"
+brush-parser = "0.4"
+brush-builtins = "0.2"
 
 # Shipped binaries statically link two TLS stacks (rustls + BoringSSL),
 # bundled SQLite, syntect, and image codecs — LTO and symbol stripping cut

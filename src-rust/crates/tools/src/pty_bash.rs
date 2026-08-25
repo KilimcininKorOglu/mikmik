@@ -747,6 +747,7 @@ async fn run_bash(params: BashInput, ctx: &ToolContext) -> ToolResult {
             &params.command,
             &ctx.session_id,
             &ctx.working_dir,
+            ctx.config.effective_bundled_utilities(),
             timeout_dur,
         )
         .await
@@ -1378,8 +1379,11 @@ mod tests {
         let tool = PtyBashTool;
         let ctx = allow_all_context();
 
-        // A distinctive duration doubles as a searchable marker for the process.
-        let marker = "sleep 31337";
+        // The path is spelled out so the bundled `sleep` cannot answer
+        // instead: what this test is about is the child process, and a
+        // bundled utility runs in this one. The distinctive duration doubles
+        // as a searchable marker.
+        let marker = "/bin/sleep 31337";
         let input = json!({
             "command": marker,
             "timeout": 500u64, // ms — far shorter than the sleep

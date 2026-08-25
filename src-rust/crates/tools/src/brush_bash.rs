@@ -33,9 +33,10 @@ pub(crate) async fn run(
     command: &str,
     session_id: &str,
     working_dir: &Path,
+    bundled: mikmik_core::config::BundledUtilities,
     timeout: Duration,
 ) -> anyhow::Result<Ran> {
-    let shell = crate::session_brush_shell(session_id, working_dir).await?;
+    let shell = crate::session_brush_shell(session_id, working_dir, bundled).await?;
     let capture = Capture::open()?;
     let (stdout, stderr) = capture.sinks()?;
 

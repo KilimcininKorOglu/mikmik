@@ -1575,6 +1575,22 @@ pub mod config {
             skip_serializing_if = "Option::is_none"
         )]
         pub bash_engine: Option<String>,
+        /// Which copy of a command-line utility the Bash tool reaches for:
+        /// `prefer` or `fallback`.
+        ///
+        /// The binary carries 83 coreutils plus `find`, `xargs`, `sed` and
+        /// `jq`. Unset reads as `prefer`, which runs the carried copy: it is
+        /// in this process where the machine's costs a fork and an exec, and
+        /// it behaves the same on every machine. `fallback` reaches for the
+        /// carried copy only for a name the machine does not have, which is
+        /// the setting for a script written against GNU coreutils. See
+        /// [`Config::effective_bundled_utilities`].
+        #[serde(
+            default,
+            rename = "bundledUtilities",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub bundled_utilities: Option<String>,
         /// How far the watcher may fall behind before the primary waits for it.
         ///
         /// `0` never waits. Any other value is a backlog threshold; the primary
@@ -1871,6 +1887,36 @@ pub mod config {
             match self {
                 Self::Brush => "brush",
                 Self::System => "system",
+            }
+        }
+    }
+
+    /// Which copy of a command-line utility the Bash tool reaches for.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum BundledUtilities {
+        /// The copy carried in this binary, for every name it carries.
+        #[default]
+        Prefer,
+        /// The copy carried in this binary, only for a name the machine does
+        /// not have.
+        Fallback,
+    }
+
+    impl BundledUtilities {
+        /// Read the setting. Anything unrecognised reads as the default rather
+        /// than failing: a typo must not change which `ls` a session runs.
+        pub fn parse(value: Option<&str>) -> Self {
+            match value.map(str::trim) {
+                Some("fallback") => Self::Fallback,
+                _ => Self::Prefer,
+            }
+        }
+
+        /// The name this choice is written under in `settings.json`.
+        pub fn as_str(self) -> &'static str {
+            match self {
+                Self::Prefer => "prefer",
+                Self::Fallback => "fallback",
             }
         }
     }
@@ -2805,6 +2851,11 @@ pub mod config {
                 return BashEngine::Brush;
             }
             BashEngine::parse(self.bash_engine.as_deref())
+        }
+
+        /// Which copy of a command-line utility the Bash tool reaches for.
+        pub fn effective_bundled_utilities(&self) -> BundledUtilities {
+            BundledUtilities::parse(self.bundled_utilities.as_deref())
         }
 
         /// Whether the project's servers start with the session. Unset means
@@ -3872,6 +3923,13 @@ pub mod config {
                 // the same classifier before a command reaches them, so this
                 // decides compatibility rather than reach.
                 bash_engine: over.config.bash_engine.or(base.config.bash_engine),
+                // Same reasoning: a repository knows which `ls` its scripts
+                // were written against, and neither choice reaches further
+                // than the other.
+                bundled_utilities: over
+                    .config
+                    .bundled_utilities
+                    .or(base.config.bundled_utilities),
                 companion: over.config.companion.or(base.config.companion),
                 provider_configs: base.config.provider_configs,
                 model_overrides: merge_map(
@@ -4651,6 +4709,64 @@ pub mod config {
                 Settings::merge_with(Settings::default(), project, ProjectRunnables::Allow);
 
             assert_eq!(merged.config.bash_engine.as_deref(), Some("system"));
+        }
+
+        /// The shape `docs/configuration.md` tells the user to write for the
+        /// carried utilities.
+        #[test]
+        fn the_documented_bundled_utilities_json_parses() {
+            let documented = r#"{"version":1,"config":{"bundledUtilities":"fallback"}}"#;
+            let settings: Settings = serde_json::from_str(documented).expect("documented JSON");
+            assert_eq!(
+                settings.config.bundled_utilities.as_deref(),
+                Some("fallback")
+            );
+            assert_eq!(
+                settings.config.effective_bundled_utilities(),
+                BundledUtilities::Fallback
+            );
+        }
+
+        #[test]
+        fn an_unset_or_misspelled_bundled_utilities_reads_as_prefer() {
+            // The carried copy behaves the same on every machine, so it is the
+            // answer when the setting says nothing usable.
+            assert_eq!(BundledUtilities::parse(None), BundledUtilities::Prefer);
+            assert_eq!(BundledUtilities::parse(Some("")), BundledUtilities::Prefer);
+            assert_eq!(
+                BundledUtilities::parse(Some("falback")),
+                BundledUtilities::Prefer
+            );
+            assert_eq!(
+                Config::default().effective_bundled_utilities(),
+                BundledUtilities::Prefer
+            );
+        }
+
+        #[test]
+        fn a_project_may_choose_the_utilities_its_scripts_were_written_for() {
+            let project = Settings {
+                config: Config {
+                    bundled_utilities: Some("fallback".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let merged =
+                Settings::merge_with(Settings::default(), project, ProjectRunnables::Allow);
+
+            assert_eq!(
+                merged.config.effective_bundled_utilities(),
+                BundledUtilities::Fallback
+            );
+        }
+
+        #[test]
+        fn an_unset_bundled_utilities_is_left_out_of_the_written_file() {
+            // A key nobody set must not appear in `settings.json`, or the next
+            // change of default silently does not reach the user.
+            let written = serde_json::to_string(&Settings::default()).expect("serialise");
+            assert!(!written.contains("bundledUtilities"), "{written}");
         }
 
         /// It may never loosen one. The first thing a checkout would hide by

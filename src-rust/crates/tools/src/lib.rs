@@ -381,13 +381,14 @@ static BRUSH_SESSIONS: once_cell::sync::Lazy<
 pub async fn session_brush_shell(
     session_id: &str,
     working_dir: &std::path::Path,
+    bundled: mikmik_core::config::BundledUtilities,
 ) -> anyhow::Result<Arc<tokio::sync::Mutex<mikmik_shell::ShellSession>>> {
     if let Some(existing) = BRUSH_SESSIONS.get(session_id) {
         return Ok(existing.clone());
     }
     let opened = mikmik_shell::ShellSession::new(
         &mikmik_shell::usable_working_dir(working_dir),
-        mikmik_shell::BundledUtilities::default(),
+        bundled_policy(bundled),
     )
     .await?;
     // Another call may have opened one while this was awaiting. Whichever
@@ -397,6 +398,17 @@ pub async fn session_brush_shell(
         .entry(session_id.to_string())
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(opened)))
         .clone())
+}
+
+/// The shell's own name for a choice made in `settings.json`.
+///
+/// `mikmik-shell` does not depend on `mikmik-core`, so the two enums are
+/// separate and this is where they meet.
+fn bundled_policy(choice: mikmik_core::config::BundledUtilities) -> mikmik_shell::BundledUtilities {
+    match choice {
+        mikmik_core::config::BundledUtilities::Prefer => mikmik_shell::BundledUtilities::Prefer,
+        mikmik_core::config::BundledUtilities::Fallback => mikmik_shell::BundledUtilities::Fallback,
+    }
 }
 
 /// Remove the shell state for a session (e.g. when the session ends).
@@ -1469,6 +1481,21 @@ mod tests {
         assert!(
             no_channel.live_output_sink().is_none(),
             "no frontend asked for live output"
+        );
+    }
+
+    #[test]
+    fn each_setting_reaches_the_shell_as_itself() {
+        // The two enums are separate because `mikmik-shell` does not depend on
+        // `mikmik-core`. A swapped arm here would silently change which `ls`
+        // every session runs, and nothing else would notice.
+        assert_eq!(
+            bundled_policy(mikmik_core::config::BundledUtilities::Prefer),
+            mikmik_shell::BundledUtilities::Prefer
+        );
+        assert_eq!(
+            bundled_policy(mikmik_core::config::BundledUtilities::Fallback),
+            mikmik_shell::BundledUtilities::Fallback
         );
     }
 }

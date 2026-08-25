@@ -177,9 +177,10 @@ silent.
 
 ### Shell
 
-| Key          | Type   | Default | Description                                              |
-|--------------|--------|---------|----------------------------------------------------------|
-| `bashEngine` | string | `brush` | `brush` or `system`. Which shell the `Bash` tool runs commands in. |
+| Key                | Type   | Default  | Description                                              |
+|--------------------|--------|----------|----------------------------------------------------------|
+| `bashEngine`       | string | `brush`  | `brush` or `system`. Which shell the `Bash` tool runs commands in. |
+| `bundledUtilities` | string | `prefer` | `prefer` or `fallback`. Which copy of `ls`, `sort` and the rest a command reaches for. |
 
 Inside the `config` object, not at the top level:
 
@@ -197,7 +198,23 @@ Windows ignores the setting and always uses `brush`. `system` there meant `cmd /
 
 Either way an external program is still a real process. The embedded shell removes the shell and its built-ins from the path, not the `cargo` or `git` the command names.
 
-The common utilities (`ls`, `cat`, `sort`, `wc`, `sed`, `find`, `xargs`, `jq` and around eighty more) ship inside the binary and are used when the machine has no copy of its own on `PATH`. That is what makes a command work on Windows or in a stripped container image. `system` gets none of them: the machine's own `bash` looks up commands its own way.
+#### Which utilities a command gets
+
+83 coreutils (`ls`, `cat`, `sort`, `wc` and the rest) plus `find`, `xargs`, `sed` and `jq` ship inside the binary. They run in the MikMik process: no fork, no exec, and nothing to install. That is what makes a command work on Windows or in a stripped container image.
+
+```json
+"config": {
+  "bundledUtilities": "fallback"
+}
+```
+
+`prefer`, the default, runs the carried copy for every name it carries. It is the faster answer (`ls -1` costs 164 us against 2.54 ms for the machine's own binary on an Apple laptop) and it behaves the same on every machine.
+
+`fallback` runs the carried copy only for a name the machine does not have. Use it if a script was written against GNU coreutils and depends on a flag or an output detail the carried copy gets differently: the carried set is [uutils](https://github.com/uutils/coreutils), a reimplementation that aims at GNU compatibility rather than claiming it.
+
+The shell's own built-ins win either way, so `echo`, `printf`, `test`, `true` and `false` keep bash semantics.
+
+`bashEngine: "system"` ignores the setting: the machine's own `bash` looks up commands its own way.
 
 ### Edit guard
 

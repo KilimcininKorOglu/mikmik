@@ -287,6 +287,22 @@ pub enum PermissionLevel {
 /// `include_ignored` turns every standard filter off, which is what
 /// `Config::include_ignored_files` is for.
 pub(crate) fn ignore_aware_walk(root: &std::path::Path, include_ignored: bool) -> ignore::Walk {
+    ignore_aware_walk_builder(root, include_ignored).build()
+}
+
+/// The same walk, run across every core.
+///
+/// For the Grep tool, which reads each file it reaches. One thread spends most
+/// of its time waiting on the disk, and the search itself is the work; the
+/// Glob tool has no such work and stays on the sequential walk.
+pub(crate) fn ignore_aware_walk_parallel(
+    root: &std::path::Path,
+    include_ignored: bool,
+) -> ignore::WalkParallel {
+    ignore_aware_walk_builder(root, include_ignored).build_parallel()
+}
+
+fn ignore_aware_walk_builder(root: &std::path::Path, include_ignored: bool) -> ignore::WalkBuilder {
     let mut builder = ignore::WalkBuilder::new(root);
     if include_ignored {
         builder.standard_filters(false);
@@ -294,8 +310,8 @@ pub(crate) fn ignore_aware_walk(root: &std::path::Path, include_ignored: bool) -
     builder
         .hidden(false)
         .follow_links(true)
-        .filter_entry(|entry| entry.file_name() != ".git")
-        .build()
+        .filter_entry(|entry| entry.file_name() != ".git");
+    builder
 }
 
 #[derive(Debug)]

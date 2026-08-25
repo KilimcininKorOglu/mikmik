@@ -301,7 +301,7 @@ Find files matching a glob pattern. Searches from a specified directory (default
 
 **Permission level:** ReadOnly
 
-Search file contents using regular expressions, powered by ripgrep. Supports multiple output modes: matching lines with context, file paths only, or match counts.
+Search file contents using regular expressions. Supports multiple output modes: matching lines with context, file paths only, or match counts.
 
 | Parameter     | Type    | Required | Description                                 |
 |---------------|---------|----------|---------------------------------------------|
@@ -314,7 +314,13 @@ Search file contents using regular expressions, powered by ripgrep. Supports mul
 | `-n`          | boolean | no       | Show line numbers                           |
 | `context`     | integer | no       | Lines of context around each match          |
 | `multiline`   | boolean | no       | Enable multiline matching                   |
-| `head_limit`  | integer | no       | Limit output lines (default 250)            |
+| `head_limit`  | integer | no       | Limit the entries reported (default 250)    |
+
+Search runs in-process on ripgrep's own engine (`grep-regex` and `grep-searcher`); no `rg` or `grep` binary is called, and none needs to be installed. Three consequences worth knowing:
+
+- A file that is not valid UTF-8 is still searched, so an ASCII match in a latin-1 file is found. A file holding a NUL byte is treated as binary and skipped.
+- The walk runs across every core, and results are sorted by path, so the same search answers the same way twice.
+- `head_limit` counts files in `files_with_matches` and `count` mode, and matches in `content` mode. A file is reported whole, so the last one can carry the total past the limit rather than cut a match away from its context.
 
 ---
 

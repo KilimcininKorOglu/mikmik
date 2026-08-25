@@ -22,6 +22,9 @@ regex = { workspace = true }
 glob = { workspace = true }
 walkdir = { workspace = true }
 ignore = { workspace = true }
+grep-searcher = { workspace = true }
+grep-regex = { workspace = true }
+grep-matcher = { workspace = true }
 similar = { workspace = true }
 tempfile = { workspace = true }
 bytes = { workspace = true }

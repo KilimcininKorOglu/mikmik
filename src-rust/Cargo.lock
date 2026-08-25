@@ -4357,6 +4357,7 @@ dependencies = [
  "libc",
  "sed",
  "serde_json",
+ "sysinfo 0.37.2",
  "tempfile",
  "tokio",
  "tracing",

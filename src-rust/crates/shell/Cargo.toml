@@ -25,9 +25,16 @@ jaq-core = "3.1"
 jaq-std = "3.0"
 jaq-json = "2.0"
 
+# Listing this process's children, where the platform has no cheap call of its
+# own. Linux reads /proc and Darwin asks libproc, so this is Windows only.
+# `system` alone: the disk, network and component listings are not wanted.
+[target.'cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))'.dependencies]
+sysinfo = { version = "0.37", default-features = false, features = ["system"] }
+
 [target.'cfg(unix)'.dependencies]
-# `killpg` on the timeout path: the shell runs in this process, so what has to
-# be killed is the process group of whatever the command started.
+# Listing this process's children before every command, and `killpg` on the
+# timeout path: the shell runs in this process, so what has to be killed is the
+# process group of whatever the command started.
 libc = "0.2"
 
 [dev-dependencies]

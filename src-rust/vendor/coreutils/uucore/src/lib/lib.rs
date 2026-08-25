@@ -354,8 +354,12 @@ static UTIL_NAME: LazyLock<String> = LazyLock::new(|| {
 });
 
 /// Derive the utility name.
+///
+/// PATCH(mikmik): a utility running inside a host process cannot read its own
+/// name out of the host's `argv`, so the host installs it for the length of
+/// the run and this answers that instead.
 pub fn util_name() -> &'static str {
-    &UTIL_NAME
+    streams::util_name().unwrap_or(&UTIL_NAME)
 }
 
 static EXECUTION_PHRASE: LazyLock<String> = LazyLock::new(|| {
@@ -371,8 +375,12 @@ static EXECUTION_PHRASE: LazyLock<String> = LazyLock::new(|| {
 });
 
 /// Derive the complete execution phrase for "usage".
+///
+/// PATCH(mikmik): the installed name, for the reason given on [`util_name`].
+/// A utility called in this process was not called through a multicall
+/// binary, so the phrase is the name on its own.
 pub fn execution_phrase() -> &'static str {
-    &EXECUTION_PHRASE
+    streams::util_name().unwrap_or(&EXECUTION_PHRASE)
 }
 
 /// Args contains arguments passed to the utility.

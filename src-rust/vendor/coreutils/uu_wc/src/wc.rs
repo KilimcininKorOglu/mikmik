@@ -16,7 +16,7 @@ use std::{
     env,
     ffi::{OsStr, OsString},
     fs::{self, File},
-    io::{self, Write, stderr},
+    io::{self, Write},
     iter,
     path::{Path, PathBuf},
 };
@@ -932,22 +932,22 @@ fn wc(inputs: &Inputs, settings: &Settings) -> UResult<()> {
         let runtime_disabled = !features.disabled_runtime.is_empty();
 
         if enabled_empty && !runtime_disabled {
-            let _ = writeln!(stderr(), "{}", translate!("wc-debug-hw-unavailable"));
+            let _ = writeln!(uucore::streams::stderr(), "{}", translate!("wc-debug-hw-unavailable"));
         } else if runtime_disabled {
             let _ = writeln!(
-                stderr(),
+                uucore::streams::stderr(),
                 "{}",
                 translate!("wc-debug-hw-disabled-glibc", "features" => disabled.join(", "))
             );
         } else if !enabled_empty && disabled_empty {
             let _ = writeln!(
-                stderr(),
+                uucore::streams::stderr(),
                 "{}",
                 translate!("wc-debug-hw-using", "features" => enabled.join(", "))
             );
         } else {
             let _ = writeln!(
-                stderr(),
+                uucore::streams::stderr(),
                 "{}",
                 translate!(
                     "wc-debug-hw-limited-glibc",

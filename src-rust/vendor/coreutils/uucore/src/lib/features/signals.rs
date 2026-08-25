@@ -658,7 +658,7 @@ pub fn ensure_stdout_not_broken() -> std::io::Result<bool> {
     use std::io::stdout;
     use std::os::fd::AsFd;
 
-    let out = stdout();
+    let out = crate::streams::stdout();
 
     // First, check that stdout is a fifo and return true if it's not the case
     let stat = fstat(out.as_fd())?;

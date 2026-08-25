@@ -9,7 +9,6 @@
 use std::{
     borrow::Cow,
     ffi::{OsStr, OsString},
-    io::{IsTerminal, stdout},
     num::IntErrorKind,
 };
 
@@ -215,7 +214,7 @@ fn extract_format(options: &clap::ArgMatches) -> (Format, Option<&'static str>) 
         (Format::Commas, Some(options::format::COMMAS))
     } else if options.get_flag(options::format::COLUMNS) {
         (Format::Columns, Some(options::format::COLUMNS))
-    } else if stdout().is_terminal() {
+    } else if uucore::streams::stdout().is_terminal() {
         (Format::Columns, None)
     } else {
         (Format::OneLine, None)
@@ -392,7 +391,7 @@ fn extract_color(options: &clap::ArgMatches) -> bool {
         None => options.contains_id(options::COLOR),
         Some(val) => match val.as_str() {
             "" | "always" | "yes" | "force" => true,
-            "auto" | "tty" | "if-tty" => stdout().is_terminal(),
+            "auto" | "tty" | "if-tty" => uucore::streams::stdout().is_terminal(),
             /* "never" | "no" | "none" | */ _ => false,
         },
     };
@@ -423,7 +422,7 @@ fn extract_hyperlink(options: &clap::ArgMatches) -> bool {
 
     match hyperlink {
         "always" | "yes" | "force" => true,
-        "auto" | "tty" | "if-tty" => stdout().is_terminal(),
+        "auto" | "tty" | "if-tty" => uucore::streams::stdout().is_terminal(),
         "never" | "no" | "none" => false,
         _ => unreachable!("should be handled by clap"),
     }
@@ -541,7 +540,7 @@ fn extract_quoting_style(
 
         // By default, `ls` uses Shell escape quoting style when writing to a terminal file
         // descriptor and Literal otherwise.
-        if stdout().is_terminal() {
+        if uucore::streams::stdout().is_terminal() {
             (QuotingStyle::SHELL_ESCAPE.show_control(show_control), None)
         } else {
             (QuotingStyle::Literal { show_control }, None)
@@ -568,7 +567,7 @@ fn extract_indicator_style(options: &clap::ArgMatches) -> IndicatorStyle {
             "never" | "no" | "none" => IndicatorStyle::None,
             "always" | "yes" | "force" => IndicatorStyle::Classify,
             "auto" | "tty" | "if-tty" => {
-                if stdout().is_terminal() {
+                if uucore::streams::stdout().is_terminal() {
                     IndicatorStyle::Classify
                 } else {
                     IndicatorStyle::None
@@ -788,7 +787,7 @@ impl Config {
         } else if options.get_flag(options::SHOW_CONTROL_CHARS) {
             true
         } else {
-            !stdout().is_terminal()
+            !uucore::streams::stdout().is_terminal()
         };
 
         let (mut quoting_style, mut locale_quoting) = extract_quoting_style(options, show_control);

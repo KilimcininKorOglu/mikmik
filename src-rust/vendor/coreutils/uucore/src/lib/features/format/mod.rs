@@ -47,7 +47,7 @@ pub use spec::Spec;
 use std::{
     error::Error,
     fmt::Display,
-    io::{Write, stdout},
+    io::Write,
     marker::PhantomData,
     ops::ControlFlow,
 };
@@ -295,7 +295,7 @@ pub fn printf<'a>(
     format_string: impl AsRef<[u8]>,
     arguments: impl IntoIterator<Item = &'a FormatArgument>,
 ) -> Result<(), FormatError> {
-    printf_writer(stdout(), format_string, arguments)
+    printf_writer(crate::streams::stdout(), format_string, arguments)
 }
 
 fn printf_writer<'a>(

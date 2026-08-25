@@ -385,8 +385,11 @@ pub async fn session_brush_shell(
     if let Some(existing) = BRUSH_SESSIONS.get(session_id) {
         return Ok(existing.clone());
     }
-    let opened =
-        mikmik_shell::ShellSession::new(&mikmik_shell::usable_working_dir(working_dir)).await?;
+    let opened = mikmik_shell::ShellSession::new(
+        &mikmik_shell::usable_working_dir(working_dir),
+        mikmik_shell::BundledUtilities::default(),
+    )
+    .await?;
     // Another call may have opened one while this was awaiting. Whichever
     // landed first is the session's shell; the loser is dropped here, which is
     // correct because nothing has run in it yet.

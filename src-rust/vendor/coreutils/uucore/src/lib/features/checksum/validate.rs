@@ -10,7 +10,7 @@ use crate::util_name;
 use std::ffi::OsStr;
 use std::fmt::Display;
 use std::fs::File;
-use std::io::{self, BufReader, Read, Write, stderr, stdin};
+use std::io::{self, BufReader, Read, Write};
 
 use os_display::Quotable;
 
@@ -178,7 +178,7 @@ fn print_cksum_report(res: &ChecksumResult) {
 #[inline]
 fn log_no_properly_formatted(filename: impl Display) {
     let _ = writeln!(
-        stderr(),
+        crate::streams::stderr(),
         "{}: {}",
         util_name(),
         translate!("checksum-no-properly-formatted", "checksum_file" => filename)
@@ -189,7 +189,7 @@ fn log_no_properly_formatted(filename: impl Display) {
 #[inline]
 fn log_no_file_verified(filename: impl Display) {
     let _ = writeln!(
-        stderr(),
+        crate::streams::stderr(),
         "{}: {}",
         util_name(),
         translate!("checksum-no-file-verified", "checksum_file" => filename)
@@ -540,7 +540,7 @@ fn get_file_to_check(
     let filename_bytes = os_str_as_bytes(filename).map_err(|e| LineCheckError::UError(e.into()))?;
 
     if filename == "-" {
-        Ok(Box::new(stdin())) // Use stdin if "-" is specified in the checksum file
+        Ok(Box::new(crate::streams::stdin())) // Use stdin if "-" is specified in the checksum file
     } else {
         let failed_open = || {
             write_file_report(
@@ -859,13 +859,13 @@ fn process_checksum_file(
 
     let file: Box<dyn Read> = if input_is_stdin {
         // Use stdin if "-" is specified
-        Box::new(stdin())
+        Box::new(crate::streams::stdin())
     } else {
         match get_input_file(filename_input) {
             Ok(f) => f,
             Err(e) => {
                 // Could not read the file, show the error and continue to the next file
-                let _ = writeln!(stderr(), "{}: {e}", util_name());
+                let _ = writeln!(crate::streams::stderr(), "{}: {e}", util_name());
                 return Err(FileCheckError::CantOpenChecksumFile);
             }
         }
@@ -924,7 +924,7 @@ fn process_checksum_file(
                         "Unknown algorithm"
                     };
                     let _ = writeln!(
-                        stderr(),
+                        crate::streams::stderr(),
                         "{}: {}",
                         util_name(),
                         translate!("checksum-error-algo-bad-format", "file" => filename_input.maybe_quote(), "line" => i + 1, "algo" => algo)

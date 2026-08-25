@@ -22,7 +22,7 @@ use std::{
     ffi::{OsStr, OsString},
     fmt::Write as FmtWrite,
     fs::{self, DirEntry, FileType, Metadata},
-    io::{BufWriter, Stdout, Write},
+    io::{BufWriter, Write},
 };
 
 use ansi_width::ansi_width;
@@ -134,7 +134,7 @@ enum SizeOrDeviceId {
 /// ```
 pub fn show_dir_name(
     path_data: &PathData,
-    out: &mut BufWriter<Stdout>,
+    out: &mut BufWriter<uucore::streams::Stdout>,
     config: &Config,
 ) -> std::io::Result<()> {
     let escaped_name = escape_dir_name_with_locale(path_data.path().as_os_str(), config);
@@ -453,7 +453,7 @@ fn display_grid(
     names: impl Iterator<Item = OsString>,
     width: u16,
     direction: Direction,
-    out: &mut BufWriter<Stdout>,
+    out: &mut BufWriter<uucore::streams::Stdout>,
     quoted: bool,
     tab_size: usize,
 ) -> UResult<()> {

@@ -76,6 +76,40 @@ fn project_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
     Ok(project_root.to_path_buf())
 }
 
+/// PATCH(mikmik): the sibling `uu_<name>` directories of a vendored checkout.
+///
+/// Answers `None` when this is not that layout, which leaves every other build
+/// on the path it took before.
+fn vendored_utility_dirs() -> Option<Vec<(String, PathBuf)>> {
+    use std::fs;
+
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").ok()?;
+    let siblings = Path::new(&manifest_dir).parent()?;
+
+    let mut found = Vec::new();
+    for entry in fs::read_dir(siblings).ok()? {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(util_name) = name.strip_prefix("uu_") else {
+            continue;
+        };
+        let dir = entry.path();
+        if dir.join("locales").is_dir() {
+            found.push((util_name.to_string(), dir));
+        }
+    }
+
+    if found.is_empty() {
+        return None;
+    }
+    found.sort();
+    Some(found)
+}
+
 /// Attempt to detect which specific utility is being built
 fn detect_target_utility() -> Option<String> {
     use std::fs;
@@ -173,6 +207,24 @@ fn embed_all_utility_locales(
     locales_to_embed: &(String, Option<String>),
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::fs;
+
+    // PATCH(mikmik): the published crates are vendored side by side, so each
+    // utility's locales are in a sibling `uu_<name>/locales` rather than under
+    // `src/uu/<name>`. Without this branch every utility falls through to the
+    // static list, and the ones missing from it print raw message keys such as
+    // `sort-cannot-read` instead of a sentence.
+    if let Some(vendored) = vendored_utility_dirs() {
+        for (util_name, dir) in vendored {
+            embed_component_locales(embedded_file, locales_to_embed, &util_name, |locale| {
+                dir.join(format!("locales/{locale}.ftl"))
+            })?;
+        }
+        embed_component_locales(embedded_file, locales_to_embed, "uucore", |locale| {
+            PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default())
+                .join(format!("locales/{locale}.ftl"))
+        })?;
+        return Ok(());
+    }
 
     // Discover all uu_* directories
     let src_uu_dir = project_root.join("src/uu");

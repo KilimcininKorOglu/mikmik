@@ -23,16 +23,28 @@ pub use brush_core::ExecutionResult;
 
 pub mod bundled;
 mod children;
+mod cwd;
 /// Pointing a bundled utility's output somewhere the shell chose.
 pub mod streams;
-
-pub use bundled::{maybe_dispatch, DISPATCH_FLAG};
 
 /// `brush_core::ShellFd` is a plain `i32`, so the three standard descriptors
 /// are named here rather than repeated as bare numbers.
 const STDIN: brush_core::ShellFd = 0;
 const STDOUT: brush_core::ShellFd = 1;
 const STDERR: brush_core::ShellFd = 2;
+
+/// Which copy of a command-line utility a shell reaches for.
+///
+/// The bundled copies run in this process; the machine's own cost a fork and
+/// an exec. They are not identical, though, so the choice is the user's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BundledUtilities {
+    /// Use the bundled copy for every name it carries.
+    #[default]
+    Prefer,
+    /// Use the bundled copy only for a name the machine does not have.
+    Fallback,
+}
 
 /// A shell that outlives one command.
 pub struct ShellSession {
@@ -89,7 +101,9 @@ impl ShellSession {
     /// print a banner, define an alias, or block on a prompt, and none of that
     /// belongs in a session the model drives; `bash -c` did not read them
     /// either, so this keeps the behaviour the tool already had.
-    pub async fn new(working_dir: &Path) -> anyhow::Result<Self> {
+    /// `bundled` decides whether the utilities that ship inside the binary
+    /// come ahead of the machine's own copies.
+    pub async fn new(working_dir: &Path, bundled: BundledUtilities) -> anyhow::Result<Self> {
         let mut shell = brush_core::Shell::builder()
             .working_dir(working_dir.to_path_buf())
             .profile(brush_core::ProfileLoadBehavior::Skip)
@@ -104,8 +118,8 @@ impl ShellSession {
             .map_err(|error| anyhow::anyhow!("could not start the shell: {error}"))?;
         // After the shell's own built-ins, so `echo`, `printf`, `test`, `true`
         // and `false` keep the shell's semantics rather than the coreutils
-        // ones, and only for a name the machine does not already have.
-        bundled::register(&mut shell);
+        // ones.
+        bundled::register(&mut shell, bundled);
         Ok(Self { shell })
     }
 
@@ -232,7 +246,9 @@ mod tests {
 
     async fn session() -> (tempfile::TempDir, ShellSession) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let session = ShellSession::new(dir.path()).await.expect("shell");
+        let session = ShellSession::new(dir.path(), BundledUtilities::default())
+            .await
+            .expect("shell");
         (dir, session)
     }
 
@@ -311,7 +327,7 @@ mod tests {
         let (text, outcome) = run(&mut shell, "printf 'b\\na\\n' | sort | head -1").await;
 
         assert_eq!(text.trim(), "a");
-        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(outcome.exit_code, 0, "output was {text:?}");
     }
 
     #[tokio::test]
@@ -364,15 +380,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_command_that_runs_too_long_is_stopped() {
+    async fn an_external_command_that_runs_too_long_is_killed() {
         // Reported *and* killed. The shell runs in this process, so dropping
         // the future stops the waiting and nothing else; without the kill the
-        // `sleep` would outlive the call that started it.
+        // child would outlive the call that started it. The path is spelled
+        // out so the bundled `sleep` cannot answer instead: the point here is
+        // the child process.
         let (_dir, mut shell) = session().await;
         let before = children::direct_children();
 
         let (_, outcome) =
-            run_with_timeout(&mut shell, "sleep 30", Duration::from_millis(500)).await;
+            run_with_timeout(&mut shell, "/bin/sleep 30", Duration::from_millis(500)).await;
 
         assert!(outcome.timed_out);
         assert_eq!(outcome.exit_code, 124);
@@ -388,13 +406,123 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_bundled_command_that_runs_too_long_stops_being_waited_for() {
+        // A bundled utility runs in this process, so there is nothing to kill.
+        // What the timeout can promise is that the caller stops waiting; the
+        // utility itself finishes on its own. This pins that contract, because
+        // it is the one thing the in-process design gives up.
+        let (_dir, mut shell) = session().await;
+        let started = std::time::Instant::now();
+
+        let (_, outcome) =
+            run_with_timeout(&mut shell, "sleep 5", Duration::from_millis(300)).await;
+
+        assert!(outcome.timed_out);
+        assert_eq!(outcome.exit_code, 124);
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "the caller waited {:?}, so the timeout did not cut the wait",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
     async fn the_session_still_works_after_a_timeout() {
         let (_dir, mut shell) = session().await;
-        run_with_timeout(&mut shell, "sleep 30", Duration::from_millis(500)).await;
+        run_with_timeout(&mut shell, "/bin/sleep 30", Duration::from_millis(500)).await;
 
         let (text, outcome) = run(&mut shell, "echo alive").await;
         assert_eq!(text.trim(), "alive");
         assert_eq!(outcome.exit_code, 0);
+    }
+
+    async fn session_with(bundled: BundledUtilities) -> (tempfile::TempDir, ShellSession) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let session = ShellSession::new(dir.path(), bundled).await.expect("shell");
+        (dir, session)
+    }
+
+    #[tokio::test]
+    async fn a_bundled_utility_runs_with_nothing_installed() {
+        // The whole point of carrying them. `PATH` is not consulted at all,
+        // because a bundled name is a built-in of this shell.
+        let (dir, mut shell) = session().await;
+        std::fs::write(dir.path().join("list"), "ccc\naaa\nbbb\n").expect("write");
+
+        let (text, outcome) = run(&mut shell, "PATH= sort list").await;
+
+        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(text, "aaa\nbbb\nccc\n");
+    }
+
+    #[tokio::test]
+    async fn a_bundled_pipeline_streams_more_than_one_pipe_buffer() {
+        // A pipe holds about 64 KiB, so a pipeline that did not stream would
+        // deadlock here rather than answer. The concurrency comes from brush,
+        // which runs every stage on its own blocking thread; this checks that
+        // an in-process utility takes part in it rather than proving it.
+        let (_dir, mut shell) = session().await;
+
+        let (text, outcome) = run(&mut shell, "seq 1 200000 | sort -n | tail -1").await;
+
+        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(text.trim(), "200000");
+    }
+
+    #[tokio::test]
+    async fn a_bundled_utility_reads_a_redirected_file() {
+        let (dir, mut shell) = session().await;
+        std::fs::write(dir.path().join("lines"), "one\ntwo\nthree\n").expect("write");
+
+        let (text, outcome) = run(&mut shell, "wc -l < lines").await;
+
+        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(text.trim(), "3");
+    }
+
+    #[tokio::test]
+    async fn a_bundled_utility_reports_its_own_failure() {
+        // The exit code has to come back from the utility rather than from the
+        // thread that ran it, and the complaint has to reach stderr.
+        let (_dir, mut shell) = session().await;
+
+        let (text, outcome) = run(&mut shell, "wc -l no-such-file").await;
+
+        assert_ne!(outcome.exit_code, 0);
+        assert!(text.contains("no-such-file"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn two_sessions_do_not_mix_their_output() {
+        // The stream override is per thread, so two commands running at once
+        // must not see each other's descriptors.
+        let (dir_a, mut a) = session().await;
+        let (dir_b, mut b) = session().await;
+        std::fs::write(dir_a.path().join("f"), "from a\n").expect("write");
+        std::fs::write(dir_b.path().join("f"), "from b\n").expect("write");
+
+        let (first, second) = tokio::join!(run(&mut a, "cat f"), run(&mut b, "cat f"));
+
+        assert_eq!(first.0, "from a\n");
+        assert_eq!(second.0, "from b\n");
+    }
+
+    #[tokio::test]
+    async fn fallback_leaves_the_machines_own_copy_in_charge() {
+        // With `Fallback` nothing is registered for a name `which` can find,
+        // so the command resolves through `PATH` as it always did.
+        let (dir, mut shell) = session_with(BundledUtilities::Fallback).await;
+        std::fs::write(dir.path().join("list"), "ccc\naaa\n").expect("write");
+
+        let (text, outcome) = run(&mut shell, "sort list").await;
+
+        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(text, "aaa\nccc\n");
+
+        // And the shell says so: a built-in would answer `builtin`, whereas
+        // this resolves to the file `which` found.
+        let (kind, _) = run(&mut shell, "type sort").await;
+        assert!(kind.contains('/'), "{kind}");
     }
 
     #[tokio::test]

@@ -11,7 +11,7 @@ use clap::{
 };
 use std::{
     ffi::{OsStr, OsString},
-    io::{Write, stdout},
+    io::Write,
     path::{Path, PathBuf},
 };
 use uucore::fs::make_path_relative_to;
@@ -301,7 +301,7 @@ fn resolve_path(
     let abs = process_relative(abs, relative_base, relative_to);
 
     print_verbatim(abs)?;
-    stdout().write_all(&[line_ending.into()])?;
+    uucore::streams::stdout().write_all(&[line_ending.into()])?;
     Ok(())
 }
 

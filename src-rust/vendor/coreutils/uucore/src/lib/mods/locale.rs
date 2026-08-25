@@ -9,7 +9,8 @@ use crate::error::UError;
 use fluent::{FluentArgs, FluentBundle, FluentResource};
 use fluent_syntax::parser::ParserError;
 
-use std::cell::Cell;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -108,11 +109,19 @@ impl Localizer {
 }
 
 // Cache localizer. FluentResource cannot be shared between threads while FluentBundle can be shared
-static UUCORE_FLUENT: OnceLock<FluentResource> = OnceLock::new();
-static CHECKSUM_FLUENT: OnceLock<FluentResource> = OnceLock::new();
-static UTIL_FLUENT: OnceLock<FluentResource> = OnceLock::new();
+//
+// PATCH(mikmik): keyed by the file each resource came from rather than one
+// slot per role. A single process used to run a single utility, so one slot
+// held that utility's strings for as long as it mattered. Here one process
+// runs every utility, and a single slot would hand the first one's strings to
+// all the others, which is how `head` came to print `head-error-cannot-open`.
+static FLUENT_CACHE: OnceLock<std::sync::Mutex<HashMap<String, &'static FluentResource>>> =
+    OnceLock::new();
+
 thread_local! {
-    static LOCALIZER: OnceLock<Localizer> = const { OnceLock::new() };
+    // PATCH(mikmik): was a `OnceLock`, which no later utility on the same
+    // thread could replace. `Localizer` is not `Sync`, so it stays per thread.
+    static LOCALIZER: RefCell<Option<Localizer>> = const { RefCell::new(None) };
 }
 
 /// Helper function to find the uucore locales directory from a utility's locales directory
@@ -217,21 +226,18 @@ fn init_localization(
         }
     };
 
-    LOCALIZER.with(|lock| {
-        lock.set(loc)
-            .map_err(|_| LocalizationError::Bundle("Localizer already initialized".into()))
-    })?;
+    LOCALIZER.with(|slot| *slot.borrow_mut() = Some(loc));
     Ok(())
 }
 
 /// Helper function to parse FluentResource from content string
 fn parse_fluent_resource(
     content: &str,
-    cache: &'static OnceLock<FluentResource>,
+    cache_key: &str,
 ) -> Result<&'static FluentResource, LocalizationError> {
     // global cache breaks unit tests
     if cfg!(not(test)) {
-        if let Some(res) = cache.get() {
+        if let Some(res) = cached_resource(cache_key) {
             return Ok(res);
         }
     }
@@ -256,10 +262,32 @@ fn parse_fluent_resource(
     )?;
     // global cache breaks unit tests
     if cfg!(not(test)) {
-        Ok(cache.get_or_init(|| resource))
+        Ok(remember_resource(cache_key, resource))
     } else {
         Ok(Box::leak(Box::new(resource)))
     }
+}
+
+/// PATCH(mikmik): the resource already parsed for `key`, if there is one.
+fn cached_resource(key: &str) -> Option<&'static FluentResource> {
+    let cache = FLUENT_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    cache.lock().ok()?.get(key).copied()
+}
+
+/// PATCH(mikmik): keep `resource` for `key` and answer the kept copy.
+///
+/// A `FluentBundle` borrows its resources for `'static`, so a parsed file has
+/// to outlive every bundle built from it. The set of keys is the set of locale
+/// files the binary carries, so this holds at most that many resources.
+fn remember_resource(key: &str, resource: FluentResource) -> &'static FluentResource {
+    let kept: &'static FluentResource = Box::leak(Box::new(resource));
+    let cache = FLUENT_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    if let Ok(mut cache) = cache.lock() {
+        // Another thread may have parsed the same file first; keep whichever
+        // copy is already there so a key always answers the same resource.
+        return cache.entry(key.to_string()).or_insert(kept);
+    }
+    kept
 }
 
 /// Create a bundle from embedded English locale files with common uucore strings
@@ -279,14 +307,14 @@ fn create_english_bundle_from_embedded(
 
     // First, try to load common uucore strings
     if let Some(uucore_content) = get_embedded_locale("uucore/en-US.ftl") {
-        let uucore_resource = parse_fluent_resource(uucore_content, &UUCORE_FLUENT)?;
+        let uucore_resource = parse_fluent_resource(uucore_content, "uucore/en-US.ftl")?;
         bundle.add_resource_overriding(uucore_resource);
     }
 
     // Checksum algorithms need locale messages from checksum_common
     if util_name.ends_with("sum") {
         if let Some(uucore_content) = get_embedded_locale("checksum_common/en-US.ftl") {
-            let uucore_resource = parse_fluent_resource(uucore_content, &CHECKSUM_FLUENT)?;
+            let uucore_resource = parse_fluent_resource(uucore_content, "checksum_common/en-US.ftl")?;
             bundle.add_resource_overriding(uucore_resource);
         }
     }
@@ -294,7 +322,7 @@ fn create_english_bundle_from_embedded(
     // Then, try to load utility-specific strings
     let locale_key = format!("{util_name}/en-US.ftl");
     if let Some(ftl_content) = get_embedded_locale(&locale_key) {
-        let resource = parse_fluent_resource(ftl_content, &UTIL_FLUENT)?;
+        let resource = parse_fluent_resource(ftl_content, &locale_key)?;
         bundle.add_resource_overriding(resource);
     }
 
@@ -344,8 +372,9 @@ fn create_wasi_bundle_from_embedded(
 }
 
 fn get_message_internal(id: &str, args: Option<FluentArgs>) -> String {
-    LOCALIZER.with(|lock| {
-        lock.get()
+    LOCALIZER.with(|slot| {
+        slot.borrow()
+            .as_ref()
             .map_or_else(|| id.to_string(), |loc| loc.format(id, args.as_ref())) // Return the key ID if localizer not initialized
     })
 }
@@ -465,12 +494,18 @@ fn detect_system_locale() -> Result<LanguageIdentifier, LocalizationError> {
 /// ```
 pub fn setup_localization(p: &str) -> Result<(), LocalizationError> {
     // Avoid duplicated and high-cost localizer setup
+    //
+    // PATCH(mikmik): remembers *which* utility was set up rather than only
+    // that one was. A host process runs one utility after another on the same
+    // thread, and a plain flag left every later utility reading the first
+    // one's strings, so their own messages came out as raw keys.
     thread_local! {
-        static LOCALIZER_IS_SET: Cell<bool> = const { Cell::new(false) };
+        static LOCALIZER_IS_SET_FOR: RefCell<Option<String>> = const { RefCell::new(None) };
     }
-    if LOCALIZER_IS_SET.with(Cell::get) {
+    if LOCALIZER_IS_SET_FOR.with(|set_for| set_for.borrow().as_deref() == Some(p)) {
         return Ok(());
     }
+    LOCALIZER.with(|slot| *slot.borrow_mut() = None);
 
     let locale = detect_system_locale().unwrap_or_else(|_| {
         LanguageIdentifier::from_str(DEFAULT_LOCALE).expect("Default locale should always be valid")
@@ -503,12 +538,9 @@ pub fn setup_localization(p: &str) -> Result<(), LocalizationError> {
             Localizer::new(english_bundle)
         };
 
-        LOCALIZER.with(|lock| {
-            lock.set(localizer)
-                .map_err(|_| LocalizationError::Bundle("Localizer already initialized".into()))
-        })?;
+        LOCALIZER.with(|slot| *slot.borrow_mut() = Some(localizer));
     }
-    LOCALIZER_IS_SET.with(|f| f.set(true));
+    LOCALIZER_IS_SET_FOR.with(|set_for| *set_for.borrow_mut() = Some(p.to_string()));
     Ok(())
 }
 
@@ -673,7 +705,7 @@ mod tests {
         // Only load from the test directory - no common strings or utility-specific paths
         let locale_path = test_locales_dir.join(format!("{locale}.ftl"));
         if let Ok(ftl_content) = fs::read_to_string(&locale_path) {
-            let resource = parse_fluent_resource(&ftl_content, &UUCORE_FLUENT)?;
+            let resource = parse_fluent_resource(&ftl_content, "uucore/en-US.ftl")?;
             bundle.add_resource_overriding(resource);
             return Ok(bundle);
         }
@@ -710,10 +742,7 @@ mod tests {
             }
         };
 
-        LOCALIZER.with(|lock| {
-            lock.set(loc)
-                .map_err(|_| LocalizationError::Bundle("Localizer already initialized".into()))
-        })?;
+        LOCALIZER.with(|slot| *slot.borrow_mut() = Some(loc));
         Ok(())
     }
 

@@ -27,13 +27,19 @@ These are **not** workspace members, on purpose: `cargo clippy --workspace --all
 
 ## What the patch changes
 
-Three things, and nothing else:
+84 files, 509 lines added and 375 removed against the published crates. One theme runs through all of it: **a utility here is not a process of its own, so nothing it needs may come from the process.** Upstream took four things that way.
 
-1. `uucore/src/lib/mods/streams.rs` is new. It holds a per-thread override for the three standard streams and hands out stand-ins for `std::io::Stdout`, `Stderr` and `Stdin` that follow it. They answer the same shapes the standard library's do: `Write`, `Read`, `BufRead`, `lock()`, `AsFd`, `AsRawFd`, `is_terminal()`.
-2. Every place a utility obtains one of the three streams calls `uucore::streams` instead of `std::io`. That is 249 lines across 64 files.
-3. A handful of signatures that named `std::io::Stdout` or took `&Stdin` now name the stand-in or are generic over the descriptor. `uu_od` also stops building a `File` from the raw descriptor, which would have closed a descriptor the host is still using.
+**1. The three standard streams.** `uucore/src/lib/mods/streams.rs` is new. It holds a per-thread override and hands out stand-ins for `std::io::Stdout`, `Stderr` and `Stdin` that follow it. They answer the same shapes the standard library's do: `Write`, `Read`, `BufRead`, `lock()`, `AsFd`, `AsRawFd`, `is_terminal()`. Every place a utility obtains one of the three now calls `uucore::streams` instead of `std::io`, and a handful of signatures that named `std::io::Stdout` or took `&Stdin` name the stand-in instead.
 
 `is_terminal` is an inherent method rather than an implementation of `std::io::IsTerminal`, because that trait is sealed. The call sites read the same either way.
+
+**2. The exit code.** `uucore::error` kept it in a process-wide static. A utility that reports a partial failure sets it and answers `Ok`, and `uumain` then hands the static back as the exit code. In one process that made one utility's failure the next one's answer, and two pipeline stages running at once clobbered each other's. It is per thread now, and `streams::with_streams` clears it before each run.
+
+**3. The utility's name.** Upstream reads it out of `argv[0]`, which in a host process is the host's binary, so every complaint came out as `mikmik: no-such-file: ...`. The host installs the name for the length of the run and `util_name` answers that.
+
+**4. The message bundle.** Two problems. `uucore`'s `build.rs` walks `src/uu/<name>/locales` to embed each utility's strings, and a vendored checkout has them in a sibling `uu_<name>/locales`, so nothing but `uucore`'s own strings was embedded. And the localizer was set once per thread and cached one resource per role globally, so the second utility on a thread read the first one's bundle. Both are fixed: the build walks the sibling layout, the localizer is rebuilt when the utility changes, and the resource cache is keyed by file. Without this `head` printed `head-error-cannot-open` where it should print `cannot open 'x' for reading`.
+
+`uu_od` also stops building a `File` from the raw descriptor, which would have closed a descriptor the host is still using.
 
 ## Keeping the patch
 

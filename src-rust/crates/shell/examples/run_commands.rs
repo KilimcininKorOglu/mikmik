@@ -2,18 +2,19 @@
 //!
 //! Two things are hard to see from a unit test, and this shows both.
 //!
-//! The shim: this binary dispatches `--invoke-bundled` exactly as `mikmik`
-//! does, so a bundled utility the shell reaches for re-executes this example
-//! rather than the machine's own binary. Run it with an empty environment to
-//! watch the bundled copies do the work.
+//! A whole pipeline: the bundled utilities run in this process, so
+//! `ls | sort` streams between threads rather than processes, and that is only
+//! visible from a real shell. An empty environment proves the machine needs
+//! nothing installed; `MIKMIK_BUNDLED=fallback` reaches for the machine's
+//! own copies instead.
 //!
 //! Persistence: every argument is one command, and all of them run in the same
 //! session, so what one leaves behind the next one sees.
 //!
 //! ```text
-//! cargo build --example shim_check -p mikmik-shell
-//! env -i ./target/debug/examples/shim_check 'ls -1 | sort | head -2'
-//! ./target/debug/examples/shim_check 'cd /tmp' 'pwd'
+//! cargo build --example run_commands -p mikmik-shell
+//! env -i ./target/debug/examples/run_commands 'ls -1 | sort | head -2'
+//! ./target/debug/examples/run_commands 'cd /tmp' 'pwd'
 //! ```
 
 use std::io::Read;
@@ -21,10 +22,6 @@ use std::time::{Duration, Instant};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    if let Some(code) = mikmik_shell::maybe_dispatch() {
-        std::process::exit(code);
-    }
-
     let commands: Vec<String> = std::env::args().skip(1).collect();
     let commands = if commands.is_empty() {
         vec!["pwd".to_string()]
@@ -34,7 +31,11 @@ async fn main() -> anyhow::Result<()> {
 
     let cwd = std::env::current_dir()?;
     let opened = Instant::now();
-    let mut session = mikmik_shell::ShellSession::new(&cwd).await?;
+    let bundled = match std::env::var("MIKMIK_BUNDLED").as_deref() {
+        Ok("fallback") => mikmik_shell::BundledUtilities::Fallback,
+        _ => mikmik_shell::BundledUtilities::Prefer,
+    };
+    let mut session = mikmik_shell::ShellSession::new(&cwd, bundled).await?;
     println!("--- session opened in {:?} ---", opened.elapsed());
 
     for command in &commands {

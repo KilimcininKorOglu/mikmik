@@ -496,18 +496,6 @@ fn bypass_gate_for(mode: PermissionMode, gate_cleared: bool, dialog_visible: boo
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Fast-path: `mikmik --invoke-bundled <name> [args]` — run one of the
-    // utilities that ship inside this binary and exit.
-    //
-    // Ahead of everything, including the credential migrations below: the
-    // embedded shell spawns this for `ls`, `cat` and the rest, and a bundled
-    // command must be a bare utility rather than a MikMik startup. The flag is
-    // read in the leading position only, so a script containing the literal
-    // token elsewhere is unaffected.
-    if let Some(code) = mikmik_shell::maybe_dispatch() {
-        std::process::exit(code);
-    }
-
     // Fast-path: handle --version before parsing everything
     let raw_args: Vec<String> = std::env::args().collect();
     if raw_args.iter().any(|a| a == "--version" || a == "-V") {

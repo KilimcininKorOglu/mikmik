@@ -6,7 +6,7 @@
 use std::{
     ffi::OsString,
     fs::File,
-    io::{BufRead, BufReader, Stdin, Stdout, Write, stdin, stdout},
+    io::{BufRead, BufReader, Write},
     panic::set_hook,
     path::{Path, PathBuf},
     time::Duration,
@@ -194,7 +194,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             )?;
         }
     } else {
-        let stdin = stdin();
+        let stdin = uucore::streams::stdin();
         if stdin.is_tty() {
             // stdin is not a pipe
             return Err(UUsageError::new(1, MoreError::BadUsage.to_string()));
@@ -315,7 +315,7 @@ pub fn uu_app() -> Command {
 
 enum InputType {
     File(BufReader<File>),
-    Stdin(Stdin),
+    Stdin(uucore::streams::Stdin),
 }
 
 impl InputType {
@@ -336,7 +336,7 @@ impl InputType {
 }
 
 enum OutputType {
-    Tty(Stdout),
+    Tty(uucore::streams::Stdout),
     Pipe(Box<dyn Write>),
     #[cfg(test)]
     Test(Vec<u8>),
@@ -369,7 +369,7 @@ impl Write for OutputType {
 }
 
 fn setup_term() -> UResult<OutputType> {
-    let mut stdout = stdout();
+    let mut stdout = uucore::streams::stdout();
     if stdout.is_tty() {
         terminal::enable_raw_mode()?;
         stdout.execute(EnterAlternateScreen)?.execute(Hide)?;
@@ -383,11 +383,11 @@ fn setup_term() -> UResult<OutputType> {
 #[inline(always)]
 fn setup_term() -> UResult<OutputType> {
     // no real stdout/tty on Fuchsia, just write into a pipe
-    Ok(OutputType::Pipe(Box::new(stdout())))
+    Ok(OutputType::Pipe(Box::new(uucore::streams::stdout())))
 }
 
 fn reset_term() -> UResult<()> {
-    let mut stdout = stdout();
+    let mut stdout = uucore::streams::stdout();
     if stdout.is_tty() {
         stdout.queue(Show)?.queue(LeaveAlternateScreen)?;
         terminal::disable_raw_mode()?;

@@ -28,12 +28,17 @@ pub struct Streams {
     pub stderr: Arc<File>,
 }
 
-/// Run `body` with the three streams installed for this thread.
+/// Run one utility called `name` with the three streams installed for this
+/// thread.
 ///
 /// The previous state comes back afterwards, on a panic as well, so one
 /// utility can run inside another's pipeline.
-pub fn with_streams<T>(streams: Streams, body: impl FnOnce() -> T) -> T {
-    uucore::streams::with_streams(streams.stdin, streams.stdout, streams.stderr, body)
+///
+/// `name` is what the utility prints its complaints under, and it also clears
+/// the exit code the previous utility on this thread left behind. Both used to
+/// come from the utility being a process of its own.
+pub fn with_streams<T>(name: &str, streams: Streams, body: impl FnOnce() -> T) -> T {
+    uucore::streams::with_streams(name, streams.stdin, streams.stdout, streams.stderr, body)
 }
 
 #[cfg(test)]
@@ -77,7 +82,7 @@ mod tests {
     fn output_lands_in_the_file_the_shell_supplied() {
         let dir = tempfile::tempdir().expect("tempdir");
 
-        with_streams(three(dir.path(), "out"), || {
+        with_streams("probe", three(dir.path(), "out"), || {
             write!(uucore::streams::stdout(), "to stdout").expect("write");
             write!(uucore::streams::stderr(), "to stderr").expect("write");
         });
@@ -92,7 +97,7 @@ mod tests {
         // run, so the lock has to follow the override too.
         let dir = tempfile::tempdir().expect("tempdir");
 
-        with_streams(three(dir.path(), "out"), || {
+        with_streams("probe", three(dir.path(), "out"), || {
             let mut locked = uucore::streams::stdout().lock();
             write!(locked, "through the lock").expect("write");
             locked.flush().expect("flush");
@@ -112,7 +117,7 @@ mod tests {
             stderr: scratch(dir.path(), "err"),
         };
 
-        let (first, rest) = with_streams(streams, || {
+        let (first, rest) = with_streams("probe", streams, || {
             let mut line = String::new();
             uucore::streams::stdin()
                 .read_line(&mut line)
@@ -134,9 +139,10 @@ mod tests {
         // to nest rather than replace.
         let dir = tempfile::tempdir().expect("tempdir");
 
-        with_streams(three(dir.path(), "outer"), || {
+        with_streams("probe", three(dir.path(), "outer"), || {
             write!(uucore::streams::stdout(), "outer ").expect("write");
             with_streams(
+                "probe",
                 Streams {
                     stdin: scratch(dir.path(), "in2"),
                     stdout: scratch(dir.path(), "inner"),
@@ -160,7 +166,7 @@ mod tests {
         // write on this thread pointing at a file nobody is reading.
         let dir = tempfile::tempdir().expect("tempdir");
         let caught = std::panic::catch_unwind(|| {
-            with_streams(three(dir.path(), "out"), || panic!("on purpose"));
+            with_streams("probe", three(dir.path(), "out"), || panic!("on purpose"));
         });
 
         assert!(caught.is_err());
@@ -179,7 +185,7 @@ mod tests {
         // regression in the output path fails here instead of blocking on the
         // process's real standard input.
         let source = dir.path().join("source").display().to_string();
-        let code = with_streams(three(dir.path(), "out"), || {
+        let code = with_streams("sort", three(dir.path(), "out"), || {
             let run = crate::bundled::registry()
                 .get("sort")
                 .expect("sort is bundled");
@@ -193,6 +199,90 @@ mod tests {
         assert_eq!(read_back(dir.path(), "out"), "aaa\nbbb\nccc\n");
     }
 
+    /// Run a bundled utility with the three streams pointing into `dir`, and
+    /// answer its exit code together with what it wrote to stderr.
+    fn complain(dir: &std::path::Path, util: &str, args: &[&str]) -> (i32, String) {
+        let mut argv = vec![std::ffi::OsString::from(util)];
+        argv.extend(args.iter().map(std::ffi::OsString::from));
+
+        let code = with_streams(util, three(dir, "out"), || {
+            let run = crate::bundled::registry().get(util).expect("bundled");
+            run(argv)
+        });
+        (code, read_back(dir, "err"))
+    }
+
+    #[test]
+    fn one_utilitys_failure_is_not_the_next_ones_answer() {
+        // Upstream keeps the exit code in a process-wide static, because a
+        // utility used to be a process of its own. Here they share one, and a
+        // stale 1 would make every later command in the session look failed.
+        // `ls` reports a missing name by setting the code and answering `Ok`,
+        // which is the shape that leaks: the next utility answering `Ok` picks
+        // the same code up and looks failed.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("source"), "one\ntwo\n").expect("write");
+        let source = dir.path().join("source").display().to_string();
+
+        let (failed, _) = complain(dir.path(), "ls", &["no-such-file"]);
+        assert_ne!(failed, 0);
+
+        let (after, _) = complain(dir.path(), "ls", &[&source]);
+        assert_eq!(after, 0);
+    }
+
+    #[test]
+    fn the_most_written_command_writes_where_it_was_told() {
+        // `ls` kept its own `use std::io::stdout`, so its listing went to the
+        // process's real output while the shell read an empty file. It is the
+        // command a model writes most, and the one whose escape was silent.
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A directory of its own, so the scratch files the streams point at do
+        // not turn up in the listing.
+        std::fs::create_dir(dir.path().join("listed")).expect("mkdir");
+        std::fs::write(dir.path().join("listed/only-file"), "x").expect("write");
+        let listed = dir.path().join("listed").display().to_string();
+
+        let code = with_streams("ls", three(dir.path(), "out"), || {
+            let run = crate::bundled::registry().get("ls").expect("ls is bundled");
+            run(vec![
+                std::ffi::OsString::from("ls"),
+                std::ffi::OsString::from(&listed),
+            ])
+        });
+
+        assert_eq!(code, 0);
+        assert_eq!(read_back(dir.path(), "out").trim(), "only-file");
+    }
+
+    #[test]
+    fn a_utility_complains_under_its_own_name() {
+        // Upstream reads the name out of `argv[0]`, which in this process is
+        // the host's binary. Without the installed name every message would
+        // start `mikmik:`.
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let (_, complaint) = complain(dir.path(), "cat", &["no-such-file"]);
+
+        assert!(complaint.starts_with("cat: "), "{complaint}");
+    }
+
+    #[test]
+    fn a_utility_gets_its_own_messages_rather_than_the_previous_ones() {
+        // The localizer used to be set once per thread, so the second utility
+        // on a thread looked its messages up in the first one's bundle and
+        // printed raw keys such as `head-error-cannot-open`.
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        complain(dir.path(), "sort", &["no-such-file"]);
+        let (_, complaint) = complain(dir.path(), "head", &["no-such-file"]);
+
+        assert!(
+            complaint.contains("cannot open"),
+            "head printed a raw message key: {complaint}"
+        );
+    }
+
     #[test]
     fn a_utility_that_counts_reports_through_the_same_path() {
         // `wc` takes the locked handle rather than the plain one, which is a
@@ -201,7 +291,7 @@ mod tests {
         std::fs::write(dir.path().join("source"), "one\ntwo\nthree\n").expect("write");
         let source = dir.path().join("source").display().to_string();
 
-        let code = with_streams(three(dir.path(), "out"), || {
+        let code = with_streams("wc", three(dir.path(), "out"), || {
             let run = crate::bundled::registry().get("wc").expect("wc is bundled");
             run(vec![
                 std::ffi::OsString::from("wc"),

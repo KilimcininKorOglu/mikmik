@@ -21,7 +21,7 @@ use std::error::Error as StdError;
 use std::ffi::OsString;
 
 use std::io::Write as _;
-use std::io::stderr;
+
 
 /// Color enum for consistent styling
 #[derive(Debug, Clone, Copy)]
@@ -52,11 +52,6 @@ fn get_color_choice() -> clap::ColorChoice {
     }
 }
 
-/// Generic helper to check if colors should be enabled for a given stream
-fn should_use_color_for_stream<S: std::io::IsTerminal>(stream: &S) -> bool {
-    should_use_color(stream.is_terminal())
-}
-
 /// Whether colour belongs in the output, given whether the stream is a
 /// terminal.
 ///
@@ -78,7 +73,7 @@ struct ColorManager(bool);
 impl ColorManager {
     /// Create a new ColorManager based on environment variables
     fn from_env() -> Self {
-        Self(should_use_color_for_stream(&stderr()))
+        Self(should_use_color(crate::streams::stderr().is_terminal()))
     }
 
     /// Apply color to text if colors are enabled
@@ -136,7 +131,7 @@ impl<'a> ErrorFormatter<'a> {
             ErrorKind::MissingRequiredArgument => self.handle_missing_required(err, exit_code),
             ErrorKind::TooFewValues | ErrorKind::TooManyValues | ErrorKind::WrongNumberOfValues => {
                 // These need full clap formatting
-                let _ = write!(stderr(), "{}", err.render());
+                let _ = write!(crate::streams::stderr(), "{}", err.render());
                 exit_code
             }
             _ => self.handle_generic_error(err, exit_code),
@@ -157,7 +152,7 @@ impl<'a> ErrorFormatter<'a> {
 
             // Print main error
             let _ = write!(
-                stderr(),
+                crate::streams::stderr(),
                 "{}\n\n",
                 translate!(
                     "clap-error-unexpected-argument",
@@ -170,7 +165,7 @@ impl<'a> ErrorFormatter<'a> {
             if let Some(suggested_arg) = err.get(ContextKind::SuggestedArg) {
                 let tip_word = translate!("common-tip");
                 let _ = write!(
-                    stderr(),
+                    crate::streams::stderr(),
                     "{}\n\n",
                     translate!(
                         "clap-error-similar-argument",
@@ -203,7 +198,7 @@ impl<'a> ErrorFormatter<'a> {
                 // Value required but not provided
                 let error_word = translate!("common-error");
                 let _ = writeln!(
-                    stderr(),
+                    crate::streams::stderr(),
                     "{}",
                     translate!("clap-error-value-required",
                         "error_word" => self.color_mgr.colorize(&error_word, Color::Red),
@@ -221,7 +216,7 @@ impl<'a> ErrorFormatter<'a> {
                 // Include validation error if present
                 match err.source() {
                     Some(source) if matches!(err.kind(), ErrorKind::ValueValidation) => {
-                        let _ = writeln!(stderr(), "{error_msg}: {source}");
+                        let _ = writeln!(crate::streams::stderr(), "{error_msg}: {source}");
                     }
                     _ => eprintln!("{error_msg}"),
                 }
@@ -232,14 +227,14 @@ impl<'a> ErrorFormatter<'a> {
                 if let Some(valid_values) = err.get(ContextKind::ValidValue) {
                     if !valid_values.to_string().is_empty() {
                         let _ = writeln!(
-                            stderr(),
+                            crate::streams::stderr(),
                             "\n  [{}: {valid_values}]",
                             translate!("clap-error-possible-values")
                         );
                     }
                 }
             }
-            let _ = writeln!(stderr(), "\n{}", translate!("common-help-suggestion"));
+            let _ = writeln!(crate::streams::stderr(), "\n{}", translate!("common-help-suggestion"));
         } else {
             self.print_simple_error_msg(&err.render().to_string());
         }
@@ -267,7 +262,7 @@ impl<'a> ErrorFormatter<'a> {
             {
                 let error_word = translate!("common-error");
                 let _ = writeln!(
-                    stderr(),
+                    crate::streams::stderr(),
                     "{}",
                     translate!(
                         "clap-error-missing-required-arguments",
@@ -278,13 +273,13 @@ impl<'a> ErrorFormatter<'a> {
                 // Print the missing arguments
                 for line in lines.iter().skip(1) {
                     if line.starts_with("  ") {
-                        let _ = writeln!(stderr(), "{line}");
+                        let _ = writeln!(crate::streams::stderr(), "{line}");
                     } else if line.starts_with("Usage:") || line.starts_with("For more information")
                     {
                         break;
                     }
                 }
-                let _ = writeln!(stderr());
+                let _ = writeln!(crate::streams::stderr());
 
                 // Print usage
                 lines
@@ -292,9 +287,9 @@ impl<'a> ErrorFormatter<'a> {
                     .skip_while(|line| !line.starts_with("Usage:"))
                     .for_each(|line| {
                         if line.starts_with("For more information, try '--help'.") {
-                            let _ = writeln!(stderr(), "{}", translate!("common-help-suggestion"));
+                            let _ = writeln!(crate::streams::stderr(), "{}", translate!("common-help-suggestion"));
                         } else {
-                            let _ = writeln!(stderr(), "{line}");
+                            let _ = writeln!(crate::streams::stderr(), "{line}");
                         }
                     });
             }
@@ -308,9 +303,9 @@ impl<'a> ErrorFormatter<'a> {
         let rendered_str = err.render().to_string();
         if let Some(main_error_line) = rendered_str.lines().next() {
             self.print_localized_error_line(main_error_line);
-            let _ = writeln!(stderr(), "\n{}", translate!("common-help-suggestion"));
+            let _ = writeln!(crate::streams::stderr(), "\n{}", translate!("common-help-suggestion"));
         } else {
-            let _ = write!(stderr(), "{}", err.render());
+            let _ = write!(crate::streams::stderr(), "{}", err.render());
         }
         exit_code
     }
@@ -319,7 +314,7 @@ impl<'a> ErrorFormatter<'a> {
     fn print_simple_error_msg(&self, message: &str) {
         let error_word = translate!("common-error");
         let _ = writeln!(
-            stderr(),
+            crate::streams::stderr(),
             "{}: {message}",
             self.color_mgr.colorize(&error_word, Color::Red)
         );
@@ -332,9 +327,9 @@ impl<'a> ErrorFormatter<'a> {
 
         if let Some(colon_pos) = line.find(':') {
             let after_colon = &line[colon_pos..];
-            let _ = writeln!(stderr(), "{colored_error}{after_colon}");
+            let _ = writeln!(crate::streams::stderr(), "{colored_error}{after_colon}");
         } else {
-            let _ = writeln!(stderr(), "{line}");
+            let _ = writeln!(crate::streams::stderr(), "{line}");
         }
     }
 
@@ -348,14 +343,14 @@ impl<'a> ErrorFormatter<'a> {
                 if let Some(colon_pos) = trimmed.find(':') {
                     let after_colon = &trimmed[colon_pos..];
                     let _ = writeln!(
-                        stderr(),
+                        crate::streams::stderr(),
                         "  {}{after_colon}",
                         self.color_mgr.colorize(&tip_word, Color::Green)
                     );
                 } else {
-                    let _ = writeln!(stderr(), "{line}");
+                    let _ = writeln!(crate::streams::stderr(), "{line}");
                 }
-                let _ = writeln!(stderr());
+                let _ = writeln!(crate::streams::stderr());
             }
         }
     }
@@ -367,7 +362,7 @@ impl<'a> ErrorFormatter<'a> {
         let formatted_usage = crate::format_usage(&usage_text);
         let usage_label = translate!("common-usage");
         let _ = writeln!(
-            stderr(),
+            crate::streams::stderr(),
             "{usage_label}: {formatted_usage}\n\n{}",
             translate!("common-help-suggestion")
         );
@@ -624,7 +619,7 @@ mod tests {
             env::set_var("NO_COLOR", "1");
         }
         assert_eq!(get_color_choice(), clap::ColorChoice::Never);
-        assert!(!should_use_color_for_stream(&stderr()));
+        assert!(!should_use_color_for_stream(&crate::streams::stderr()));
         let mgr = ColorManager::from_env();
         assert!(!mgr.0);
         unsafe {
@@ -636,7 +631,7 @@ mod tests {
             env::set_var("CLICOLOR_FORCE", "1");
         }
         assert_eq!(get_color_choice(), clap::ColorChoice::Always);
-        assert!(should_use_color_for_stream(&stderr()));
+        assert!(should_use_color_for_stream(&crate::streams::stderr()));
         let mgr = ColorManager::from_env();
         assert!(mgr.0);
         unsafe {
@@ -648,7 +643,7 @@ mod tests {
             env::set_var("FORCE_COLOR", "1");
         }
         assert_eq!(get_color_choice(), clap::ColorChoice::Always);
-        assert!(should_use_color_for_stream(&stderr()));
+        assert!(should_use_color_for_stream(&crate::streams::stderr()));
         unsafe {
             env::remove_var("FORCE_COLOR");
         }

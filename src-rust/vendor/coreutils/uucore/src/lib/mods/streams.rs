@@ -4,7 +4,11 @@
 // The rest of the uutils source is MIT licensed and its copyright notices are
 // untouched.
 
-//! The three standard streams, redirectable for the current thread.
+//! One utility's run inside a host process.
+//!
+//! Mostly this is the three standard streams, redirectable for the current
+//! thread. It also holds the rest of the state a utility used to get from
+//! being a process of its own: its name, and a clean exit code.
 //!
 //! Upstream reaches for `std::io::stdout()` directly, which is the process's
 //! real standard output. A utility called that way cannot sit in the middle of
@@ -47,35 +51,89 @@ struct Installed {
     stderr: Arc<File>,
 }
 
-/// Run `body` with the three streams pointing at the given files.
+/// Run one utility called `name` with the three streams pointing at the given
+/// files.
 ///
 /// The previous state is restored afterwards, including on unwind, so nesting
-/// works and a panicking utility cannot leave the override behind.
+/// works and a panicking utility cannot leave anything behind.
 ///
 /// The files are what the host wants the utility to read and write: a pipe, a
 /// terminal, a real file. They are borrowed for the call only.
+///
+/// `name` is what the utility prints its complaints under. Without it every
+/// message would name the host's binary, because upstream reads the name out
+/// of `argv[0]`.
 pub fn with_streams<T>(
+    name: &str,
     stdin: Arc<File>,
     stdout: Arc<File>,
     stderr: Arc<File>,
     body: impl FnOnce() -> T,
 ) -> T {
-    struct Restore(Option<Installed>);
+    struct Restore {
+        streams: Option<Installed>,
+        name: Option<&'static str>,
+    }
     impl Drop for Restore {
         fn drop(&mut self) {
-            OVERRIDE.with(|slot| *slot.borrow_mut() = self.0.take());
+            OVERRIDE.with(|slot| *slot.borrow_mut() = self.streams.take());
+            UTIL_NAME.with(|slot| slot.set(self.name));
         }
     }
 
-    let previous = OVERRIDE.with(|slot| {
-        slot.borrow_mut().replace(Installed {
-            stdin,
-            stdout,
-            stderr,
-        })
-    });
-    let _restore = Restore(previous);
+    let previous = Restore {
+        streams: OVERRIDE.with(|slot| {
+            slot.borrow_mut().replace(Installed {
+                stdin,
+                stdout,
+                stderr,
+            })
+        }),
+        name: UTIL_NAME.with(|slot| slot.replace(Some(intern(name)))),
+    };
+    // Not restored afterwards, unlike the two above. The exit code has no
+    // outer value worth keeping: only a utility ever sets it, and the host
+    // reads it through the code `uumain` answers rather than from here.
+    crate::error::reset_exit_code();
+    let _restore = previous;
     body()
+}
+
+thread_local! {
+    static UTIL_NAME: std::cell::Cell<Option<&'static str>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+/// The name the host installed for the utility running on this thread.
+///
+/// `None` when nothing is running under a host, which is the standalone
+/// binary's case.
+pub fn util_name() -> Option<&'static str> {
+    UTIL_NAME.with(std::cell::Cell::get)
+}
+
+/// Keep `name` alive for the rest of the process and answer that copy.
+///
+/// `crate::util_name` answers a `&'static str`, so the installed name has to
+/// outlive the run. The set of names a host installs is the set of utilities
+/// it carries, so this holds at most that many strings however often it runs.
+fn intern(name: &str) -> &'static str {
+    static NAMES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<&'static str>>> =
+        std::sync::OnceLock::new();
+
+    let names = NAMES.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    let Ok(mut names) = names.lock() else {
+        // Only a panic while holding the lock gets here, and answering an
+        // empty name beats refusing to run the utility.
+        return "";
+    };
+    if let Some(known) = names.get(name) {
+        return known;
+    }
+    let kept: &'static str = Box::leak(name.to_string().into_boxed_str());
+    names.insert(kept);
+    kept
 }
 
 /// Whether the current thread is writing somewhere the host chose.

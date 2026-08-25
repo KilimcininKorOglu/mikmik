@@ -59,15 +59,21 @@ use std::{
     error::Error,
     fmt::{Display, Formatter},
     io::Write,
-    sync::atomic::{AtomicI32, Ordering},
 };
 
-static EXIT_CODE: AtomicI32 = AtomicI32::new(0);
+// PATCH(mikmik): per thread rather than per process. A utility used to be a
+// process of its own, so a static was the whole program's exit code. Here
+// several utilities share one process and a pipeline runs its stages at the
+// same time, so a static would carry one utility's failure into the next one's
+// answer. `crate::streams::with_streams` clears it before each run.
+thread_local! {
+    static EXIT_CODE: Cell<i32> = const { Cell::new(0) };
+}
 
 /// Get the last exit code set with [`set_exit_code`].
 /// The default value is `0`.
 pub fn get_exit_code() -> i32 {
-    EXIT_CODE.load(Ordering::SeqCst)
+    EXIT_CODE.with(Cell::get)
 }
 
 /// Set the exit code for the program if `uumain` returns `Ok(())`.
@@ -90,7 +96,15 @@ pub fn get_exit_code() -> i32 {
 /// }
 /// ```
 pub fn set_exit_code(code: i32) {
-    EXIT_CODE.store(code, Ordering::SeqCst);
+    EXIT_CODE.with(|code_cell| code_cell.set(code));
+}
+
+/// Forget any exit code this thread was carrying.
+///
+/// PATCH(mikmik): the host runs one utility after another on the same thread,
+/// and each of them must start from a clean slate.
+pub fn reset_exit_code() {
+    EXIT_CODE.with(|code_cell| code_cell.set(0));
 }
 
 /// Result type that should be returned by all utils.

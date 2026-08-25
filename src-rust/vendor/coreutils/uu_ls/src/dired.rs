@@ -36,7 +36,7 @@
 ///
 use crate::Config;
 use std::fmt;
-use std::io::{BufWriter, Stdout, Write};
+use std::io::{BufWriter, Write};
 use uucore::error::UResult;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,7 +76,7 @@ pub fn calculate_dired(
     (start, end)
 }
 
-pub fn indent(out: &mut BufWriter<Stdout>) -> UResult<()> {
+pub fn indent(out: &mut BufWriter<uucore::streams::Stdout>) -> UResult<()> {
     write!(out, "  ")?;
     Ok(())
 }
@@ -92,7 +92,7 @@ pub fn calculate_subdired(dired: &mut DiredOutput, path_len: usize) {
 pub fn print_dired_output(
     config: &Config,
     dired: &DiredOutput,
-    out: &mut BufWriter<Stdout>,
+    out: &mut BufWriter<uucore::streams::Stdout>,
 ) -> UResult<()> {
     out.flush()?;
     if !dired.dired_positions.is_empty() {

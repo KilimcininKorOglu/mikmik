@@ -11,6 +11,19 @@ brush-builtins = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+which = { workspace = true }
+serde_json = { workspace = true }
+
+# The utilities that ship inside the binary, so a machine with no coreutils
+# (Windows, a stripped container) still runs what the model writes.
+brush-coreutils-builtins = { version = "0.1", features = ["coreutils.all"] }
+findutils = "0.10"
+# `sed` is the crate's own name, which collides with the module that adapts it.
+sed_crate = { package = "sed", version = "0.1" }
+# jq. A library rather than a binary, so it runs in this process.
+jaq-core = "3.1"
+jaq-std = "3.0"
+jaq-json = "2.0"
 
 [target.'cfg(unix)'.dependencies]
 # `killpg` on the timeout path: the shell runs in this process, so what has to

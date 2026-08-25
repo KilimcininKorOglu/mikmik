@@ -23,6 +23,7 @@ mikmik-mcp = { workspace = true }
 mikmik-bridge = { workspace = true }
 mikmik-buddy = { workspace = true }
 mikmik-plugins = { workspace = true }
+mikmik-shell = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 clap = { workspace = true }

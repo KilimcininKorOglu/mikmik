@@ -21,7 +21,10 @@ use std::time::Duration;
 
 pub use brush_core::ExecutionResult;
 
+pub mod bundled;
 mod children;
+
+pub use bundled::{maybe_dispatch, DISPATCH_FLAG};
 
 /// `brush_core::ShellFd` is a plain `i32`, so the three standard descriptors
 /// are named here rather than repeated as bare numbers.
@@ -85,7 +88,7 @@ impl ShellSession {
     /// belongs in a session the model drives; `bash -c` did not read them
     /// either, so this keeps the behaviour the tool already had.
     pub async fn new(working_dir: &Path) -> anyhow::Result<Self> {
-        let shell = brush_core::Shell::builder()
+        let mut shell = brush_core::Shell::builder()
             .working_dir(working_dir.to_path_buf())
             .profile(brush_core::ProfileLoadBehavior::Skip)
             .rc(brush_core::RcLoadBehavior::Skip)
@@ -97,6 +100,10 @@ impl ShellSession {
             .build()
             .await
             .map_err(|error| anyhow::anyhow!("could not start the shell: {error}"))?;
+        // After the shell's own built-ins, so `echo`, `printf`, `test`, `true`
+        // and `false` keep the shell's semantics rather than the coreutils
+        // ones, and only for a name the machine does not already have.
+        bundled::register(&mut shell);
         Ok(Self { shell })
     }
 

@@ -8,6 +8,18 @@ Every Bash tool call used to spawn `bash -c <script>` and read the shell state b
 
 This crate embeds [brush](https://github.com/reubeno/brush), a bash implementation written in Rust, as a library. One `ShellSession` lives as long as the MikMik session does, so `cd`, `export`, functions and `$?` are the shell's own state. The same code runs on macOS, Linux and Windows.
 
+## Bundled utilities
+
+A model writes `ls`, `cat`, `sort`, `head`, `wc`, `sed`, `find` and `jq` without asking whether the machine has them. On Windows it usually does not, and on a stripped container image neither does Linux. Around eighty `uutils` coreutils plus `find`, `xargs`, `sed` and `jq` are compiled into the binary.
+
+**The machine's own binary wins.** A shim is registered only for a name `which` cannot find on `PATH`. On a Unix box with GNU coreutils installed nothing bundled is ever reached, so behaviour there is unchanged. The bundled set is what Windows and a bare container get.
+
+**In the binary is not the same as in the process.** A `uutils` utility writes to the process's real standard output and ends by calling `std::process::exit`, so it cannot be called in the middle of a pipeline without taking MikMik with it. The shim therefore re-executes this binary as `mikmik --invoke-bundled <name> <args>`, which upstream brush does the same way. Redirection, pipes and process groups then work because the child is an ordinary process. What the bundled set removes is the need to install anything; it does not remove the fork and exec.
+
+`find` and `jq` are the exceptions. `findutils` and `jaq` are libraries that write through a writer the caller supplies, so both run in this process with no child at all.
+
+The dispatch flag counts in the first argument position only. `echo --invoke-bundled ls` stays an `echo`.
+
 ## What it does not do
 
 An external program is still a real process. brush removes the shell process and its built-ins from the hot path; it does not remove the `cargo`, `git` or `npm` the model asked for.
@@ -18,6 +30,9 @@ An external program is still a real process. brush removes the shell process and
 |---|---|
 | `src/lib.rs` | `ShellSession`: opening a shell, running one command, the timeout |
 | `src/children.rs` | Finding and killing what a timed-out command left running |
+| `src/bundled.rs` | The registry of bundled commands, the shim built-in, and `--invoke-bundled` |
+| `src/bundled/find.rs` | `find`, running in this process |
+| `src/bundled/jq.rs` | `jq`, running in this process |
 
 ## Upstream
 
@@ -26,8 +41,12 @@ An external program is still a real process. brush removes the shell process and
 | `brush-core` | 0.5 | MIT | The parser, the interpreter, redirection, job and process-group handling |
 | `brush-parser` | 0.4 | MIT | The tokenizer and the POSIX/bash grammars |
 | `brush-builtins` | 0.2 | MIT | The shell built-ins: `cd`, `echo`, `export`, `test`, `printf`, `read`, and the rest |
+| `brush-coreutils-builtins` | 0.1 | MIT | Around eighty `uutils` coreutils, behind the `coreutils.all` feature |
+| `findutils` | 0.10 | MIT | `find` and `xargs` |
+| `sed` | 0.1 | MIT | `sed` |
+| `jaq-core`, `jaq-std`, `jaq-json` | 3.1, 3.0, 2.0 | MIT | The `jq` filter language, its standard library and its JSON built-ins |
 
-All three are MIT. MikMik is GPL-3.0, which MIT is compatible with; the upstream copyright notices ship with the dependencies and are not restated in this tree.
+All are MIT. MikMik is GPL-3.0, which MIT is compatible with; the upstream copyright notices ship with the dependencies and are not restated in this tree. The dispatch protocol and the shim built-in in `src/bundled.rs` are adapted from `brush-shell/src/bundled.rs` by Reuben Olinsky, and the module names him.
 
 brush states that it is not production-complete: `select` and some edge cases are unsupported. `bashEngine: "system"` in `settings.json` puts the session back on the real `bash` binary on Unix, which is why that setting exists.
 

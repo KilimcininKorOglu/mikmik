@@ -29,6 +29,10 @@ It's fast, it's memory-efficient, it's yours to run however you want, and there'
 > [!NOTE]
 > **Recent Updates:**
 >
+> - **Embedded shell:** The `Bash` tool no longer spawns `bash -c` per call. It runs [brush](https://github.com/reubeno/brush), a bash written in Rust, as a library, and one shell lives as long as the session does, so `cd`, `export`, functions, aliases and `$?` are the shell's own state. The same bash runs on Windows, with no WSL. Set `"bashEngine": "system"` in `settings.json` to go back to the real `bash` binary on Unix; see [docs/configuration.md](docs/configuration.md).
+>
+> - **Utilities in the binary:** 83 coreutils from [uutils](https://github.com/uutils/coreutils) plus `find`, `xargs`, `sed` and `jq` ship inside `mikmik`, so `ls`, `cat`, `sort`, `wc` and the rest work on a Windows box or a stripped container that has none of them installed. Whatever the machine already has on `PATH` still wins, so nothing changes on a normal Unix box.
+>
 > - **/share support:** Use `/share` to share chat sessions with others via unlisted GitHub Gists. `[EXPERIMENTAL]`
 >
 > - **Free Mode:** Try out Free in '/connect' to get a great agentic coding experience in MikMik for absolutely free (or as good as free gets you :P). `[EXPERIMENTAL]` 

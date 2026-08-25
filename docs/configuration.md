@@ -197,6 +197,8 @@ Windows ignores the setting and always uses `brush`. `system` there meant `cmd /
 
 Either way an external program is still a real process. The embedded shell removes the shell and its built-ins from the path, not the `cargo` or `git` the command names.
 
+The common utilities (`ls`, `cat`, `sort`, `wc`, `sed`, `find`, `xargs`, `jq` and around eighty more) ship inside the binary and are used when the machine has no copy of its own on `PATH`. That is what makes a command work on Windows or in a stripped container image. `system` gets none of them: the machine's own `bash` looks up commands its own way.
+
 ### Edit guard
 
 | Key         | Type   | Default | Description                                                    |

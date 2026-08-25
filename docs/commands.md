@@ -69,10 +69,10 @@ model.
 !!literal      sends "!literal" to the model
 ```
 
-The command runs in the same shell the model's Bash tool uses, so `cd` and
-`export` outlive the call and both see the same working directory and
-environment. The 120-second timeout and the 100 KB output limit are the tool's,
-unchanged.
+The command runs in the same shell the model's Bash tool uses, so `cd`,
+`export`, a function you define and an alias you set outlive the call and both
+see the same shell. The 120-second timeout and the 100 KB output limit are the
+tool's, unchanged.
 
 Three things follow from this being a command you typed rather than one the
 model issued:

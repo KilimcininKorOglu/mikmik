@@ -213,6 +213,8 @@ Execute a shell command in a real terminal (PTY). One shell serves the whole ses
 
 The shell is embedded in the MikMik binary, so nothing is spawned to interpret a command and the same bash runs on macOS, Linux and Windows. An external program the command names is still a real process. [`bashEngine`](configuration.md#shell) switches back to the machine's own `bash` on Unix.
 
+The common command-line utilities ship inside the binary too: 83 coreutils from [uutils](https://github.com/uutils/coreutils) plus `find`, `xargs`, `sed` and `jq`. A command that names one of them works on a Windows box or a stripped container image that has none of them installed. Whatever the machine already has on `PATH` wins, so on a Unix box with GNU coreutils the bundled copies are never reached and behaviour is unchanged. See [`mikmik-shell`](https://github.com/KilimcininKorOglu/mikmik/blob/main/src-rust/crates/shell/README.md) for how they run.
+
 | Parameter           | Type    | Required | Description                                              |
 |---------------------|---------|----------|----------------------------------------------------------|
 | `command`           | string  | yes      | Shell command to execute                                 |

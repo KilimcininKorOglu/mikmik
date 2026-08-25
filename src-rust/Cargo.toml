@@ -154,3 +154,96 @@ brush-builtins = "0.2"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# The coreutils that ship inside the binary. Their source lives in
+# `vendor/coreutils/`, copied from the published crates and patched so that
+# the output of a utility can be redirected per call; see that directory's
+# README. `brush-coreutils-builtins` depends on these by version from
+# crates.io, so this table is what points it at our copies. They are
+# deliberately not workspace members, so `cargo clippy --workspace` does not
+# lint someone else's code.
+[patch.crates-io]
+uu_arch = { path = "vendor/coreutils/uu_arch" }
+uu_b2sum = { path = "vendor/coreutils/uu_b2sum" }
+uu_base32 = { path = "vendor/coreutils/uu_base32" }
+uu_base64 = { path = "vendor/coreutils/uu_base64" }
+uu_basename = { path = "vendor/coreutils/uu_basename" }
+uu_basenc = { path = "vendor/coreutils/uu_basenc" }
+uu_cat = { path = "vendor/coreutils/uu_cat" }
+uu_checksum_common = { path = "vendor/coreutils/uu_checksum_common" }
+uu_cksum = { path = "vendor/coreutils/uu_cksum" }
+uu_comm = { path = "vendor/coreutils/uu_comm" }
+uu_cp = { path = "vendor/coreutils/uu_cp" }
+uu_csplit = { path = "vendor/coreutils/uu_csplit" }
+uu_cut = { path = "vendor/coreutils/uu_cut" }
+uu_date = { path = "vendor/coreutils/uu_date" }
+uu_dd = { path = "vendor/coreutils/uu_dd" }
+uu_df = { path = "vendor/coreutils/uu_df" }
+uu_dir = { path = "vendor/coreutils/uu_dir" }
+uu_dircolors = { path = "vendor/coreutils/uu_dircolors" }
+uu_dirname = { path = "vendor/coreutils/uu_dirname" }
+uu_du = { path = "vendor/coreutils/uu_du" }
+uu_echo = { path = "vendor/coreutils/uu_echo" }
+uu_env = { path = "vendor/coreutils/uu_env" }
+uu_expand = { path = "vendor/coreutils/uu_expand" }
+uu_expr = { path = "vendor/coreutils/uu_expr" }
+uu_factor = { path = "vendor/coreutils/uu_factor" }
+uu_false = { path = "vendor/coreutils/uu_false" }
+uu_fmt = { path = "vendor/coreutils/uu_fmt" }
+uu_fold = { path = "vendor/coreutils/uu_fold" }
+uu_head = { path = "vendor/coreutils/uu_head" }
+uu_hostname = { path = "vendor/coreutils/uu_hostname" }
+uu_join = { path = "vendor/coreutils/uu_join" }
+uu_link = { path = "vendor/coreutils/uu_link" }
+uu_ln = { path = "vendor/coreutils/uu_ln" }
+uu_ls = { path = "vendor/coreutils/uu_ls" }
+uu_md5sum = { path = "vendor/coreutils/uu_md5sum" }
+uu_mkdir = { path = "vendor/coreutils/uu_mkdir" }
+uu_mktemp = { path = "vendor/coreutils/uu_mktemp" }
+uu_more = { path = "vendor/coreutils/uu_more" }
+uu_mv = { path = "vendor/coreutils/uu_mv" }
+uu_nl = { path = "vendor/coreutils/uu_nl" }
+uu_nproc = { path = "vendor/coreutils/uu_nproc" }
+uu_numfmt = { path = "vendor/coreutils/uu_numfmt" }
+uu_od = { path = "vendor/coreutils/uu_od" }
+uu_paste = { path = "vendor/coreutils/uu_paste" }
+uu_pr = { path = "vendor/coreutils/uu_pr" }
+uu_printenv = { path = "vendor/coreutils/uu_printenv" }
+uu_printf = { path = "vendor/coreutils/uu_printf" }
+uu_ptx = { path = "vendor/coreutils/uu_ptx" }
+uu_pwd = { path = "vendor/coreutils/uu_pwd" }
+uu_readlink = { path = "vendor/coreutils/uu_readlink" }
+uu_realpath = { path = "vendor/coreutils/uu_realpath" }
+uu_rm = { path = "vendor/coreutils/uu_rm" }
+uu_rmdir = { path = "vendor/coreutils/uu_rmdir" }
+uu_seq = { path = "vendor/coreutils/uu_seq" }
+uu_sha1sum = { path = "vendor/coreutils/uu_sha1sum" }
+uu_sha224sum = { path = "vendor/coreutils/uu_sha224sum" }
+uu_sha256sum = { path = "vendor/coreutils/uu_sha256sum" }
+uu_sha384sum = { path = "vendor/coreutils/uu_sha384sum" }
+uu_sha512sum = { path = "vendor/coreutils/uu_sha512sum" }
+uu_shred = { path = "vendor/coreutils/uu_shred" }
+uu_shuf = { path = "vendor/coreutils/uu_shuf" }
+uu_sleep = { path = "vendor/coreutils/uu_sleep" }
+uu_sort = { path = "vendor/coreutils/uu_sort" }
+uu_split = { path = "vendor/coreutils/uu_split" }
+uu_sum = { path = "vendor/coreutils/uu_sum" }
+uu_sync = { path = "vendor/coreutils/uu_sync" }
+uu_tac = { path = "vendor/coreutils/uu_tac" }
+uu_tail = { path = "vendor/coreutils/uu_tail" }
+uu_tee = { path = "vendor/coreutils/uu_tee" }
+uu_test = { path = "vendor/coreutils/uu_test" }
+uu_touch = { path = "vendor/coreutils/uu_touch" }
+uu_tr = { path = "vendor/coreutils/uu_tr" }
+uu_true = { path = "vendor/coreutils/uu_true" }
+uu_truncate = { path = "vendor/coreutils/uu_truncate" }
+uu_tsort = { path = "vendor/coreutils/uu_tsort" }
+uu_uname = { path = "vendor/coreutils/uu_uname" }
+uu_unexpand = { path = "vendor/coreutils/uu_unexpand" }
+uu_uniq = { path = "vendor/coreutils/uu_uniq" }
+uu_unlink = { path = "vendor/coreutils/uu_unlink" }
+uu_vdir = { path = "vendor/coreutils/uu_vdir" }
+uu_wc = { path = "vendor/coreutils/uu_wc" }
+uu_whoami = { path = "vendor/coreutils/uu_whoami" }
+uu_yes = { path = "vendor/coreutils/uu_yes" }
+uucore = { path = "vendor/coreutils/uucore" }

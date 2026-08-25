@@ -1,0 +1,28 @@
+[package]
+name = "uu_tee"
+description = "tee ~ (uutils) display input and copy to FILE"
+repository = "https://github.com/uutils/coreutils/tree/main/src/uu/tee"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/tee.rs"
+
+[dependencies]
+clap = { workspace = true }
+uucore = { workspace = true, features = ["libc", "parser", "signals"] }
+fluent = { workspace = true }
+
+[[bin]]
+name = "tee"
+path = "src/main.rs"

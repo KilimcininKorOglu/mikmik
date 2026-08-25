@@ -9,14 +9,20 @@
 //! is borrowed for the length of the call and put back afterwards. A borrow is
 //! shared by everything asking for the same directory, which is what a
 //! pipeline needs: its stages run at the same time and all of them want the
-//! directory the shell is in. A request for a different directory waits.
+//! directory the shell is in. A request for a different directory waits, so
+//! two sessions in two directories take turns.
 //!
-//! The wait is bounded. A utility that never finishes would otherwise hold the
-//! directory and stop every other session from running one, and a command that
-//! reports a plain error beats a session that stops answering.
+//! The wait is asynchronous, and that is not a detail. Two commands running at
+//! once can be two futures on one task; a wait that blocked the thread would
+//! stop the task that has to poll the first one to completion, and neither
+//! would ever finish.
+//!
+//! The wait is also bounded. A utility that never finishes would otherwise
+//! hold the directory and stop every other session from running one, and a
+//! command that reports a plain error beats a session that stops answering.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Condvar, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 /// How long to wait for another directory's borrow to end.
@@ -34,14 +40,14 @@ struct Lent {
 
 struct State {
     lent: Mutex<Option<Lent>>,
-    freed: Condvar,
+    freed: tokio::sync::Notify,
 }
 
 fn state() -> &'static State {
     static STATE: OnceLock<State> = OnceLock::new();
     STATE.get_or_init(|| State {
         lent: Mutex::new(None),
-        freed: Condvar::new(),
+        freed: tokio::sync::Notify::new(),
     })
 }
 
@@ -56,43 +62,72 @@ pub(crate) struct Borrow {
 ///
 /// Answers an error rather than waiting forever when a different directory is
 /// borrowed and does not come free.
-pub(crate) fn borrow(directory: &Path) -> std::io::Result<Borrow> {
+pub(crate) async fn borrow(directory: &Path) -> std::io::Result<Borrow> {
     let state = state();
-    let Ok(mut lent) = state.lent.lock() else {
-        return Err(std::io::Error::other(
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+
+    let notified = state.freed.notified();
+    tokio::pin!(notified);
+
+    loop {
+        // Registered before the directory is checked, so a release between the
+        // check and the wait still wakes this caller.
+        notified.as_mut().enable();
+
+        match take(directory) {
+            Taken::Got(borrow) => return Ok(borrow),
+            Taken::Failed(error) => return Err(error),
+            Taken::Busy => {}
+        }
+
+        if tokio::time::timeout_at(deadline, notified.as_mut())
+            .await
+            .is_err()
+        {
+            return Err(std::io::Error::other(
+                "another command is still using the working directory",
+            ));
+        }
+        notified.set(state.freed.notified());
+    }
+}
+
+/// The outcome of one attempt to borrow, with the lock held for the attempt
+/// only. Nothing awaits while it is held.
+enum Taken {
+    Got(Borrow),
+    Busy,
+    Failed(std::io::Error),
+}
+
+fn take(directory: &Path) -> Taken {
+    let Ok(mut lent) = state().lent.lock() else {
+        return Taken::Failed(std::io::Error::other(
             "the working directory is in an unknown state",
         ));
     };
 
-    loop {
-        match lent.as_mut() {
-            None => {
-                let restore = std::env::current_dir()?;
-                std::env::set_current_dir(directory)?;
-                *lent = Some(Lent {
-                    directory: directory.to_path_buf(),
-                    holders: 1,
-                    restore,
-                });
-                return Ok(Borrow { _private: () });
+    match lent.as_mut() {
+        None => {
+            let restore = match std::env::current_dir() {
+                Ok(restore) => restore,
+                Err(error) => return Taken::Failed(error),
+            };
+            if let Err(error) = std::env::set_current_dir(directory) {
+                return Taken::Failed(error);
             }
-            Some(current) if current.directory == directory => {
-                current.holders += 1;
-                return Ok(Borrow { _private: () });
-            }
-            Some(_) => {
-                let (guard, timed_out) = state
-                    .freed
-                    .wait_timeout(lent, PATIENCE)
-                    .map_err(|_| std::io::Error::other("the working directory lock is poisoned"))?;
-                lent = guard;
-                if timed_out.timed_out() {
-                    return Err(std::io::Error::other(
-                        "another command is still using the working directory",
-                    ));
-                }
-            }
+            *lent = Some(Lent {
+                directory: directory.to_path_buf(),
+                holders: 1,
+                restore,
+            });
+            Taken::Got(Borrow { _private: () })
         }
+        Some(current) if current.directory == directory => {
+            current.holders += 1;
+            Taken::Got(Borrow { _private: () })
+        }
+        Some(_) => Taken::Busy,
     }
 }
 
@@ -109,7 +144,8 @@ impl Drop for Borrow {
         if current.holders == 0 {
             let _ = std::env::set_current_dir(&current.restore);
             *lent = None;
-            state.freed.notify_all();
+            drop(lent);
+            state.freed.notify_waiters();
         }
     }
 }
@@ -118,8 +154,8 @@ impl Drop for Borrow {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_directory_changes_for_the_length_of_the_borrow() {
+    #[tokio::test]
+    async fn the_directory_changes_for_the_length_of_the_borrow() {
         let before = std::env::current_dir().expect("cwd");
         let dir = tempfile::tempdir().expect("tempdir");
         // macOS puts the temporary directory behind a symlink, and
@@ -127,23 +163,23 @@ mod tests {
         let target = dir.path().canonicalize().expect("canonicalize");
 
         {
-            let _borrow = borrow(&target).expect("borrow");
+            let _borrow = borrow(&target).await.expect("borrow");
             assert_eq!(std::env::current_dir().expect("cwd"), target);
         }
 
         assert_eq!(std::env::current_dir().expect("cwd"), before);
     }
 
-    #[test]
-    fn the_same_directory_is_shared_rather_than_queued() {
+    #[tokio::test]
+    async fn the_same_directory_is_shared_rather_than_queued() {
         // A pipeline's stages run at the same time and all of them want the
         // directory the shell is in. If the second borrow waited for the
         // first, the pipeline would deadlock.
         let dir = tempfile::tempdir().expect("tempdir");
         let target = dir.path().canonicalize().expect("canonicalize");
 
-        let first = borrow(&target).expect("first");
-        let second = borrow(&target).expect("second");
+        let first = borrow(&target).await.expect("first");
+        let second = borrow(&target).await.expect("second");
         assert_eq!(std::env::current_dir().expect("cwd"), target);
 
         drop(second);
@@ -152,16 +188,38 @@ mod tests {
         drop(first);
     }
 
-    #[test]
-    fn a_directory_that_is_not_there_is_reported() {
+    #[tokio::test]
+    async fn a_directory_that_is_not_there_is_reported() {
         let dir = tempfile::tempdir().expect("tempdir");
         let gone = dir.path().join("never-created");
 
-        assert!(borrow(&gone).is_err());
+        assert!(borrow(&gone).await.is_err());
         // And the failed borrow left nothing behind.
         let target = dir.path().canonicalize().expect("canonicalize");
-        let borrowed = borrow(&target).expect("borrow");
+        let borrowed = borrow(&target).await.expect("borrow");
         assert_eq!(std::env::current_dir().expect("cwd"), target);
         drop(borrowed);
+    }
+
+    #[tokio::test]
+    async fn a_second_directory_takes_its_turn_rather_than_deadlocking() {
+        // Two sessions in two directories, both wanted at once on one task.
+        // A wait that blocked the thread would stop this task polling the
+        // first borrow's release, and neither would ever be answered.
+        let first_dir = tempfile::tempdir().expect("tempdir");
+        let second_dir = tempfile::tempdir().expect("tempdir");
+        let first_path = first_dir.path().canonicalize().expect("canonicalize");
+        let second_path = second_dir.path().canonicalize().expect("canonicalize");
+
+        let held = borrow(&first_path).await.expect("first");
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            drop(held);
+        });
+
+        let second = borrow(&second_path).await.expect("second");
+        assert_eq!(std::env::current_dir().expect("cwd"), second_path);
+        drop(second);
+        release.await.expect("release");
     }
 }

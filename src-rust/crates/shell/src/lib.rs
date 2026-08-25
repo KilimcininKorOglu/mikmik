@@ -426,6 +426,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_bundled_command_nobody_waits_for_does_not_hold_the_runtime_open() {
+        // The utility runs to its end whatever the caller does, so the thread
+        // it is on must be nobody's to wait for. A `spawn_blocking` thread is
+        // the runtime's, and dropping the runtime then waits out the whole
+        // `sleep`, which takes MikMik with it.
+        let started = std::time::Instant::now();
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        runtime.block_on(async {
+            let (_dir, mut shell) = session().await;
+            let (_, outcome) =
+                run_with_timeout(&mut shell, "sleep 30", Duration::from_millis(300)).await;
+            assert!(outcome.timed_out);
+        });
+        drop(runtime);
+
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "shutting down took {:?}, so something waited for the utility",
+            started.elapsed()
+        );
+    }
+
     #[tokio::test]
     async fn the_session_still_works_after_a_timeout() {
         let (_dir, mut shell) = session().await;

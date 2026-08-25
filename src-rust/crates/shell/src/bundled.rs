@@ -158,7 +158,7 @@ fn native_execute<SE: ShellExtensions>(
         // process's working directory, and brush keeps the shell's separately.
         // The borrow makes the two agree for the length of the call.
         let directory = context.shell.working_dir().to_path_buf();
-        let borrowed = match crate::cwd::borrow(&directory) {
+        let borrowed = match crate::cwd::borrow(&directory).await {
             Ok(borrowed) => borrowed,
             Err(error) => {
                 let _ = writeln!(context.stderr(), "{name}: {error}");
@@ -177,24 +177,37 @@ fn native_execute<SE: ShellExtensions>(
 
         // Its own thread, for three reasons. The stream override is per
         // thread. A `uumain` is synchronous, so running it here would hold a
-        // tokio worker for as long as it takes. And awaiting the thread rather
-        // than joining it leaves this future cancellable, which is what a
-        // timeout needs.
+        // tokio worker for as long as it takes. And waiting for a message from
+        // the thread rather than joining it leaves this future cancellable,
+        // which is what a timeout needs.
+        //
+        // A plain thread rather than `spawn_blocking`, because the runtime
+        // waits for its blocking threads when it shuts down. A utility cannot
+        // be killed, so a `sleep 31337` the caller stopped waiting for would
+        // hold the whole process open. This thread is nobody's to wait for.
         let announced = name.clone();
-        let code = match tokio::task::spawn_blocking(move || {
-            // The borrow is released on this thread, once the utility has
-            // finished with the directory.
-            let _borrowed = borrowed;
-            streams::with_streams(&announced, streams, || run(argv))
-        })
-        .await
-        {
+        let (finished, wait) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let code = streams::with_streams(&announced, streams, || run(argv));
+            // The receiver is gone when the caller stopped waiting, which is
+            // the timeout's case and not an error.
+            let _ = finished.send(code);
+        });
+
+        // The borrow belongs to this call rather than to the thread, so a
+        // timeout releases it. An abandoned utility cannot be killed and would
+        // otherwise hold the directory for its whole life, which would stop
+        // every other bundled command in every session. It keeps whatever it
+        // has already opened; only a fresh relative open would go elsewhere,
+        // and by then nobody is reading its output.
+        let _borrowed = borrowed;
+        let code = match wait.await {
             Ok(code) => code,
-            // A panicking utility is a bug in the fork rather than something
-            // the script did. 70 is what a shell answers for an internal
-            // software error.
-            Err(error) => {
-                let _ = writeln!(context.stderr(), "{name}: stopped unexpectedly: {error}");
+            // The thread ended without answering, which means the utility
+            // panicked: a bug in the fork rather than something the script
+            // did. 70 is what a shell answers for an internal software error.
+            Err(_) => {
+                let _ = writeln!(context.stderr(), "{name}: stopped unexpectedly");
                 70
             }
         };

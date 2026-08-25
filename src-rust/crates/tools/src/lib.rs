@@ -893,9 +893,18 @@ pub trait Tool: Send + Sync {
     }
 }
 
+/// Whether `PowerShell` belongs in the roster on this machine.
+///
+/// Offering a tool the machine cannot run costs a turn: the model calls it,
+/// the call fails, and the model works out what happened. Windows always has
+/// it. Elsewhere it is there only if someone installed `pwsh`.
+fn powershell_is_available() -> bool {
+    cfg!(windows) || which::which("pwsh").is_ok()
+}
+
 /// Return all built-in tools (excluding AgentTool, which lives in cc-query).
 pub fn all_tools() -> Vec<Box<dyn Tool>> {
-    vec![
+    let mut tools: Vec<Box<dyn Tool>> = vec![
         Box::new(PtyBashTool),
         Box::new(FileReadTool),
         Box::new(FileEditTool),
@@ -917,7 +926,6 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(AskUserQuestionTool),
         Box::new(EnterPlanModeTool),
         Box::new(ExitPlanModeTool),
-        Box::new(PowerShellTool),
         Box::new(SleepTool),
         Box::new(CronCreateTool),
         Box::new(CronDeleteTool),
@@ -942,7 +950,11 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         // Computer Use is only available when compiled with the feature flag.
         #[cfg(feature = "computer-use")]
         Box::new(computer_use::ComputerUseTool),
-    ]
+    ];
+    if powershell_is_available() {
+        tools.push(Box::new(PowerShellTool));
+    }
+    tools
 }
 
 /// Find a tool by name (case-sensitive).
@@ -1110,6 +1122,26 @@ mod tests {
                 name
             );
         }
+    }
+
+    #[test]
+    fn powershell_is_offered_only_where_it_can_run() {
+        // Offering a tool the machine cannot run costs a turn: the model calls
+        // it, the call fails, and the model works out what happened.
+        let offered = find_tool("PowerShell").is_some();
+        assert_eq!(offered, powershell_is_available());
+        if cfg!(windows) {
+            assert!(offered, "Windows always has PowerShell");
+        } else {
+            assert_eq!(offered, which::which("pwsh").is_ok());
+        }
+    }
+
+    #[test]
+    fn bash_is_offered_on_every_platform() {
+        // The embedded shell runs on Windows too, so the tool is no longer a
+        // Unix-only promise.
+        assert!(find_tool("Bash").is_some());
     }
 
     // ---- ToolResult tests ---------------------------------------------------

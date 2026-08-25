@@ -258,14 +258,14 @@ Task statuses: `running`, `completed`, `failed: <reason>`, `cancelled`.
 
 **Permission level:** Execute
 
-Execute a PowerShell command on Windows hosts. Equivalent to `Bash` but uses `pwsh` (PowerShell Core) or `powershell.exe` as the shell.
+Execute a PowerShell command. Equivalent to `Bash` but uses `pwsh` (PowerShell Core) or `powershell.exe` as the shell.
 
 | Parameter | Type    | Required | Description                   |
 |-----------|---------|----------|-------------------------------|
 | `command` | string  | yes      | PowerShell command to execute |
 | `timeout` | integer | no       | Timeout in milliseconds       |
 
-Available only when running on Windows.
+Offered on Windows, and on macOS and Linux when `pwsh` is on `PATH`. On a machine without it the tool is left out of the roster entirely, so the model never spends a turn calling something that cannot run.
 
 ---
 

@@ -106,7 +106,9 @@ unicode-width = "0.2"
 unicode-segmentation = "1"
 
 # Process execution
-nix = { version = "0.29", features = ["process", "signal", "user"] }
+# `term` is for `pty::openpty`: the embedded shell is handed the slave side, so
+# the programs a command starts still see a terminal.
+nix = { version = "0.29", features = ["process", "signal", "user", "term"] }
 
 # Async channels
 tokio-util = { version = "0.7", features = ["codec", "rt"] }

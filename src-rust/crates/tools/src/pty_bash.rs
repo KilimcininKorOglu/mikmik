@@ -1,18 +1,26 @@
-// PTY-backed Bash tool: wraps every command in a real pseudo-terminal so that
-// programs that query isatty() (npm, cargo, git, pytest, …) behave correctly.
-//
-// Shell state (cwd + env) is persisted across calls through the same sentinel
-// mechanism as the original BashTool, so `cd` and `export` work as expected.
-//
-// Platform notes
-// ──────────────
-//  Unix  → portable_pty (native openpty)
-//  Windows → falls back to the existing cmd.exe approach; ConPTY is available
-//             in portable_pty but adds complexity for minimal gain on Windows.
+//! The Bash tool. Every command runs in a real pseudo-terminal, so programs
+//! that query `isatty()` (npm, cargo, git, pytest) behave the way they do in a
+//! terminal.
+//!
+//! Two engines, chosen by `config.bashEngine`:
+//!
+//! - **`brush`**, the default and the only one on Windows. The shell is
+//!   embedded in this binary (`mikmik-shell`) and outlives the command, so
+//!   nothing is spawned to interpret it and `cd`, `export`, an alias and a
+//!   shell function all survive the call.
+//! - **`system`**, Unix only. The machine's own `bash`, spawned per command,
+//!   with the working directory and the exported variables carried forward
+//!   through a sentinel block printed at the end. What this tree did before
+//!   the embedded shell existed, kept as the way out if brush gets a command
+//!   wrong.
+//!
+//! Everything below the engine choice is shared: the Critical-risk classifier,
+//! the timeout, the output limit, and the client-hosted terminal path.
 
 use crate::{session_shell_state, PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use mikmik_core::bash_classifier::{classify_bash_command, BashRiskLevel};
+use mikmik_core::config::BashEngine;
 use mikmik_core::tasks::{global_registry, BackgroundTask};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -570,92 +578,6 @@ fn drive_pty_child(
 }
 
 // ---------------------------------------------------------------------------
-// Windows fallback (cmd.exe, no PTY)
-// ---------------------------------------------------------------------------
-
-#[cfg(windows)]
-async fn run_windows_fallback(
-    command: &str,
-    effective_cwd: &PathBuf,
-    timeout_dur: Duration,
-    timeout_ms: u64,
-) -> ToolResult {
-    let mut builder = Command::new("cmd");
-    builder
-        .arg("/C")
-        .arg(command)
-        .current_dir(effective_cwd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(Stdio::null());
-    mikmik_core::process_tree::spawn_in_own_group(&mut builder);
-    let mut child = match builder.spawn() {
-        Ok(c) => c,
-        Err(e) => return ToolResult::error(format!("Failed to spawn command: {}", e)),
-    };
-
-    // `cmd.exe` is only the wrapper. Without this, cancelling the turn left
-    // both it and whatever it started running, and the timeout path below
-    // reached the wrapper alone.
-    let mut tree_guard = mikmik_core::process_tree::ProcessTreeKillGuard::new(child.id());
-
-    let stdout_handle = child.stdout.take();
-    let stderr_handle = child.stderr.take();
-
-    let result = tokio::time::timeout(timeout_dur, async {
-        let mut stdout_lines = Vec::new();
-        let mut stderr_lines = Vec::new();
-
-        if let Some(stdout) = stdout_handle {
-            let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                stdout_lines.push(line);
-            }
-        }
-        if let Some(stderr) = stderr_handle {
-            let reader = BufReader::new(stderr);
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                stderr_lines.push(line);
-            }
-        }
-        let status = child.wait().await;
-        (stdout_lines, stderr_lines, status)
-    })
-    .await;
-
-    match result {
-        Ok((stdout_lines, stderr_lines, status)) => {
-            tree_guard.disarm();
-            let exit_code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
-            let mut output = String::new();
-            if !stdout_lines.is_empty() {
-                output.push_str(&stdout_lines.join("\n"));
-            }
-            if !stderr_lines.is_empty() {
-                if !output.is_empty() {
-                    output.push('\n');
-                }
-                output.push_str("STDERR:\n");
-                output.push_str(&stderr_lines.join("\n"));
-            }
-            if output.is_empty() {
-                output = "(no output)".to_string();
-            }
-            truncate_output(output, exit_code)
-        }
-        Err(_) => {
-            // The tree first, then the wrapper: killing `cmd.exe` first orphans
-            // its children and `taskkill /T` can no longer find them through it.
-            tree_guard.kill_now();
-            let _ = child.kill().await;
-            ToolResult::error(format!("Command timed out after {}ms", timeout_ms))
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Shared output truncation helper
 // ---------------------------------------------------------------------------
 
@@ -700,10 +622,11 @@ impl Tool for PtyBashTool {
 
     fn description(&self) -> &str {
         "Executes a given bash command in a real terminal (PTY) and returns its output. \
-         The working directory persists between commands. Supports interactive programs, \
-         colored output (stripped for readability), and terminal-aware tools like npm, \
-         cargo, git, and pytest. Use for running shell commands, scripts, git operations, \
-         and system tasks."
+         The shell outlives the command, so the working directory, exported variables, \
+         aliases and shell functions all persist between calls. Supports colored output \
+         (stripped for readability) and terminal-aware tools like npm, cargo, git, and \
+         pytest. The same bash runs on macOS, Linux and Windows. Use for running shell \
+         commands, scripts, git operations, and system tasks."
     }
 
     fn permission_level(&self) -> PermissionLevel {
@@ -813,18 +736,41 @@ async fn run_bash(params: BashInput, ctx: &ToolContext) -> ToolResult {
         return run_in_background(params.command, cwd, timeout_ms).await;
     }
 
-    debug!(command = %params.command, "Executing bash command via PTY");
-
-    // ── Windows path (no PTY — use cmd.exe fallback) ─────────────────────
-    #[cfg(windows)]
-    {
-        let effective_cwd = {
-            let state = shell_state_arc.lock();
-            state.cwd.clone().unwrap_or_else(|| ctx.working_dir.clone())
+    // ── Embedded shell ───────────────────────────────────────────────────
+    //
+    // The default, and the only path on Windows. The shell runs in this
+    // process and outlives the command, so nothing is spawned to interpret it
+    // and `cd`, `export`, an alias and a shell function all survive the call.
+    if ctx.config.effective_bash_engine() == BashEngine::Brush {
+        debug!(command = %params.command, "Executing bash command in the embedded shell");
+        return match crate::brush_bash::run(
+            &params.command,
+            &ctx.session_id,
+            &ctx.working_dir,
+            timeout_dur,
+        )
+        .await
+        {
+            Ok(ran) if ran.timed_out => ToolResult::error(format!(
+                "Command timed out after {timeout_ms}ms\n{}",
+                strip_ansi(&ran.output)
+            )),
+            Ok(ran) => {
+                let output = strip_ansi(&ran.output);
+                let output = if output.trim().is_empty() {
+                    "(no output)".to_string()
+                } else {
+                    output
+                };
+                truncate_output(output, ran.exit_code)
+            }
+            Err(error) => {
+                ToolResult::error(format!("The shell could not run the command: {error}"))
+            }
         };
-        return run_windows_fallback(&params.command, &effective_cwd, timeout_dur, timeout_ms)
-            .await;
     }
+
+    debug!(command = %params.command, "Executing bash command via PTY");
 
     // ── Unix PTY path ────────────────────────────────────────────────────
     #[cfg(unix)]
@@ -1570,5 +1516,143 @@ mod tests {
 
         assert!(result.is_error, "{}", result.content);
         assert!(result.content.contains("Critical"), "{}", result.content);
+    }
+
+    // -----------------------------------------------------------------------
+    // Which shell the tool runs in
+    // -----------------------------------------------------------------------
+
+    /// A context of its own, so one test's shell is not another's.
+    fn context_for(session: &str, dir: &std::path::Path, engine: Option<&str>) -> ToolContext {
+        let mut ctx = allow_all_context();
+        ctx.working_dir = dir.to_path_buf();
+        ctx.session_id = session.to_string();
+        ctx.config.bash_engine = engine.map(str::to_string);
+        ctx
+    }
+
+    async fn run_tool(ctx: &ToolContext, command: &str) -> ToolResult {
+        PtyBashTool
+            .execute(json!({ "command": command }), ctx)
+            .await
+    }
+
+    #[tokio::test]
+    async fn a_directory_change_reaches_the_next_tool_call() {
+        // The point of the embedded shell. Two separate tool calls, one shell.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join("inner")).expect("mkdir");
+        let ctx = context_for("brush-cd", dir.path(), None);
+
+        let moved = run_tool(&ctx, "cd inner").await;
+        assert!(!moved.is_error, "{}", moved.content);
+        let here = run_tool(&ctx, "pwd").await;
+
+        assert!(here.content.trim().ends_with("inner"), "{}", here.content);
+        crate::clear_session_shell_state("brush-cd");
+    }
+
+    #[tokio::test]
+    async fn a_shell_function_reaches_the_next_tool_call() {
+        // The old sentinel block carried the working directory and exported
+        // variables. It could never have carried this.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ctx = context_for("brush-func", dir.path(), None);
+
+        run_tool(&ctx, "greet() { echo hi from a function; }").await;
+        let called = run_tool(&ctx, "greet").await;
+
+        assert!(!called.is_error, "{}", called.content);
+        assert!(
+            called.content.contains("hi from a function"),
+            "{}",
+            called.content
+        );
+        crate::clear_session_shell_state("brush-func");
+    }
+
+    #[tokio::test]
+    async fn two_sessions_do_not_share_a_shell() {
+        // One shell per session id. A directory change in one must not move
+        // the other, or two agents in one process would tread on each other.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join("inner")).expect("mkdir");
+        let first = context_for("brush-a", dir.path(), None);
+        let second = context_for("brush-b", dir.path(), None);
+
+        run_tool(&first, "cd inner").await;
+        let elsewhere = run_tool(&second, "pwd").await;
+
+        assert!(
+            !elsewhere.content.trim().ends_with("inner"),
+            "one session's cd moved another: {}",
+            elsewhere.content
+        );
+        crate::clear_session_shell_state("brush-a");
+        crate::clear_session_shell_state("brush-b");
+    }
+
+    #[tokio::test]
+    async fn clearing_the_session_starts_a_fresh_shell() {
+        // `/clear` means start again. A directory change that survived it
+        // would be state the user asked to be rid of.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join("inner")).expect("mkdir");
+        let ctx = context_for("brush-clear", dir.path(), None);
+
+        run_tool(&ctx, "cd inner").await;
+        crate::clear_session_shell_state("brush-clear");
+        let after = run_tool(&ctx, "pwd").await;
+
+        assert!(
+            !after.content.trim().ends_with("inner"),
+            "the shell outlived the session it belonged to: {}",
+            after.content
+        );
+        crate::clear_session_shell_state("brush-clear");
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn the_system_engine_still_runs_a_command() {
+        // The way out if brush gets something wrong. It has to keep working,
+        // or the setting is not a fallback.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ctx = context_for("system-engine", dir.path(), Some("system"));
+
+        let result = run_tool(&ctx, "echo from the system shell").await;
+
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("from the system shell"),
+            "{}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_command_reports_its_status() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ctx = context_for("brush-status", dir.path(), None);
+
+        let result = run_tool(&ctx, "exit 3").await;
+
+        assert!(result.is_error, "{}", result.content);
+        assert!(result.content.contains("code 3"), "{}", result.content);
+        crate::clear_session_shell_state("brush-status");
+    }
+
+    #[tokio::test]
+    async fn output_larger_than_one_buffer_arrives_whole() {
+        // A pty buffer holds about 64 KiB. Reading only after the command
+        // finished would deadlock here rather than truncate.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ctx = context_for("brush-big", dir.path(), None);
+
+        let result = run_tool(&ctx, "for i in $(seq 1 5000); do echo line-$i; done").await;
+
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("line-5000"), "the tail was lost");
+        crate::clear_session_shell_state("brush-big");
     }
 }

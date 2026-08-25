@@ -175,6 +175,28 @@ freedesktop spec has no equivalent token, so the XDG backend is sent
 `message-new-instant`; a sound theme without that name leaves the notification
 silent.
 
+### Shell
+
+| Key          | Type   | Default | Description                                              |
+|--------------|--------|---------|----------------------------------------------------------|
+| `bashEngine` | string | `brush` | `brush` or `system`. Which shell the `Bash` tool runs commands in. |
+
+Inside the `config` object, not at the top level:
+
+```json
+"config": {
+  "bashEngine": "system"
+}
+```
+
+`brush` is the shell embedded in the MikMik binary. Nothing is spawned to interpret a command, and the shell outlives it, so the working directory, exported variables, aliases and shell functions all persist between calls. The same shell runs on macOS, Linux and Windows.
+
+`system` runs the machine's own `bash`, spawned once per command, which is what MikMik did before the embedded shell existed. The working directory and exported variables are carried forward; a shell function defined by one command is not. Use it if a command behaves differently under the embedded shell: brush states that it is not production-complete, and `select` and some edge cases are unsupported.
+
+Windows ignores the setting and always uses `brush`. `system` there meant `cmd /C`, which fails on the first pipeline.
+
+Either way an external program is still a real process. The embedded shell removes the shell and its built-ins from the path, not the `cargo` or `git` the command names.
+
 ### Edit guard
 
 | Key         | Type   | Default | Description                                                    |

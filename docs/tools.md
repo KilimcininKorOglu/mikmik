@@ -209,7 +209,9 @@ Useful when the model needs to express changes in diff format rather than as str
 
 **Permission level:** Execute
 
-Execute a shell command in a real terminal (PTY). One shell serves the whole session, so `cd` and `export` outlive the call and the working directory persists between commands. The PTY also lets interactive programs and terminal-aware tools (npm, cargo, git, pytest) behave as they would at a keyboard; colour codes are stripped for readability.
+Execute a shell command in a real terminal (PTY). One shell serves the whole session, so the working directory, exported variables, aliases and shell functions outlive the call. The PTY also lets interactive programs and terminal-aware tools (npm, cargo, git, pytest) behave as they would at a keyboard; colour codes are stripped for readability.
+
+The shell is embedded in the MikMik binary, so nothing is spawned to interpret a command and the same bash runs on macOS, Linux and Windows. An external program the command names is still a real process. [`bashEngine`](configuration.md#shell) switches back to the machine's own `bash` on Unix.
 
 | Parameter           | Type    | Required | Description                                              |
 |---------------------|---------|----------|----------------------------------------------------------|

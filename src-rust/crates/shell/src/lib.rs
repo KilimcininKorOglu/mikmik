@@ -34,6 +34,39 @@ pub struct ShellSession {
     shell: brush_core::Shell,
 }
 
+/// Where a command's output goes.
+///
+/// Both variants carry a real descriptor, so a program the command starts
+/// inherits it. A caller on Unix hands in the slave side of a pty and the
+/// programs still see a terminal; a caller on Windows hands in a pipe.
+pub enum Sink {
+    /// A file or a pty slave.
+    File(std::fs::File),
+    /// The writing half of a pipe.
+    Pipe(std::io::PipeWriter),
+}
+
+impl From<std::fs::File> for Sink {
+    fn from(file: std::fs::File) -> Self {
+        Self::File(file)
+    }
+}
+
+impl From<std::io::PipeWriter> for Sink {
+    fn from(writer: std::io::PipeWriter) -> Self {
+        Self::Pipe(writer)
+    }
+}
+
+impl From<Sink> for brush_core::openfiles::OpenFile {
+    fn from(sink: Sink) -> Self {
+        match sink {
+            Sink::File(file) => Self::from(file),
+            Sink::Pipe(writer) => Self::from(writer),
+        }
+    }
+}
+
 /// What one command did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunOutcome {
@@ -93,8 +126,8 @@ impl ShellSession {
     pub async fn run(
         &mut self,
         command: &str,
-        stdout: std::fs::File,
-        stderr: std::fs::File,
+        stdout: impl Into<Sink>,
+        stderr: impl Into<Sink>,
         timeout: Duration,
     ) -> anyhow::Result<RunOutcome> {
         let mut params = self.shell.default_exec_params();
@@ -107,8 +140,8 @@ impl ShellSession {
             brush_core::openfiles::null()
                 .map_err(|error| anyhow::anyhow!("could not open the null device: {error}"))?,
         );
-        params.set_fd(STDOUT, brush_core::openfiles::OpenFile::from(stdout));
-        params.set_fd(STDERR, brush_core::openfiles::OpenFile::from(stderr));
+        params.set_fd(STDOUT, brush_core::openfiles::OpenFile::from(stdout.into()));
+        params.set_fd(STDERR, brush_core::openfiles::OpenFile::from(stderr.into()));
 
         let source_info = brush_core::SourceInfo::from("mikmik");
         let before = children::direct_children();

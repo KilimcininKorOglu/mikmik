@@ -3497,6 +3497,7 @@ dependencies = [
  "mikmik-core",
  "mikmik-mcp",
  "mikmik-plugins",
+ "mikmik-shell",
  "nix 0.29.0",
  "once_cell",
  "open",

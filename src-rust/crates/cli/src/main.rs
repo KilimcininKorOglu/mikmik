@@ -4334,6 +4334,12 @@ async fn run_interactive(
                                     session.messages.clear();
                                     session.updated_at = chrono::Utc::now();
                                     transcript.reset_branch();
+                                    // The shell too. `/clear` means start again,
+                                    // and a `cd` or an exported variable that
+                                    // survived it is state the user asked to be
+                                    // rid of. The next Bash call opens a fresh
+                                    // shell in the working directory.
+                                    mikmik_tools::clear_session_shell_state(&session.id);
                                     app.status_message = Some("Conversation cleared.".to_string());
                                     transcript_replaced = true;
                                 }

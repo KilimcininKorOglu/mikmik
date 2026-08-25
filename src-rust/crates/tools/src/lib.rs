@@ -26,6 +26,7 @@ pub mod apply_patch;
 pub mod ask_user;
 pub mod batch_edit;
 pub mod brief;
+pub(crate) mod brush_bash;
 pub mod bundled_skills;
 pub mod computer_use;
 pub mod config_tool;
@@ -364,9 +365,44 @@ pub fn session_shell_state(session_id: &str) -> Arc<parking_lot::Mutex<ShellStat
         .clone()
 }
 
+/// Process-global registry of embedded shells keyed by session id.
+///
+/// Held behind a `tokio::sync::Mutex` rather than the `parking_lot` one beside
+/// it, because running a command is `async` and a `parking_lot` guard cannot be
+/// held across an await.
+static BRUSH_SESSIONS: once_cell::sync::Lazy<
+    dashmap::DashMap<String, Arc<tokio::sync::Mutex<mikmik_shell::ShellSession>>>,
+> = once_cell::sync::Lazy::new(dashmap::DashMap::new);
+
+/// Return the embedded shell for this session, opening one on first use.
+///
+/// The shell is what makes `cd`, `export`, an alias and a shell function
+/// outlive the command that set them, so it must be the same one every call.
+pub async fn session_brush_shell(
+    session_id: &str,
+    working_dir: &std::path::Path,
+) -> anyhow::Result<Arc<tokio::sync::Mutex<mikmik_shell::ShellSession>>> {
+    if let Some(existing) = BRUSH_SESSIONS.get(session_id) {
+        return Ok(existing.clone());
+    }
+    let opened =
+        mikmik_shell::ShellSession::new(&mikmik_shell::usable_working_dir(working_dir)).await?;
+    // Another call may have opened one while this was awaiting. Whichever
+    // landed first is the session's shell; the loser is dropped here, which is
+    // correct because nothing has run in it yet.
+    Ok(BRUSH_SESSIONS
+        .entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(opened)))
+        .clone())
+}
+
 /// Remove the shell state for a session (e.g. when the session ends).
+///
+/// Both stores: the embedded shell holds open descriptors and a child process
+/// tree, so leaving it behind leaks more than a `HashMap` entry.
 pub fn clear_session_shell_state(session_id: &str) {
     SHELL_STATE_REGISTRY.remove(session_id);
+    BRUSH_SESSIONS.remove(session_id);
 }
 
 /// Return the `ShadowSnapshot` for `working_dir`, creating it on first call.

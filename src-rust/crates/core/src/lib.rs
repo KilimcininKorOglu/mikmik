@@ -1561,6 +1561,20 @@ pub mod config {
         /// existed. See [`Config::effective_edit_guard`].
         #[serde(default, rename = "editGuard", skip_serializing_if = "Option::is_none")]
         pub edit_guard: Option<String>,
+        /// Which shell the Bash tool runs commands in: `brush` or `system`.
+        ///
+        /// Unset reads as `brush`, the shell embedded in this binary. `system`
+        /// puts the session back on the machine's own `bash`, which is there
+        /// for the day brush gets a command wrong; brush states that it is not
+        /// production-complete. Windows ignores the setting, because `system`
+        /// there meant `cmd /C` and no bash at all. See
+        /// [`Config::effective_bash_engine`].
+        #[serde(
+            default,
+            rename = "bashEngine",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub bash_engine: Option<String>,
         /// How far the watcher may fall behind before the primary waits for it.
         ///
         /// `0` never waits. Any other value is a backlog threshold; the primary
@@ -1827,6 +1841,37 @@ pub mod config {
         /// Whether this configuration should actually run a command.
         pub fn is_command(&self) -> bool {
             self.kind == "command" && !self.command.trim().is_empty()
+        }
+    }
+
+    /// Which shell the Bash tool runs a command in.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum BashEngine {
+        /// The shell embedded in this binary. No process is spawned to run the
+        /// command, and the shell's state outlives it.
+        #[default]
+        Brush,
+        /// The machine's own `bash`, spawned once per command. What this tree
+        /// did before the embedded shell existed.
+        System,
+    }
+
+    impl BashEngine {
+        /// Read the setting. Anything unrecognised reads as the default rather
+        /// than failing: a typo must not take the Bash tool away.
+        pub fn parse(value: Option<&str>) -> Self {
+            match value.map(str::trim) {
+                Some("system") => Self::System,
+                _ => Self::Brush,
+            }
+        }
+
+        /// The name this engine is written under in `settings.json`.
+        pub fn as_str(self) -> &'static str {
+            match self {
+                Self::Brush => "brush",
+                Self::System => "system",
+            }
         }
     }
 
@@ -2748,6 +2793,18 @@ pub mod config {
                 Some(value) => crate::file_snapshot::EditGuard::parse(value),
                 None => crate::file_snapshot::EditGuard::default(),
             }
+        }
+
+        /// Which shell the Bash tool runs commands in.
+        ///
+        /// Windows always answers [`BashEngine::Brush`]: `system` there meant
+        /// `cmd /C`, which fails on the first pipeline the model writes, and a
+        /// setting that turns bash off is not a fallback.
+        pub fn effective_bash_engine(&self) -> BashEngine {
+            if cfg!(windows) {
+                return BashEngine::Brush;
+            }
+            BashEngine::parse(self.bash_engine.as_deref())
         }
 
         /// Whether the project's servers start with the session. Unset means
@@ -3810,6 +3867,11 @@ pub mod config {
                 // on, and the first thing it would hide is a file that checkout
                 // changed underneath the agent.
                 edit_guard: stricter_edit_guard(base.config.edit_guard, over.config.edit_guard),
+                // A repository may choose the shell its build scripts were
+                // written for. Both engines run on this machine and both pass
+                // the same classifier before a command reaches them, so this
+                // decides compatibility rather than reach.
+                bash_engine: over.config.bash_engine.or(base.config.bash_engine),
                 companion: over.config.companion.or(base.config.companion),
                 provider_configs: base.config.provider_configs,
                 model_overrides: merge_map(
@@ -4535,6 +4597,60 @@ pub mod config {
                 merged.config.effective_edit_guard(),
                 crate::file_snapshot::EditGuard::Strict
             );
+        }
+
+        /// The shape `docs/configuration.md` tells the user to write for the
+        /// shell. A user pastes it, so it has to parse and it has to take
+        /// effect.
+        #[test]
+        fn the_documented_bash_engine_json_parses() {
+            let documented = r#"{"version":1,"config":{"bashEngine":"system"}}"#;
+            let settings: Settings = serde_json::from_str(documented).expect("documented JSON");
+            assert_eq!(settings.config.bash_engine.as_deref(), Some("system"));
+            assert_eq!(BashEngine::parse(Some("system")), BashEngine::System);
+        }
+
+        #[test]
+        fn an_unset_or_misspelled_bash_engine_reads_as_the_embedded_shell() {
+            // A typo must not take the Bash tool away, and the embedded shell
+            // is the one that works on every platform.
+            assert_eq!(BashEngine::parse(None), BashEngine::Brush);
+            assert_eq!(BashEngine::parse(Some("")), BashEngine::Brush);
+            assert_eq!(BashEngine::parse(Some("sytsem")), BashEngine::Brush);
+            assert_eq!(BashEngine::parse(Some("brush")), BashEngine::Brush);
+            assert_eq!(Config::default().effective_bash_engine(), BashEngine::Brush);
+        }
+
+        #[test]
+        fn windows_keeps_the_embedded_shell_whatever_the_setting_says() {
+            // `system` on Windows meant `cmd /C`, which fails on the first
+            // pipeline the model writes. A setting that turns bash off is not
+            // a fallback, so the accessor refuses it there.
+            let asked = Config {
+                bash_engine: Some("system".to_string()),
+                ..Default::default()
+            };
+            let expected = if cfg!(windows) {
+                BashEngine::Brush
+            } else {
+                BashEngine::System
+            };
+            assert_eq!(asked.effective_bash_engine(), expected);
+        }
+
+        #[test]
+        fn a_project_may_choose_the_shell_its_scripts_were_written_for() {
+            let project = Settings {
+                config: Config {
+                    bash_engine: Some("system".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let merged =
+                Settings::merge_with(Settings::default(), project, ProjectRunnables::Allow);
+
+            assert_eq!(merged.config.bash_engine.as_deref(), Some("system"));
         }
 
         /// It may never loosen one. The first thing a checkout would hide by

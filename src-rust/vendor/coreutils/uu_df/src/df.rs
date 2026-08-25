@@ -21,7 +21,6 @@ use uucore::{format_usage, show, show_warning};
 use clap::{Arg, ArgAction, ArgMatches, Command, parser::ValueSource};
 
 use std::ffi::OsString;
-use std::io::stdout;
 use std::path::Path;
 use thiserror::Error;
 
@@ -492,7 +491,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         }
     };
 
-    Table::new(&opt, filesystems).write_to(&mut stdout())?;
+    Table::new(&opt, filesystems).write_to(&mut uucore::streams::stdout())?;
 
     Ok(())
 }

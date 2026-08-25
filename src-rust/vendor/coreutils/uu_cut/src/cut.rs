@@ -9,7 +9,7 @@ use bstr::io::BufReadExt;
 use clap::{Arg, ArgAction, ArgMatches, Command, builder::ValueParser};
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, IsTerminal, Read, Write, stdin, stdout};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use uucore::display::Quotable;
 use uucore::error::{FromIo, UResult, USimpleError, set_exit_code};
@@ -445,10 +445,10 @@ where
     I: IntoIterator<Item = &'a OsString>,
 {
     let mut stdin_read = false;
-    let mut out: Box<dyn Write> = if stdout().is_terminal() {
-        Box::new(stdout())
+    let mut out: Box<dyn Write> = if uucore::streams::stdout().is_terminal() {
+        Box::new(uucore::streams::stdout())
     } else {
-        Box::new(BufWriter::new(stdout())) as Box<dyn Write>
+        Box::new(BufWriter::new(uucore::streams::stdout())) as Box<dyn Write>
     };
 
     for filename in filenames {
@@ -458,9 +458,9 @@ where
             }
 
             show_if_err!(match mode {
-                Mode::Bytes(ranges, opts) => cut_bytes(stdin(), &mut out, ranges, opts),
-                Mode::Characters(ranges, opts) => cut_bytes(stdin(), &mut out, ranges, opts),
-                Mode::Fields(ranges, opts) => cut_fields(stdin(), &mut out, ranges, opts),
+                Mode::Bytes(ranges, opts) => cut_bytes(uucore::streams::stdin(), &mut out, ranges, opts),
+                Mode::Characters(ranges, opts) => cut_bytes(uucore::streams::stdin(), &mut out, ranges, opts),
+                Mode::Fields(ranges, opts) => cut_fields(uucore::streams::stdin(), &mut out, ranges, opts),
             });
 
             stdin_read = true;

@@ -36,7 +36,7 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::hash::{Hash, Hasher};
-use std::io::{BufRead, BufReader, BufWriter, Read, Write, stdin, stdout};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::num::IntErrorKind;
 #[cfg(not(target_os = "wasi"))]
 use std::num::NonZero;
@@ -256,7 +256,7 @@ impl Output {
                 let _ = file.set_len(0);
                 Box::new(file)
             }
-            None => Box::new(stdout()),
+            None => Box::new(uucore::streams::stdout()),
         })
     }
 
@@ -3150,7 +3150,7 @@ fn print_sorted<'a, T: Iterator<Item = &'a Line<'a>>>(
 fn open(path: impl AsRef<OsStr>) -> UResult<Box<dyn Read + Send>> {
     let path = path.as_ref();
     if path == STDIN_FILE {
-        let stdin = stdin();
+        let stdin = uucore::streams::stdin();
         return Ok(Box::new(stdin) as Box<dyn Read + Send>);
     }
 
@@ -3169,7 +3169,7 @@ fn open_with_open_failed_error(path: impl AsRef<OsStr>) -> UResult<Box<dyn Read 
     // On error, returns an OpenFailed error instead of a ReadFailed error
     let path = path.as_ref();
     if path == STDIN_FILE {
-        let stdin = stdin();
+        let stdin = uucore::streams::stdin();
         return Ok(Box::new(stdin) as Box<dyn Read + Send>);
     }
 

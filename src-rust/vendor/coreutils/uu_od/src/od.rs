@@ -246,7 +246,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let clap_matches = uucore::clap_localization::handle_clap_result(clap_opts, &args)?;
 
     let od_options = OdOptions::new(&clap_matches, &args)?;
-    let mut out = std::io::stdout().lock();
+    let mut out = uucore::streams::stdout().lock();
 
     // Check if we're in strings mode
     if let Some(min_length) = od_options.string_min_length {

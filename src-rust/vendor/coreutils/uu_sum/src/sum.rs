@@ -8,7 +8,7 @@
 use clap::{Arg, ArgAction, Command};
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{ErrorKind, Read, Write, stdin, stdout};
+use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
 use uucore::display::{OsWrite, Quotable};
 use uucore::error::{FromIo, UResult, USimpleError};
@@ -69,7 +69,7 @@ fn sysv_sum(mut reader: impl Read) -> std::io::Result<(usize, u16)> {
 
 fn open(name: &OsString) -> UResult<Box<dyn Read>> {
     if name == "-" {
-        Ok(Box::new(stdin()) as Box<dyn Read>)
+        Ok(Box::new(uucore::streams::stdin()) as Box<dyn Read>)
     } else {
         let path = Path::new(name);
         if path.is_dir() {
@@ -124,7 +124,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             bsd_sum(reader)
         }?;
 
-        let mut stdout = stdout().lock();
+        let mut stdout = uucore::streams::stdout().lock();
         if print_names {
             write!(stdout, "{sum:0width$} {blocks:width$} ")?;
             stdout.write_all_os(file)?;

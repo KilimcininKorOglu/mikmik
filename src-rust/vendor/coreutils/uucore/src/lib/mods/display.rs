@@ -28,7 +28,7 @@ use std::env;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs::File;
-use std::io::{self, BufWriter, Stdout, StdoutLock, Write as _};
+use std::io::{self, BufWriter, Stdout, StdoutLock, Write as IoWrite};
 
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -49,7 +49,7 @@ pub use os_display::{Quotable, Quoted};
 /// using low-level library calls and bypassing `io::Write`. This is not a big priority
 /// because broken filenames are much rarer on Windows than on Unix.
 pub fn println_verbatim<S: AsRef<OsStr>>(text: S) -> io::Result<()> {
-    let mut stdout = io::stdout().lock();
+    let mut stdout = crate::streams::stdout().lock();
     stdout.write_all_os(text.as_ref())?;
     stdout.write_all(b"\n")?;
     Ok(())
@@ -57,7 +57,7 @@ pub fn println_verbatim<S: AsRef<OsStr>>(text: S) -> io::Result<()> {
 
 /// Like `println_verbatim`, without the trailing newline.
 pub fn print_verbatim<S: AsRef<OsStr>>(text: S) -> io::Result<()> {
-    io::stdout().write_all_os(text.as_ref())
+    crate::streams::stdout().write_all_os(text.as_ref())
 }
 
 /// [`io::Write`], but for OS strings.
@@ -109,6 +109,9 @@ pub trait OsWrite: io::Write {
 impl OsWrite for File {}
 impl OsWrite for Stdout {}
 impl OsWrite for StdoutLock<'_> {}
+// MikMik patch: the redirectable stand-ins for the two above.
+impl OsWrite for crate::streams::Stdout {}
+impl OsWrite for crate::streams::StdoutLock {}
 // A future smarter Windows implementation can first flush the BufWriter before
 // doing a raw write.
 impl<W: OsWrite> OsWrite for BufWriter<W> {}
@@ -125,7 +128,7 @@ impl OsWrite for Box<dyn OsWrite> {
 /// This function handles non-UTF-8 environment variable names and values correctly by using
 /// raw bytes on Unix systems.
 pub fn print_all_env_vars<T: fmt::Display>(line_ending: T) -> io::Result<()> {
-    let mut stdout = io::stdout().lock();
+    let mut stdout = crate::streams::stdout().lock();
     for (name, value) in env::vars_os() {
         stdout.write_all_os(&name)?;
         stdout.write_all(b"=")?;

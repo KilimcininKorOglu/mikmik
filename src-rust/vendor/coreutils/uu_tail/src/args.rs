@@ -10,7 +10,6 @@ use crate::{Quotable, parse, platform};
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 use same_file::Handle;
 use std::ffi::OsString;
-use std::io::IsTerminal;
 use std::time::Duration;
 use uucore::error::{UResult, USimpleError, UUsageError};
 use uucore::parser::parse_signed_num::{SignPrefix, parse_signed_num_max};
@@ -332,7 +331,7 @@ impl Settings {
                         .is_ok_and(|meta| !meta.is_file())
                 });
 
-            if !blocking_stdin && std::io::stdin().is_terminal() {
+            if !blocking_stdin && uucore::streams::stdin().is_terminal() {
                 show_warning!("{}", translate!("tail-warning-following-stdin-ineffective"));
             }
         }

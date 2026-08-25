@@ -6,8 +6,6 @@
 
 #[cfg(any(feature = "parser", feature = "parser-num"))]
 pub mod num_parser;
-#[cfg(any(feature = "parser", feature = "parser-size"))]
-pub mod parse_block_size;
 #[cfg(any(feature = "parser", feature = "parser-glob"))]
 pub mod parse_glob;
 #[cfg(any(feature = "parser", feature = "parser-size"))]

@@ -7,7 +7,7 @@
 
 use std::ffi::OsStr;
 use std::fs::File;
-use std::io;
+use std::io::{BufReader, Read, Write};
 use std::path::Path;
 
 use crate::checksum::{
@@ -131,13 +131,12 @@ impl OutputFormat {
     }
 }
 
-fn write_legacy_checksum(
-    mut w: impl io::Write,
+fn print_legacy_checksum(
     options: &ChecksumComputeOptions,
     filename: &OsStr,
     sum: &DigestOutput,
     size: usize,
-) -> io::Result<()> {
+) {
     debug_assert!(options.algo_kind.is_legacy());
     debug_assert!(matches!(sum, DigestOutput::U16(_) | DigestOutput::Crc(_)));
 
@@ -149,40 +148,32 @@ fn write_legacy_checksum(
 
     // Print the sum
     match (options.algo_kind, sum) {
-        (SizedAlgoKind::Sysv, DigestOutput::U16(sum)) => write!(
-            w,
+        (SizedAlgoKind::Sysv, DigestOutput::U16(sum)) => print!(
             "{prefix}{sum} {}",
             size.div_ceil(options.algo_kind.bitlen()),
-        )?,
+        ),
         (SizedAlgoKind::Bsd, DigestOutput::U16(sum)) => {
             // The BSD checksum output is 5 digit integer
             let bsd_width = 5;
-            write!(
-                w,
+            print!(
                 "{prefix}{sum:0bsd_width$} {:bsd_width$}",
                 size.div_ceil(options.algo_kind.bitlen()),
-            )?;
+            );
         }
         (SizedAlgoKind::Crc | SizedAlgoKind::Crc32b, DigestOutput::Crc(sum)) => {
-            write!(w, "{prefix}{sum} {size}")?;
+            print!("{prefix}{sum} {size}");
         }
         (algo, output) => unreachable!("Bug: Invalid legacy checksum ({algo:?}, {output:?})"),
     }
 
     // Print the filename after a space if not stdin
     if escaped_filename != "-" {
-        write!(w, " ")?;
-        w.write_all(escaped_filename.as_bytes())?;
+        print!(" ");
+        let _dropped_result = crate::streams::stdout().write_all(escaped_filename.as_bytes());
     }
-    Ok(())
 }
 
-fn write_tagged_checksum(
-    mut w: impl io::Write,
-    options: &ChecksumComputeOptions,
-    filename: &OsStr,
-    sum: &String,
-) -> io::Result<()> {
+fn print_tagged_checksum(options: &ChecksumComputeOptions, filename: &OsStr, sum: &String) {
     let (escaped_filename, prefix) = if options.line_ending == LineEnding::Nul {
         (filename.to_string_lossy().to_string(), "")
     } else {
@@ -190,22 +181,21 @@ fn write_tagged_checksum(
     };
 
     // Print algo name and opening parenthesis.
-    write!(w, "{prefix}{} (", options.algo_kind.to_tag())?;
+    print!("{prefix}{} (", options.algo_kind.to_tag());
 
     // Print filename
-    w.write_all(escaped_filename.as_bytes())?;
+    let _dropped_result = crate::streams::stdout().write_all(escaped_filename.as_bytes());
 
     // Print closing parenthesis and sum
-    write!(w, ") = {sum}")
+    print!(") = {sum}");
 }
 
-fn write_untagged_checksum(
-    mut w: impl io::Write,
+fn print_untagged_checksum(
     options: &ChecksumComputeOptions,
     filename: &OsStr,
     sum: &String,
     reading_mode: ReadingMode,
-) -> io::Result<()> {
+) {
     let (escaped_filename, prefix) = if options.line_ending == LineEnding::Nul {
         (filename.to_string_lossy().to_string(), "")
     } else {
@@ -213,10 +203,10 @@ fn write_untagged_checksum(
     };
 
     // Print checksum and reading mode flag
-    write!(w, "{prefix}{sum} {}", reading_mode.as_char())?;
+    print!("{prefix}{sum} {}", reading_mode.as_char());
 
     // Print filename
-    w.write_all(escaped_filename.as_bytes())
+    let _dropped_result = crate::streams::stdout().write_all(escaped_filename.as_bytes());
 }
 
 /// Calculate checksum
@@ -225,13 +215,8 @@ fn write_untagged_checksum(
 ///
 /// * `options` - CLI options for the assigning checksum algorithm
 /// * `files` - A iterator of [`OsStr`] which is a bunch of files that are using for calculating checksum
-pub fn perform_checksum_computation<'a, W, I>(
-    mut w: W,
-    options: ChecksumComputeOptions,
-    files: I,
-) -> UResult<()>
+pub fn perform_checksum_computation<'a, I>(options: ChecksumComputeOptions, files: I) -> UResult<()>
 where
-    W: io::Write,
     I: Iterator<Item = &'a OsStr>,
 {
     let mut files = files.peekable();
@@ -254,11 +239,11 @@ where
         }
 
         // Handle the file input
-        let mut file = io::BufReader::with_capacity(
+        let mut file = BufReader::with_capacity(
             READ_BUFFER_SIZE,
             if filename == "-" {
-                stdin_buf = io::stdin();
-                Box::new(stdin_buf) as Box<dyn io::Read>
+                stdin_buf = crate::streams::stdin();
+                Box::new(stdin_buf) as Box<dyn Read>
             } else {
                 file_buf = match File::open(filepath) {
                     Ok(file) => file,
@@ -267,7 +252,7 @@ where
                         continue;
                     }
                 };
-                Box::new(file_buf) as Box<dyn io::Read>
+                Box::new(file_buf) as Box<dyn Read>
             },
         );
 
@@ -290,37 +275,30 @@ where
         match options.output_format {
             OutputFormat::Raw => {
                 // Cannot handle multiple files anyway, output immediately.
-                digest_output
-                    .write_raw(&mut w)
-                    .map_err(ChecksumError::Write)?;
+                digest_output.write_raw(crate::streams::stdout())?;
                 return Ok(());
             }
             OutputFormat::Legacy => {
-                write_legacy_checksum(&mut w, &options, filename, &digest_output, sz)
-                    .map_err(ChecksumError::Write)?;
+                print_legacy_checksum(&options, filename, &digest_output, sz);
             }
-            OutputFormat::Tagged(digest_format) => write_tagged_checksum(
-                &mut w,
-                &options,
-                filename,
-                &encode_sum(digest_output, digest_format)?,
-            )
-            .map_err(ChecksumError::Write)?,
-            OutputFormat::Untagged(digest_format, reading_mode) => write_untagged_checksum(
-                &mut w,
-                &options,
-                filename,
-                &encode_sum(digest_output, digest_format)?,
-                reading_mode,
-            )
-            .map_err(ChecksumError::Write)?,
+            OutputFormat::Tagged(digest_format) => {
+                print_tagged_checksum(
+                    &options,
+                    filename,
+                    &encode_sum(digest_output, digest_format)?,
+                );
+            }
+            OutputFormat::Untagged(digest_format, reading_mode) => {
+                print_untagged_checksum(
+                    &options,
+                    filename,
+                    &encode_sum(digest_output, digest_format)?,
+                    reading_mode,
+                );
+            }
         }
 
-        write!(w, "{}", options.line_ending).map_err(ChecksumError::Write)?;
-    }
-
-    if options.line_ending != LineEnding::Newline {
-        w.flush().map_err(ChecksumError::Write)?;
+        print!("{}", options.line_ending);
     }
     Ok(())
 }

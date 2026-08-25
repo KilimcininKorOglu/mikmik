@@ -766,7 +766,7 @@ impl Display for ClapErrorWrapper {
             self.print_failed.set(true);
             // Try to display this error to stderr, but ignore if that fails too
             // since we're already in an error state.
-            let _ = writeln!(std::io::stderr(), "{}: {print_fail}", crate::util_name());
+            let _ = writeln!(crate::streams::stderr(), "{}: {print_fail}", crate::util_name());
             // Mirror GNU behavior: when failing to print help or version, exit with error code.
             // This avoids silent failures when stdout is full or closed.
             set_exit_code(1);

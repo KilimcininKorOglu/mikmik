@@ -8,7 +8,7 @@
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Write, stdin, stdout};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::num::IntErrorKind;
 use std::path::Path;
 use std::str::from_utf8;
@@ -290,7 +290,7 @@ pub fn uu_app() -> Command {
 fn open(path: &OsString) -> UResult<BufReader<Box<dyn Read + 'static>>> {
     let file_buf;
     if path == "-" {
-        Ok(BufReader::new(Box::new(stdin()) as Box<dyn Read>))
+        Ok(BufReader::new(Box::new(uucore::streams::stdin()) as Box<dyn Read>))
     } else {
         let path_ref = Path::new(path);
         if path_ref.is_dir() {
@@ -391,7 +391,7 @@ fn classify_char(buf: &[u8], byte: usize, utf8: bool) -> (CharType, usize, usize
 /// Write spaces for a tab expansion.
 #[inline]
 fn write_tab_spaces(
-    output: &mut BufWriter<std::io::Stdout>,
+    output: &mut BufWriter<uucore::streams::Stdout>,
     nts: usize,
     tspaces: &str,
 ) -> std::io::Result<()> {
@@ -404,7 +404,7 @@ fn write_tab_spaces(
 
 fn expand_buf(
     buf: &[u8],
-    output: &mut BufWriter<std::io::Stdout>,
+    output: &mut BufWriter<uucore::streams::Stdout>,
     tabstops: &[usize],
     options: &Options,
     col: &mut usize,
@@ -478,7 +478,7 @@ fn expand_buf(
 
 fn expand_file(
     file: &OsString,
-    output: &mut BufWriter<std::io::Stdout>,
+    output: &mut BufWriter<uucore::streams::Stdout>,
     options: &Options,
 ) -> UResult<()> {
     let mut buf = [0u8; 4096];
@@ -499,7 +499,7 @@ fn expand_file(
 }
 
 fn expand(options: &Options) -> UResult<()> {
-    let mut output = BufWriter::new(stdout());
+    let mut output = BufWriter::new(uucore::streams::stdout());
 
     for file in &options.files {
         if let Err(e) = expand_file(file, &mut output, options) {

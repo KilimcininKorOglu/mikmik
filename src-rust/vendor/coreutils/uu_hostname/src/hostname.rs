@@ -5,7 +5,7 @@
 
 // spell-checker:ignore hashset Addrs addrs
 
-use std::io::{Write, stdout};
+use std::io::{Write};
 #[cfg(not(any(target_os = "freebsd", target_os = "openbsd")))]
 use std::net::ToSocketAddrs;
 use std::str;
@@ -161,7 +161,7 @@ fn display_hostname(matches: &ArgMatches) -> UResult<()> {
         }
         let len = output.len();
         if len > 0 {
-            writeln!(stdout(), "{}", &output[0..len - 1])?;
+            writeln!(uucore::streams::stdout(), "{}", &output[0..len - 1])?;
         }
 
         Ok(())
@@ -170,17 +170,17 @@ fn display_hostname(matches: &ArgMatches) -> UResult<()> {
             let mut it = hostname.char_indices().filter(|&ci| ci.1 == '.');
             if let Some(ci) = it.next() {
                 if matches.get_flag(OPT_SHORT) {
-                    writeln!(stdout(), "{}", &hostname[0..ci.0])?;
+                    writeln!(uucore::streams::stdout(), "{}", &hostname[0..ci.0])?;
                 } else {
-                    writeln!(stdout(), "{}", &hostname[ci.0 + 1..])?;
+                    writeln!(uucore::streams::stdout(), "{}", &hostname[ci.0 + 1..])?;
                 }
             } else if matches.get_flag(OPT_SHORT) {
-                writeln!(stdout(), "{hostname}")?;
+                writeln!(uucore::streams::stdout(), "{hostname}")?;
             }
             return Ok(());
         }
 
-        writeln!(stdout(), "{hostname}")?;
+        writeln!(uucore::streams::stdout(), "{hostname}")?;
 
         Ok(())
     }

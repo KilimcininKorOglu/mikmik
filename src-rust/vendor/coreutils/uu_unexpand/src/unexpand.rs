@@ -8,7 +8,9 @@
 use clap::{Arg, ArgAction, Command};
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Stdout, Write, stdin, stdout};
+use std::io::{BufReader, BufWriter, Read, Write};
+// MikMik patch: the redirectable stand-in for `uucore::streams::Stdout`.
+use uucore::streams::Stdout;
 use std::num::IntErrorKind;
 use std::path::Path;
 use std::str::from_utf8;
@@ -288,7 +290,7 @@ fn open(path: &OsString) -> UResult<BufReader<Box<dyn Read + 'static>>> {
             translate!("unexpand-error-is-directory", "path" => filename.maybe_quote()),
         ))
     } else if path == "-" {
-        Ok(BufReader::new(Box::new(stdin()) as Box<dyn Read>))
+        Ok(BufReader::new(Box::new(uucore::streams::stdin()) as Box<dyn Read>))
     } else {
         file_buf = File::open(path).map_err_context(|| path.maybe_quote().to_string())?;
         Ok(BufReader::new(Box::new(file_buf) as Box<dyn Read>))
@@ -583,7 +585,7 @@ fn unexpand_file(
 
 fn unexpand(options: &Options) -> UResult<()> {
     let mut buf = [0u8; 128];
-    let mut output = BufWriter::new(stdout());
+    let mut output = BufWriter::new(uucore::streams::stdout());
     let tab_config = &options.tab_config;
     let lastcol = if tab_config.tabstops.len() > 1
         && tab_config.increment_size.is_none()

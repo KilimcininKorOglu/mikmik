@@ -32,6 +32,8 @@ pub use crate::mods::locale;
 pub use crate::mods::os;
 pub use crate::mods::panic;
 pub use crate::mods::posix;
+// MikMik patch: the three standard streams, redirectable per thread.
+pub use crate::mods::streams;
 
 // * feature-gated modules
 #[cfg(feature = "backup-control")]
@@ -95,15 +97,10 @@ pub use crate::features::mode;
 pub use crate::features::entries;
 #[cfg(all(unix, feature = "perms"))]
 pub use crate::features::perms;
-#[cfg(all(
-    any(target_os = "linux", target_os = "android"),
-    any(feature = "pipes", feature = "buf-copy")
-))]
+#[cfg(all(unix, any(feature = "pipes", feature = "buf-copy")))]
 pub use crate::features::pipes;
 #[cfg(all(unix, feature = "process"))]
 pub use crate::features::process;
-#[cfg(all(unix, feature = "safe-copy"))]
-pub use crate::features::safe_copy;
 #[cfg(all(unix, not(target_os = "redox")))]
 pub use crate::features::safe_traversal;
 #[cfg(all(unix, not(target_os = "fuchsia"), feature = "signals"))]
@@ -130,7 +127,7 @@ pub use crate::features::fsxattr;
 #[cfg(all(feature = "selinux", any(target_os = "linux", target_os = "android")))]
 pub use crate::features::selinux;
 
-#[cfg(all(feature = "smack", target_os = "linux"))]
+#[cfg(all(target_os = "linux", feature = "smack"))]
 pub use crate::features::smack;
 
 //## core functions
@@ -186,9 +183,13 @@ pub fn get_canonical_util_name(util_name: &str) -> &str {
     }
 }
 
+/// Execute utility code for `util`.
+///
+/// This macro expands to a main function that invokes the `uumain` function in `util`
+/// Exits with code returned by `uumain`.
 #[macro_export]
-macro_rules! bin_inner {
-    ($util:ident, $post:expr) => {
+macro_rules! bin {
+    ($util:ident) => {
         pub fn main() {
             use std::io::Write;
             use uucore::locale;
@@ -212,28 +213,13 @@ macro_rules! bin_inner {
 
             // execute utility code
             let code = $util::uumain(uucore::args_os());
-            $post
+            // (defensively) flush stdout for utility prior to exit; see <https://github.com/rust-lang/rust/issues/23818>
+            if let Err(e) = streams::stdout().flush() {
+                eprintln!("Error flushing stdout: {e}");
+            }
 
             std::process::exit(code);
         }
-    };
-}
-/// Execute utility code for `util`.
-///
-/// This macro expands to a main function that invokes the `uumain` function in `util`
-/// Exits with code returned by `uumain`.
-#[macro_export]
-macro_rules! bin {
-    ($util:ident, no_flush) => {
-        ::uucore::bin_inner! {$util, {}}
-    };
-    ($util:ident) => {
-        ::uucore::bin_inner! {$util, {
-            // (defensively) flush stdout for utility prior to exit; see <https://github.com/rust-lang/rust/issues/23818>
-            if let Err(e) = std::io::stdout().flush() {
-                eprintln!("Error flushing stdout: {e}");
-            }
-        }}
     };
 }
 
@@ -282,7 +268,6 @@ pub fn format_usage(s: &str) -> String {
 ///     .help_template(localized_help_template("myutil"));
 /// ```
 pub fn localized_help_template(util_name: &str) -> clap::builder::StyledStr {
-    use std::io::IsTerminal;
 
     // Determine if colors should be enabled - same logic as configure_localized_command
     let colors_enabled = if std::env::var("NO_COLOR").is_ok() {
@@ -290,7 +275,7 @@ pub fn localized_help_template(util_name: &str) -> clap::builder::StyledStr {
     } else if std::env::var("CLICOLOR_FORCE").is_ok() || std::env::var("FORCE_COLOR").is_ok() {
         true
     } else {
-        IsTerminal::is_terminal(&std::io::stdout())
+        streams::stdout().is_terminal()
             && std::env::var("TERM").unwrap_or_default() != "dumb"
     };
 
@@ -424,7 +409,7 @@ pub fn args_os_filtered() -> impl Iterator<Item = OsString> {
 /// Read a line from stdin and check whether the first character is `'y'` or `'Y'`
 pub fn read_yes() -> bool {
     let mut s = String::new();
-    match std::io::stdin().read_line(&mut s) {
+    match streams::stdin().read_line(&mut s) {
         Ok(_) => matches!(s.chars().next(), Some('y' | 'Y')),
         _ => false,
     }
@@ -591,7 +576,7 @@ macro_rules! prompt_yes(
         eprint!("{}: ", uucore::util_name());
         eprint!($($args)+);
         eprint!(" ");
-        let res = std::io::stderr().flush().map_err(|err| {
+        let res = $crate::streams::stderr().flush().map_err(|err| {
             $crate::error::USimpleError::new(1, err.to_string())
         });
         uucore::show_if_err!(res);

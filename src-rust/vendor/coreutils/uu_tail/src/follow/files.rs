@@ -12,7 +12,7 @@ use crate::text;
 use std::collections::HashMap;
 use std::collections::hash_map::Keys;
 use std::fs::{File, Metadata};
-use std::io::{BufRead, BufReader, BufWriter, Write, stdout};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use uucore::error::UResult;
 
@@ -146,7 +146,7 @@ impl FileHandling {
                 self.header_printer.print(display_name.as_str());
             }
 
-            let mut writer = BufWriter::new(stdout().lock());
+            let mut writer = BufWriter::new(uucore::streams::stdout().lock());
             chunks.print(&mut writer)?;
             writer.flush()?;
 

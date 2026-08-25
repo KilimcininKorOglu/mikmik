@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::io::BufRead;
-use std::io::{self, Write, stdin, stdout};
+use std::io::{self, Write};
 use std::iter::once;
 use std::num::IntErrorKind;
 
@@ -167,7 +167,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     // If matches find --exponents flag than variable print_exponents is true and p^e output format will be used.
     let print_exponents = matches.get_flag(options::EXPONENTS);
 
-    let stdout = stdout();
+    let stdout = uucore::streams::stdout();
     // We use a smaller buffer here to pass a gnu test. 4KiB appears to be the default pipe size for bash.
     let mut w = io::BufWriter::with_capacity(4 * 1024, stdout.lock());
 
@@ -176,7 +176,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             write_factors_str(number.trim().as_bytes(), &mut w, print_exponents)?;
         }
     } else {
-        let stdin = stdin();
+        let stdin = uucore::streams::stdin();
         let lines = stdin.lock().split(LF);
         for line in lines {
             match line {

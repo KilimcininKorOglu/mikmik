@@ -7,7 +7,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter, Read, Write, stdin, stdout};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -126,7 +126,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let mut output = BufWriter::with_capacity(
         BUF_SIZE,
         match options.output {
-            None => Box::new(stdout()) as Box<dyn OsWrite>,
+            None => Box::new(uucore::streams::stdout()) as Box<dyn OsWrite>,
             Some(ref s) => {
                 let file = File::create(s).map_err_context(
                     || translate!("shuf-error-failed-to-open-for-writing", "file" => s.quote()),
@@ -258,7 +258,7 @@ pub fn uu_app() -> Command {
 fn read_input_file(filename: &Path) -> UResult<Vec<u8>> {
     if filename.as_os_str() == "-" {
         let mut data = Vec::new();
-        stdin()
+        uucore::streams::stdin()
             .read_to_end(&mut data)
             .map_err_context(|| translate!("shuf-error-read-error"))?;
         Ok(data)

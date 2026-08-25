@@ -14,7 +14,7 @@ use operation::{
 };
 use simd::process_input;
 use std::ffi::OsString;
-use std::io::{stdin, stdout};
+
 use uucore::display::Quotable;
 use uucore::error::{UResult, USimpleError, UUsageError};
 use uucore::fs::is_stdin_directory;
@@ -96,9 +96,9 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         }
     }
 
-    let stdin = stdin();
+    let stdin = uucore::streams::stdin();
     let mut locked_stdin = stdin.lock();
-    let mut locked_stdout = stdout().lock();
+    let mut locked_stdout = uucore::streams::stdout().lock();
 
     // According to the man page: translating only happens if deleting or if a second set is given
     let translating = !delete_flag && sets.len() > 1;

@@ -23,6 +23,8 @@ pub use brush_core::ExecutionResult;
 
 pub mod bundled;
 mod children;
+/// Pointing a bundled utility's output somewhere the shell chose.
+pub mod streams;
 
 pub use bundled::{maybe_dispatch, DISPATCH_FLAG};
 

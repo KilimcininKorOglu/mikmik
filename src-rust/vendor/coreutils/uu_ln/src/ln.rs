@@ -6,7 +6,7 @@
 // spell-checker:ignore (ToDO) srcpath targetpath EEXIST
 
 use clap::{Arg, ArgAction, Command};
-use std::io::{Write, stdout};
+use std::io::{Write};
 use uucore::display::Quotable;
 use uucore::error::{FromIo, UError, UResult};
 use uucore::fs::{make_path_relative_to, paths_refer_to_same_file};
@@ -466,7 +466,7 @@ fn link(src: &Path, dst: &Path, settings: &Settings) -> UResult<()> {
     }
 
     if settings.verbose {
-        let mut out = stdout();
+        let mut out = uucore::streams::stdout();
         write!(out, "{} -> {}", dst.quote(), source.quote())?;
         match backup_path {
             Some(path) => writeln!(

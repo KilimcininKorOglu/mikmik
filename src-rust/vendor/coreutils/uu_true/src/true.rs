@@ -17,7 +17,7 @@ pub fn uumain(mut args: impl uucore::Args) -> i32 {
         uu_app().print_help()
     } else if flag == "--version" {
         // avoid uu_app for smaller binary size
-        writeln!(std::io::stdout(), "true {}", crate_version!())
+        writeln!(uucore::streams::stdout(), "true {}", crate_version!())
     } else {
         return 0;
     };
@@ -26,7 +26,7 @@ pub fn uumain(mut args: impl uucore::Args) -> i32 {
         && print_fail.kind() != std::io::ErrorKind::BrokenPipe
     {
         // Try to display this error.
-        let _ = writeln!(std::io::stderr(), "true: {print_fail}");
+        let _ = writeln!(uucore::streams::stderr(), "true: {print_fail}");
         // Mirror GNU options. When failing to print warnings or version flags, then we exit
         // with FAIL. This avoids allocation some error information which may result in yet
         // other types of failure.

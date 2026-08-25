@@ -6,7 +6,7 @@
 use clap::{Arg, ArgAction, Command};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, Read, Write, stdin, stdout};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use uucore::display::Quotable;
 use uucore::error::{FromIo, UResult, USimpleError, set_exit_code};
@@ -242,7 +242,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
 
     for file in &files {
         if file == "-" {
-            let mut buffer = BufReader::new(stdin());
+            let mut buffer = BufReader::new(uucore::streams::stdin());
             nl(&mut buffer, &mut stats, &settings)?;
         } else {
             let path = Path::new(file);
@@ -381,7 +381,7 @@ fn write_line(writer: &mut impl Write, line: &[u8]) -> io::Result<()> {
 
 /// `nl` implements the main functionality for an individual buffer.
 fn nl<T: Read>(reader: &mut BufReader<T>, stats: &mut Stats, settings: &Settings) -> UResult<()> {
-    let mut writer = BufWriter::new(stdout());
+    let mut writer = BufWriter::new(uucore::streams::stdout());
     let mut current_numbering_style = &settings.body_numbering;
     let mut line = Vec::new();
 

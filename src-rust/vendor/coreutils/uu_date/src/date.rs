@@ -15,7 +15,7 @@ use jiff::{Timestamp, Zoned};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Read, Write, stderr};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use uucore::display::Quotable;
@@ -437,7 +437,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
                 };
                 if settings.debug {
                     let _ = writeln!(
-                        stderr(),
+                        uucore::streams::stderr(),
                         "date: warning: using midnight as starting time: 00:00:00"
                     );
                 }
@@ -500,7 +500,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             Box::new(iter)
         }
         DateSource::Stdin => parse_dates_from_reader(
-            std::io::stdin(),
+            uucore::streams::stdin(),
             &now,
             DebugOptions::new(settings.debug, true),
         ),
@@ -542,7 +542,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     };
 
     let format_string = make_format_string(&settings);
-    let mut stdout = BufWriter::new(std::io::stdout().lock());
+    let mut stdout = BufWriter::new(uucore::streams::stdout().lock());
 
     // Format all the dates
     let config = Config::new().custom(PosixCustom::new()).lenient(true);
@@ -902,13 +902,13 @@ fn parse_date<S: AsRef<str> + Clone>(
     let input_str = s.as_ref();
 
     if dbg_opts.debug {
-        let _ = writeln!(stderr(), "date: input string: {input_str}");
+        let _ = writeln!(uucore::streams::stderr(), "date: input string: {input_str}");
     }
 
     // First, try to parse any timezone abbreviations
     if let Some(zoned) = try_parse_with_abbreviation(input_str, now) {
         if dbg_opts.debug {
-            let mut err = stderr().lock();
+            let mut err = uucore::streams::stderr().lock();
             let _ = writeln!(
                 err,
                 "date: parsed date part: (Y-M-D) {}",
@@ -932,7 +932,7 @@ fn parse_date<S: AsRef<str> + Clone>(
             let result = date.timestamp().to_zoned(now.time_zone().clone());
             if dbg_opts.debug {
                 // Show final parsed date and time
-                let mut err = stderr().lock();
+                let mut err = uucore::streams::stderr().lock();
                 let _ = writeln!(
                     err,
                     "date: parsed date part: (Y-M-D) {}",

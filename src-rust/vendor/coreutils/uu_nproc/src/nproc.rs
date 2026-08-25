@@ -6,7 +6,7 @@
 // spell-checker:ignore (ToDO) NPROCESSORS nprocs numstr sysconf
 
 use clap::{Arg, ArgAction, Command};
-use std::io::{Write, stdout};
+use std::io::{Write};
 use std::{env, thread};
 use uucore::display::Quotable;
 use uucore::error::{UResult, USimpleError};
@@ -78,7 +78,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         cores -= ignore;
     }
     //discard error about stdout flush
-    stdout()
+    uucore::streams::stdout()
         .lock()
         .write_all(format!("{cores}\n").as_bytes())
         .map_err(|e| USimpleError::new(1, e.to_string()))?;

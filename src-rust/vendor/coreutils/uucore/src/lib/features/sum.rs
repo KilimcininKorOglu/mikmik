@@ -136,7 +136,6 @@ pub struct Blake3 {
 impl Blake3 {
     /// Default length for the BLAKE3 digest in bytes.
     pub const DEFAULT_BYTE_SIZE: usize = 32;
-    pub const DEFAULT_BIT_SIZE: usize = Self::DEFAULT_BYTE_SIZE * 8;
 
     pub fn with_output_bytes(output_bytes: usize) -> Self {
         Self {
@@ -386,8 +385,7 @@ macro_rules! impl_digest_common {
             }
 
             fn hash_finalize(&mut self, out: &mut [u8]) {
-                let result = digest::Digest::finalize_reset(&mut self.0);
-                out.copy_from_slice(&result);
+                digest::Digest::finalize_into_reset(&mut self.0, out.into());
             }
 
             fn reset(&mut self) {
@@ -474,11 +472,11 @@ impl_digest_common!(Sha3_384, 384);
 impl_digest_common!(Sha3_512, 512);
 
 pub struct Shake128 {
-    digest: shake::Shake128,
+    digest: sha3::Shake128,
     bit_size: usize,
 }
 pub struct Shake256 {
-    digest: shake::Shake256,
+    digest: sha3::Shake256,
     bit_size: usize,
 }
 impl_digest_shake!(Shake128, 256);

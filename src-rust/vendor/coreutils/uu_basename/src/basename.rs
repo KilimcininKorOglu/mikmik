@@ -8,7 +8,7 @@
 use clap::builder::ValueParser;
 use clap::{Arg, ArgAction, Command};
 use std::ffi::OsString;
-use std::io::{Write, stdout};
+use std::io::{Write};
 use std::path::PathBuf;
 use uucore::display::Quotable;
 use uucore::error::{UResult, UUsageError};
@@ -71,7 +71,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     //
 
     for path in name_args {
-        let mut out = stdout();
+        let mut out = uucore::streams::stdout();
         out.write_all(&basename(path, &suffix)?)?;
         write!(out, "{line_ending}")?;
     }

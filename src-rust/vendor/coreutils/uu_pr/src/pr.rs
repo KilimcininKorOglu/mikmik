@@ -11,7 +11,7 @@ use itertools::Itertools;
 use regex::Regex;
 use std::ffi::OsStr;
 use std::fs::metadata;
-use std::io::{Read, Write, stderr, stdin, stdout};
+use std::io::{Read, Write};
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::time::SystemTime;
@@ -466,7 +466,7 @@ fn recreate_arguments(args: &[String]) -> Vec<String> {
 
 fn print_error(matches: &ArgMatches, err: &PrError) {
     if !matches.get_flag(options::NO_FILE_WARNINGS) {
-        let _ = writeln!(stderr(), "{err}");
+        let _ = writeln!(uucore::streams::stderr(), "{err}");
     }
 }
 
@@ -844,7 +844,7 @@ fn build_options(
 /// If `path` is `"-"`, then read from stdin.
 fn read_to_end(path: &str) -> Result<Vec<u8>, std::io::Error> {
     if path == "-" {
-        let mut f = stdin();
+        let mut f = uucore::streams::stdin();
         let mut buf = vec![];
         f.read_to_end(&mut buf)?;
         Ok(buf)
@@ -1089,7 +1089,7 @@ fn print_page(
     let header = header_content(options, page);
     let trailer_content = trailer_content(options);
 
-    let out = stdout();
+    let out = uucore::streams::stdout();
     let mut out = out.lock();
 
     for x in header {

@@ -9,7 +9,7 @@ use clap::builder::ValueParser;
 use clap::parser::ValuesRef;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use std::ffi::OsString;
-use std::io::{Write, stdout};
+use std::io::{Write};
 use std::path::{Path, PathBuf};
 #[cfg(all(unix, target_os = "linux"))]
 use uucore::error::FromIo;
@@ -312,7 +312,7 @@ fn create_single_dir(path: &Path, is_parent: bool, config: &Config) -> UResult<(
         Ok(()) => {
             if config.verbose {
                 writeln!(
-                    stdout(),
+                    uucore::streams::stdout(),
                     "{}",
                     translate!("mkdir-verbose-created-directory", "util_name" => "mkdir", "path" => path.quote())
                 )?;
@@ -362,7 +362,7 @@ fn create_single_dir(path: &Path, is_parent: bool, config: &Config) -> UResult<(
             // This matches GNU behavior for paths like "test_dir/../test_dir_a"
             if config.verbose && is_parent && config.recursive && !ends_with_parent_dir {
                 writeln!(
-                    stdout(),
+                    uucore::streams::stdout(),
                     "{}",
                     translate!("mkdir-verbose-created-directory", "util_name" => "mkdir", "path" => path.quote())
                 )?;

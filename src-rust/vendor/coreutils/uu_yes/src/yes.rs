@@ -104,7 +104,7 @@ fn prepare_buffer(buf: &mut Vec<u8>) {
 }
 
 pub fn exec(bytes: &[u8]) -> io::Result<()> {
-    let stdout = io::stdout();
+    let stdout = uucore::streams::stdout();
     let mut stdout = stdout.lock();
 
     loop {

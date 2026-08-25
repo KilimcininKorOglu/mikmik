@@ -11,7 +11,7 @@ use rustc_hash::FxHashSet as HashSet;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, DirEntry, File, Metadata};
-use std::io::{BufRead, BufReader, stdout};
+use std::io::{BufRead, BufReader};
 #[cfg(not(windows))]
 use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
@@ -895,7 +895,7 @@ impl StatPrinter {
         if let Some(md_time) = &self.time {
             if let Some(time) = metadata_get_time(&stat.metadata, *md_time) {
                 format_system_time(
-                    &mut stdout(),
+                    &mut uucore::streams::stdout(),
                     time,
                     &self.time_format,
                     FormatSystemTimeFallback::IntegerError,
@@ -917,7 +917,7 @@ impl StatPrinter {
 fn read_files_from(file_name: &OsStr) -> Result<Vec<PathBuf>, std::io::Error> {
     let reader: Box<dyn BufRead> = if file_name == "-" {
         // Read from standard input
-        Box::new(BufReader::new(std::io::stdin()))
+        Box::new(BufReader::new(uucore::streams::stdin()))
     } else {
         // First, check if the file_name is a directory
         let path = PathBuf::from(file_name);

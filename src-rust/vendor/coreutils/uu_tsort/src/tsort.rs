@@ -58,7 +58,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     // Create the directed graph from pairs of tokens in the input data.
     let mut g = Graph::new(input.to_string_lossy().to_string());
     if input == "-" {
-        process_input(io::stdin().lock(), &mut g)?;
+        process_input(uucore::streams::stdin().lock(), &mut g)?;
     } else {
         // Windows reports a permission denied error when trying to read a directory.
         // So we check manually beforehand. On other systems, we avoid this extra check for performance.

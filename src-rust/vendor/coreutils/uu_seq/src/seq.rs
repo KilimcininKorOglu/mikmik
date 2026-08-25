@@ -4,7 +4,7 @@
 // file that was distributed with this source code.
 // spell-checker:ignore (ToDO) bigdecimal extendedbigdecimal numberparse hexadecimalfloat biguint
 use std::ffi::{OsStr, OsString};
-use std::io::{BufWriter, Write, stdout};
+use std::io::{BufWriter, Write};
 
 use clap::{Arg, ArgAction, Command};
 use num_bigint::BigUint;
@@ -355,7 +355,7 @@ fn print_seq(
     fast_allowed: bool,
     padding: usize, // Used by fast path only
 ) -> std::io::Result<()> {
-    let stdout = stdout().lock();
+    let stdout = uucore::streams::stdout().lock();
     let mut stdout = BufWriter::new(stdout);
     let (first, increment, last) = range;
 

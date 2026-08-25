@@ -10,7 +10,7 @@ use std::env;
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write, stdout};
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
 use clap::{Arg, ArgAction, Command};
@@ -150,7 +150,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             ));
         }
 
-        writeln!(stdout(), "{}", generate_dircolors_config())?;
+        writeln!(uucore::streams::stdout(), "{}", generate_dircolors_config())?;
         return Ok(());
     }
 
@@ -178,17 +178,17 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
 
     let result;
     if files.is_empty() {
-        writeln!(stdout(), "{}", generate_ls_colors(&out_format, ":"))?;
+        writeln!(uucore::streams::stdout(), "{}", generate_ls_colors(&out_format, ":"))?;
         return Ok(());
         /*
         // Check if data is being piped into the program
-        if std::io::stdin().is_terminal() {
+        if uucore::streams::stdin().is_terminal() {
             // No data piped, use default behavior
-            writeln!(stdout(), "{}", generate_ls_colors(&out_format, ":"))?;
+            writeln!(uucore::streams::stdout(), "{}", generate_ls_colors(&out_format, ":"))?;
             return Ok(());
         } else {
             // Data is piped, process the input from stdin
-            let fin = BufReader::new(std::io::stdin());
+            let fin = BufReader::new(uucore::streams::stdin());
             result = parse(fin.lines().map_while(Result::ok), &out_format, "-");
         }
          */
@@ -198,7 +198,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             translate!("dircolors-error-extra-operand", "operand" => files[1].quote()),
         ));
     } else if files[0] == "-" {
-        let fin = BufReader::new(std::io::stdin());
+        let fin = BufReader::new(uucore::streams::stdin());
         // For example, for echo "owt 40;33"|dircolors -b -
         result = parse(
             fin.lines().map_while(Result::ok),
@@ -230,7 +230,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
 
     match result {
         Ok(s) => {
-            writeln!(stdout(), "{s}")?;
+            writeln!(uucore::streams::stdout(), "{s}")?;
             Ok(())
         }
         Err(s) => Err(USimpleError::new(1, s)),

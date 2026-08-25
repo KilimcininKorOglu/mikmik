@@ -8,7 +8,9 @@
 use std::cmp::Ordering;
 use std::ffi::OsString;
 use std::fs::{File, metadata};
-use std::io::{self, BufRead, BufReader, BufWriter, Read, StdinLock, Write, stderr, stdin};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
+// MikMik patch: the redirectable stand-in for `std::io::StdinLock`.
+use uucore::streams::StdinLock;
 use std::path::Path;
 use uucore::display::Quotable;
 use uucore::error::{FromIo, UResult, USimpleError};
@@ -56,13 +58,13 @@ struct OrderChecker {
 }
 
 enum Input {
-    Stdin(StdinLock<'static>),
+    Stdin(StdinLock),
     FileIn(BufReader<File>),
 }
 
 impl Input {
     fn stdin() -> Self {
-        Self::Stdin(stdin().lock())
+        Self::Stdin(uucore::streams::stdin().lock())
     }
 
     fn from_file(f: File) -> Self {
@@ -115,7 +117,7 @@ impl OrderChecker {
         let is_ordered = *current_line >= *self.last_line;
         if !is_ordered && !self.has_error {
             let _ = writeln!(
-                stderr(),
+                uucore::streams::stderr(),
                 "{}",
                 translate!("comm-error-file-not-sorted", "file_num" => self.file_num.as_str())
             );
@@ -209,7 +211,7 @@ fn comm(
     let delim_col_2 = delim.repeat(width_col_1);
     let delim_col_3 = delim.repeat(width_col_1 + width_col_2);
 
-    let mut writer = BufWriter::new(io::stdout().lock());
+    let mut writer = BufWriter::new(uucore::streams::stdout().lock());
 
     let ra = &mut Vec::new();
     let mut na = a
@@ -317,7 +319,7 @@ fn comm(
     if should_check_order && (checker1.has_error || checker2.has_error) {
         // Print the input error message once at the end
         if input_error {
-            let _ = writeln!(stderr(), "{}", translate!("comm-error-input-not-sorted"));
+            let _ = writeln!(uucore::streams::stderr(), "{}", translate!("comm-error-input-not-sorted"));
         }
         Err(USimpleError::new(1, ""))
     } else {

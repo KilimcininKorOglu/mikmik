@@ -54,11 +54,20 @@ fn get_color_choice() -> clap::ColorChoice {
 
 /// Generic helper to check if colors should be enabled for a given stream
 fn should_use_color_for_stream<S: std::io::IsTerminal>(stream: &S) -> bool {
+    should_use_color(stream.is_terminal())
+}
+
+/// Whether colour belongs in the output, given whether the stream is a
+/// terminal.
+///
+/// MikMik patch: the redirectable stand-ins cannot implement the sealed
+/// `IsTerminal` trait, so the answer they already know is passed in.
+fn should_use_color(is_terminal: bool) -> bool {
     match get_color_choice() {
         clap::ColorChoice::Always => true,
         clap::ColorChoice::Never => false,
         clap::ColorChoice::Auto => {
-            stream.is_terminal() && std::env::var("TERM").unwrap_or_default() != "dumb"
+            is_terminal && std::env::var("TERM").unwrap_or_default() != "dumb"
         }
     }
 }
@@ -520,7 +529,7 @@ pub fn configure_localized_command(mut cmd: Command) -> Command {
     cmd = cmd.color(color_choice);
 
     // For help output (stdout), we check stdout TTY status
-    let colors_enabled = should_use_color_for_stream(&std::io::stdout());
+    let colors_enabled = should_use_color(crate::streams::stdout().is_terminal());
 
     cmd = cmd.help_template(crate::localized_help_template_with_colors(
         crate::util_name(),

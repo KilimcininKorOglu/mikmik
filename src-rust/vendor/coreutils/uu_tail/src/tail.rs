@@ -30,7 +30,7 @@ use paths::{FileExtTail, HeaderPrinter, Input, InputKind};
 use same_file::Handle;
 use std::cmp::Ordering;
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write, stdin, stdout};
+use std::io::{self, BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use uucore::display::Quotable;
 use uucore::error::{FromIo, UResult, USimpleError, set_exit_code};
@@ -322,7 +322,7 @@ fn tail_stdin(
                 );
             }
         } else {
-            let mut reader = BufReader::new(stdin());
+            let mut reader = BufReader::new(uucore::streams::stdin());
             unbounded_tail(&mut reader, settings)?;
         }
     }
@@ -503,7 +503,7 @@ fn bounded_tail(file: &mut File, settings: &Settings) {
 }
 
 fn unbounded_tail<T: Read>(reader: &mut BufReader<T>, settings: &Settings) -> UResult<()> {
-    let mut writer = BufWriter::new(stdout().lock());
+    let mut writer = BufWriter::new(uucore::streams::stdout().lock());
     match &settings.mode {
         FilterMode::Lines(Signum::Negative(count), sep) => {
             let mut chunks = chunks::LinesChunkBuffer::new(*sep, *count);
@@ -585,7 +585,7 @@ where
     R: Read + ?Sized,
 {
     // Print the target section of the file.
-    let stdout = stdout();
+    let stdout = uucore::streams::stdout();
     let mut stdout = stdout.lock();
     if let Some(limit) = limit {
         let mut reader = file.take(limit);

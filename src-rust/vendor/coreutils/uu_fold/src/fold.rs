@@ -7,7 +7,7 @@
 
 use clap::{Arg, ArgAction, Command};
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Read, Write, stdin, stdout};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use unicode_width::UnicodeWidthChar;
 use uucore::display::Quotable;
@@ -145,14 +145,14 @@ fn fold(
     spaces: bool,
     width: usize,
 ) -> UResult<()> {
-    let mut output = BufWriter::new(stdout());
+    let mut output = BufWriter::new(uucore::streams::stdout());
 
     for filename in filenames {
         let filename: &str = filename;
         let mut stdin_buf;
         let mut file_buf;
         let buffer = BufReader::new(if filename == "-" {
-            stdin_buf = stdin();
+            stdin_buf = uucore::streams::stdin();
             &mut stdin_buf as &mut dyn Read
         } else {
             file_buf = File::open(Path::new(filename)).map_err_context(|| filename.to_string())?;

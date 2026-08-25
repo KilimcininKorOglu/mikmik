@@ -236,7 +236,7 @@ impl Source {
     /// the entire contents of stdin when this process terminates.
     #[cfg(unix)]
     fn stdin_as_file() -> Self {
-        let fd = io::stdin().as_raw_fd();
+        let fd = uucore::streams::stdin().as_raw_fd();
         let f = unsafe { File::from_raw_fd(fd) };
         Self::StdinFile(f)
     }
@@ -361,7 +361,7 @@ impl<'a> Input<'a> {
     fn new_stdin(settings: &'a Settings) -> UResult<Self> {
         #[cfg(not(unix))]
         let mut src = {
-            let f = File::from(io::stdin().as_handle().try_clone_to_owned()?);
+            let f = File::from(uucore::streams::stdin().as_handle().try_clone_to_owned()?);
             let is_file = if let Ok(metadata) = f.metadata() {
                 // this hack is needed as there is no other way on windows
                 // to differentiate between the case where `seek` works
@@ -375,7 +375,7 @@ impl<'a> Input<'a> {
             if is_file {
                 Source::File(f)
             } else {
-                Source::Stdin(io::stdin())
+                Source::Stdin(uucore::streams::stdin())
             }
         };
         #[cfg(unix)]
@@ -825,7 +825,7 @@ struct Output<'a> {
 impl<'a> Output<'a> {
     /// Instantiate this struct with stdout as a destination.
     fn new_stdout(settings: &'a Settings) -> UResult<Self> {
-        let fx = OwnedFileDescriptorOrHandle::from(io::stdout())?;
+        let fx = OwnedFileDescriptorOrHandle::from(uucore::streams::stdout())?;
         let mut dst = Dest::Stdout(fx.into_file());
         dst.seek(settings.seek, settings.obs)
             .map_err_context(|| translate!("dd-error-write-error"))?;
@@ -886,7 +886,7 @@ impl<'a> Output<'a> {
     /// already opened by the system (stdout) and has a state
     /// (current position) that shall be used.
     fn new_file_from_stdout(settings: &'a Settings) -> UResult<Self> {
-        let fx = OwnedFileDescriptorOrHandle::from(io::stdout())?;
+        let fx = OwnedFileDescriptorOrHandle::from(uucore::streams::stdout())?;
         #[cfg(any(target_os = "linux", target_os = "android"))]
         if let Some(libc_flags) = make_linux_oflags(&settings.oflags) {
             nix::fcntl::fcntl(

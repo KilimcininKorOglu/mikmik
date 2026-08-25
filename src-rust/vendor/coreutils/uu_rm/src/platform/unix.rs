@@ -10,7 +10,6 @@
 use indicatif::ProgressBar;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{IsTerminal, stdin};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use uucore::display::Quotable;
@@ -45,7 +44,7 @@ fn prompt_file_with_stat(path: &Path, stat: &libc::stat, options: &Options) -> b
     let is_symlink = ((stat.st_mode as libc::mode_t) & libc::S_IFMT) == libc::S_IFLNK;
     let writable = mode_writable(stat.st_mode as libc::mode_t);
     let len = stat.st_size as u64;
-    let stdin_ok = options.__presume_input_tty.unwrap_or(false) || stdin().is_terminal();
+    let stdin_ok = options.__presume_input_tty.unwrap_or(false) || uucore::streams::stdin().is_terminal();
 
     // Match original behaviour:
     // - Interactive::Always: always prompt; use non-protected wording when writable,
@@ -84,7 +83,7 @@ fn prompt_dir_with_mode(path: &Path, mode: libc::mode_t, options: &Options) -> b
 
     let readable = mode_readable(mode as libc::mode_t);
     let writable = mode_writable(mode as libc::mode_t);
-    let stdin_ok = options.__presume_input_tty.unwrap_or(false) || stdin().is_terminal();
+    let stdin_ok = options.__presume_input_tty.unwrap_or(false) || uucore::streams::stdin().is_terminal();
 
     match (stdin_ok, readable, writable, options.interactive) {
         (false, _, _, InteractiveMode::PromptProtected) => true,

@@ -9,7 +9,7 @@ use clap::{
 };
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write, stdin, stdout};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::num::IntErrorKind;
 use uucore::display::Quotable;
 use uucore::error::{FromIo, UError, UResult, USimpleError};
@@ -830,7 +830,7 @@ fn open_input_file(in_file_name: Option<&OsStr>) -> UResult<Box<dyn BufRead>> {
             )?;
             Box::new(BufReader::new(in_file))
         }
-        _ => Box::new(stdin().lock()),
+        _ => Box::new(uucore::streams::stdin().lock()),
     })
 }
 
@@ -845,7 +845,7 @@ fn open_output_file(out_file_name: Option<&OsStr>) -> UResult<Box<dyn Write>> {
         }
         _ => Box::new(BufWriter::with_capacity(
             OUTPUT_BUFFER_CAPACITY,
-            stdout().lock(),
+            uucore::streams::stdout().lock(),
         )),
     })
 }

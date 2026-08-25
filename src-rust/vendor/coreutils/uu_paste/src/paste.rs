@@ -7,7 +7,9 @@ use clap::{Arg, ArgAction, Command};
 use std::cell::{OnceCell, RefCell};
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Stdin, Write, stdin, stdout};
+use std::io::{BufRead, BufReader, Read, Write};
+// MikMik patch: the redirectable stand-in for `std::io::Stdin`.
+use uucore::streams::Stdin;
 use std::iter::Cycle;
 use std::path::Path;
 use std::rc::Rc;
@@ -99,7 +101,7 @@ fn paste(
         let input_source = if filename == "-" {
             InputSource::StandardInput(
                 stdin_once_cell
-                    .get_or_init(|| Rc::new(RefCell::new(stdin())))
+                    .get_or_init(|| Rc::new(RefCell::new(uucore::streams::stdin())))
                     .clone(),
             )
         } else {
@@ -113,7 +115,7 @@ fn paste(
 
     let line_ending_byte = u8::from(line_ending);
     let input_source_vec_len = input_source_vec.len();
-    let mut stdout = stdout().lock();
+    let mut stdout = uucore::streams::stdout().lock();
 
     if !serial && input_source_vec_len == 1 {
         // With a single input source (no -s), `paste` output is identical to input,

@@ -227,7 +227,7 @@ impl ProgUpdate {
     ///
     /// See [`ProgUpdate::write_io_lines`] for more information.
     pub(crate) fn print_io_lines(&self) {
-        let mut stderr = std::io::stderr();
+        let mut stderr = uucore::streams::stderr();
         if self.write_io_lines(&mut stderr).is_err() {
             set_exit_code(1);
         }
@@ -237,7 +237,7 @@ impl ProgUpdate {
     ///
     /// See [`ProgUpdate::write_prog_line`] for more information.
     pub(crate) fn reprint_prog_line(&self) {
-        let mut stderr = std::io::stderr();
+        let mut stderr = uucore::streams::stderr();
         let rewrite = true;
         if self.write_prog_line(&mut stderr, rewrite).is_err() {
             set_exit_code(1);
@@ -248,7 +248,7 @@ impl ProgUpdate {
     ///
     /// See [`ProgUpdate::write_transfer_stats`] for more information.
     pub(crate) fn print_transfer_stats(&self, new_line: bool) {
-        let mut stderr = std::io::stderr();
+        let mut stderr = uucore::streams::stderr();
         if self.write_transfer_stats(&mut stderr, new_line).is_err() {
             set_exit_code(1);
         }

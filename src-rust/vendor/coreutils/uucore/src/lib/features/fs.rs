@@ -7,16 +7,19 @@
 
 // spell-checker:ignore backport
 
+#[cfg(unix)]
+use libc::mkfifo;
 #[cfg(all(unix, not(target_os = "redox")))]
 pub use libc::{major, makedev, minor};
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::env;
+#[cfg(unix)]
+use std::ffi::CString;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::fs::read_dir;
 use std::hash::Hash;
-use std::io::Stdin;
 use std::io::{Error, ErrorKind, Result as IOResult};
 #[cfg(unix)]
 use std::os::fd::AsFd;
@@ -39,7 +42,7 @@ macro_rules! has {
 
 /// Information to uniquely identify a file
 pub struct FileInformation(
-    #[cfg(unix)] rustix::fs::Stat,
+    #[cfg(unix)] nix::sys::stat::FileStat,
     #[cfg(windows)] winapi_util::file::Information,
     // WASI does not have nix::sys::stat, so we store std::fs::Metadata instead.
     #[cfg(target_os = "wasi")] fs::Metadata,
@@ -49,7 +52,7 @@ impl FileInformation {
     /// Get information from a currently open file
     #[cfg(unix)]
     pub fn from_file(file: &impl AsFd) -> IOResult<Self> {
-        let stat = rustix::fs::fstat(file)?;
+        let stat = nix::sys::stat::fstat(file)?;
         Ok(Self(stat))
     }
 
@@ -68,9 +71,9 @@ impl FileInformation {
         #[cfg(unix)]
         {
             let stat = if dereference {
-                rustix::fs::stat(path.as_ref())
+                nix::sys::stat::stat(path.as_ref())
             } else {
-                rustix::fs::lstat(path.as_ref())
+                nix::sys::stat::lstat(path.as_ref())
             };
             Ok(Self(stat?))
         }
@@ -431,11 +434,12 @@ pub fn canonicalize<P: AsRef<Path>>(
                 }
                 result.pop();
             }
-            Err(e)
-                if (miss_mode == MissingHandling::Existing
-                    || (miss_mode == MissingHandling::Normal && !parts.is_empty())) =>
-            {
-                return Err(e);
+            Err(e) => {
+                if miss_mode == MissingHandling::Existing
+                    || (miss_mode == MissingHandling::Normal && !parts.is_empty())
+                {
+                    return Err(e);
+                }
             }
             _ => {}
         }
@@ -789,24 +793,20 @@ pub fn path_ends_with_terminator(path: &Path) -> bool {
 /// # Returns
 ///
 /// * `bool` - Returns `true` if stdin is a directory, `false` otherwise.
-pub fn is_stdin_directory(stdin: &Stdin) -> bool {
+///
+/// MikMik patch: generic over the handle rather than tied to
+/// [`std::io::Stdin`], so the redirectable stand-in can be passed as well. On
+/// Windows the bound is `AsRawHandle`, which is what that branch already used.
+#[cfg(not(windows))]
+pub fn is_stdin_directory<S: AsFd>(stdin: &S) -> bool {
     #[cfg(unix)]
     {
         use mode::{S_IFDIR, S_IFMT};
-        let mode = rustix::fs::fstat(stdin.as_fd()).unwrap().st_mode as u32;
+        use nix::sys::stat::fstat;
+        let mode = fstat(stdin.as_fd()).unwrap().st_mode as u32;
         // We use the S_IFMT mask ala S_ISDIR() to avoid mistaking
         // sockets for directories.
         mode & S_IFMT == S_IFDIR
-    }
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::io::AsRawHandle;
-        let handle = stdin.as_raw_handle();
-        if let Ok(metadata) = fs::metadata(format!("{}", handle as usize)) {
-            return metadata.is_dir();
-        }
-        false
     }
 
     // WASI: stdin is never a directory
@@ -815,6 +815,19 @@ pub fn is_stdin_directory(stdin: &Stdin) -> bool {
         let _ = stdin;
         false
     }
+}
+
+/// Whether standard input is a directory.
+///
+/// MikMik patch: the Windows half of the function above, split out because the
+/// two platforms need different bounds on the handle.
+#[cfg(windows)]
+pub fn is_stdin_directory<S: std::os::windows::io::AsRawHandle>(stdin: &S) -> bool {
+    let handle = stdin.as_raw_handle();
+    if let Ok(metadata) = fs::metadata(format!("{}", handle as usize)) {
+        return metadata.is_dir();
+    }
+    false
 }
 
 pub mod sane_blksize {
@@ -888,6 +901,37 @@ pub fn get_filename(file: &Path) -> Option<&str> {
     file.file_name().and_then(|filename| filename.to_str())
 }
 
+/// Make a FIFO, also known as a named pipe.
+///
+/// This is a safe wrapper for the unsafe [`libc::mkfifo`] function,
+/// which makes a [named
+/// pipe](https://en.wikipedia.org/wiki/Named_pipe) on Unix systems.
+///
+/// # Errors
+///
+/// If the named pipe cannot be created.
+///
+/// # Examples
+///
+/// ```ignore
+/// use uucore::fs::make_fifo;
+///
+/// make_fifo("my-pipe").expect("failed to create the named pipe");
+///
+/// std::thread::spawn(|| { std::fs::write("my-pipe", b"hello").unwrap(); });
+/// assert_eq!(std::fs::read("my-pipe").unwrap(), b"hello");
+/// ```
+#[cfg(unix)]
+pub fn make_fifo(path: &Path) -> std::io::Result<()> {
+    let name = CString::new(path.to_str().unwrap()).unwrap();
+    let err = unsafe { mkfifo(name.as_ptr(), 0o666) };
+    if err == -1 {
+        Err(Error::from_raw_os_error(err))
+    } else {
+        Ok(())
+    }
+}
+
 // Redox's libc appears not to include the following utilities
 
 #[cfg(target_os = "redox")]
@@ -914,6 +958,8 @@ mod tests {
     use std::io::Write;
     #[cfg(unix)]
     use std::os::unix;
+    #[cfg(unix)]
+    use std::os::unix::fs::FileTypeExt;
     #[cfg(unix)]
     use tempfile::{NamedTempFile, tempdir};
 
@@ -1178,5 +1224,26 @@ mod tests {
     fn test_get_file_name() {
         let file_path = PathBuf::from("~/foo.txt");
         assert!(matches!(get_filename(&file_path), Some("foo.txt")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_make_fifo() {
+        // Create the FIFO in a temporary directory.
+        let tempdir = tempdir().unwrap();
+        let path = tempdir.path().join("f");
+        assert!(make_fifo(&path).is_ok());
+
+        // Check that it is indeed a FIFO.
+        assert!(fs::metadata(&path).unwrap().file_type().is_fifo());
+
+        // Check that we can write to it and read from it.
+        //
+        // Write and read need to happen in different threads,
+        // otherwise `write` would block indefinitely while waiting
+        // for the `read`.
+        let path2 = path.clone();
+        std::thread::spawn(move || assert!(fs::write(&path2, b"foo").is_ok()));
+        assert_eq!(fs::read(&path).unwrap(), b"foo");
     }
 }

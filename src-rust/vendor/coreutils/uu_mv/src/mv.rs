@@ -20,7 +20,7 @@ use rustc_hash::FxHashSet;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, IsTerminal};
+use std::io;
 #[cfg(unix)]
 use std::os::unix;
 #[cfg(unix)]
@@ -431,7 +431,7 @@ fn handle_two_paths(source: &Path, target: &Path, opts: &Options) -> UResult<()>
             OverwriteMode::Force => {}
             OverwriteMode::Default => {
                 let (writable, mode) = is_writable(target);
-                if !writable && io::stdin().is_terminal() {
+                if !writable && uucore::streams::stdin().is_terminal() {
                     prompt_overwrite(target, mode)?;
                 }
             }
@@ -730,7 +730,7 @@ fn rename(
             OverwriteMode::Default => {
                 // GNU mv prompts when stdin is a TTY and target is not writable
                 let (writable, mode) = is_writable(to);
-                if !writable && io::stdin().is_terminal() {
+                if !writable && uucore::streams::stdin().is_terminal() {
                     prompt_overwrite(to, mode)?;
                 }
             }

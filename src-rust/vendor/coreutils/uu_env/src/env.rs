@@ -33,9 +33,7 @@ use std::env;
 #[cfg(unix)]
 use std::ffi::CString;
 use std::ffi::{OsStr, OsString};
-use std::io;
 use std::io::Write as _;
-use std::io::stderr;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 
@@ -312,7 +310,7 @@ fn load_config_file(opts: &mut Options) -> UResult<()> {
     //   ... * but support for actual INI files, although working, is not intended, nor claimed
     for &file in &opts.files {
         let conf = if file == "-" {
-            let stdin = io::stdin();
+            let stdin = uucore::streams::stdin();
             let mut stdin_locked = stdin.lock();
             Ini::read_from(&mut stdin_locked)
         } else {
@@ -497,7 +495,7 @@ pub fn parse_args_from_str(text: &NativeIntStr) -> UResult<Vec<NativeIntString>>
 }
 
 fn debug_print_args(args: &[OsString]) {
-    let mut error = stderr().lock();
+    let mut error = uucore::streams::stderr().lock();
     let _ = writeln!(error, "input args:");
     for (i, arg) in args.iter().enumerate() {
         let _ = writeln!(error, "arg[{i}]: {}", arg.quote());
@@ -668,7 +666,7 @@ impl EnvAppData {
                         let formatter = uucore::clap_localization::ErrorFormatter::new("env");
                         formatter.print_error_and_exit_with_callback(&e, 125, || {
                             let _ = writeln!(
-                                stderr(),
+                                uucore::streams::stderr(),
                                 "env: {}",
                                 translate!("env-error-use-s-shebang")
                             );
@@ -781,7 +779,7 @@ impl EnvAppData {
             Some(argv0) if cfg!(unix) => {
                 let arg0 = Cow::Borrowed(argv0);
                 if do_debug_printing {
-                    let _ = writeln!(stderr(), "argv0:     {}", arg0.quote());
+                    let _ = writeln!(uucore::streams::stderr(), "argv0:     {}", arg0.quote());
                 }
                 arg0
             }
@@ -796,7 +794,7 @@ impl EnvAppData {
         let args = &opts.program[1..];
 
         if do_debug_printing {
-            let mut error = stderr().lock();
+            let mut error = uucore::streams::stderr().lock();
             let _ = writeln!(error, "executing: {}", prog.maybe_quote());
             let arg_prefix = "   arg";
             let _ = writeln!(error, "{arg_prefix}[{}]= {}", 0, arg0.quote());

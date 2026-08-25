@@ -11,7 +11,9 @@ use memchr::{Memchr3, memchr_iter, memmem::Finder};
 use std::cmp::Ordering;
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Split, Stdin, Write, stdin, stdout};
+use std::io::{BufRead, BufReader, BufWriter, Split, Write};
+// MikMik patch: the redirectable stand-in for `std::io::Stdin`.
+use uucore::streams::Stdin;
 use std::num::IntErrorKind;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -980,7 +982,7 @@ fn exec<Sep: Separator>(
     settings: Settings,
     sep: Sep,
 ) -> UResult<()> {
-    let stdin = stdin();
+    let stdin = uucore::streams::stdin();
 
     let mut state1 = State::new(
         FileNum::File1,
@@ -1029,7 +1031,7 @@ fn exec<Sep: Separator>(
 
     let repr = Repr::new(settings.line_ending, sep, format, &settings.empty);
 
-    let stdout = stdout();
+    let stdout = uucore::streams::stdout();
     let mut writer = BufWriter::new(stdout.lock());
 
     if settings.headers {

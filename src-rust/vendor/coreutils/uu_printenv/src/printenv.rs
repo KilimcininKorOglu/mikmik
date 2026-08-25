@@ -41,7 +41,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             continue;
         }
         if let Some(var) = env::var_os(env_var) {
-            let mut stdout = std::io::stdout().lock();
+            let mut stdout = uucore::streams::stdout().lock();
             stdout.write_all_os(&var)?;
             write!(stdout, "{separator}")?;
         } else {

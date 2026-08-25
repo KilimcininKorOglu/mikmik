@@ -7,7 +7,7 @@
 use std::fs::File;
 use std::io;
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::AsFd;
 
 use uucore::display::Quotable;
 use uucore::show_error;
@@ -56,12 +56,17 @@ impl MultifileReader<'_> {
                     // For performance reasons we do still do buffered reads from stdin, but
                     // the buffering is done elsewhere and in a way that is aware of the `-N`
                     // limit.
-                    let stdin = io::stdin();
+                    let stdin = uucore::streams::stdin();
                     #[cfg(unix)]
                     {
-                        let stdin_raw_fd = stdin.as_raw_fd();
-                        let stdin_file = unsafe { File::from_raw_fd(stdin_raw_fd) };
-                        self.curr_file = Some(Box::new(stdin_file));
+                        // MikMik patch: upstream builds the `File` from the raw
+                        // descriptor, which closes descriptor 0 when the file is
+                        // dropped. The stream may belong to a host that is still
+                        // using it, so the descriptor is duplicated instead.
+                        match stdin.as_fd().try_clone_to_owned() {
+                            Ok(owned) => self.curr_file = Some(Box::new(File::from(owned))),
+                            Err(_) => self.curr_file = Some(Box::new(stdin)),
+                        }
                     }
 
                     // For non-unix platforms we don't have GNU compatibility requirements, so

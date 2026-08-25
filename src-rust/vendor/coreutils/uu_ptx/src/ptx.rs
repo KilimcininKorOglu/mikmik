@@ -11,7 +11,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write as FmtWrite;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Read, Write, stdin, stdout};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::num::ParseIntError;
 use std::path::Path;
 
@@ -73,7 +73,7 @@ fn read_word_filter_file(
         .get_one::<OsString>(option)
         .expect("parsing options failed!");
     let reader: BufReader<Box<dyn Read>> = BufReader::new(if filename == "-" {
-        Box::new(stdin())
+        Box::new(uucore::streams::stdin())
     } else {
         let file = File::open(Path::new(filename))?;
         Box::new(file)
@@ -94,7 +94,7 @@ fn read_char_filter_file(
         .get_one::<OsString>(option)
         .expect("parsing options failed!");
     let mut reader: Box<dyn Read> = if filename == "-" {
-        Box::new(stdin())
+        Box::new(uucore::streams::stdin())
     } else {
         let file = File::open(Path::new(filename))?;
         Box::new(file)
@@ -292,7 +292,7 @@ fn read_input(input_files: &[OsString], config: &Config) -> std::io::Result<File
 
     for filename in input_files {
         let mut reader: BufReader<Box<dyn Read>> = BufReader::new(if filename == "-" {
-            Box::new(stdin())
+            Box::new(uucore::streams::stdin())
         } else {
             let file = File::open(Path::new(filename))?;
             Box::new(file)
@@ -784,7 +784,7 @@ fn write_traditional_output(
 ) -> UResult<()> {
     let mut writer: BufWriter<Box<dyn Write>> =
         BufWriter::new(if output_filename == OsStr::new("-") {
-            Box::new(stdout())
+            Box::new(uucore::streams::stdout())
         } else {
             let file = File::create(output_filename)
                 .map_err_context(|| output_filename.quote().to_string())?;

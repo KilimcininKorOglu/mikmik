@@ -4,7 +4,6 @@
 // file that was distributed with this source code.
 use clap::{Arg, ArgAction, Command};
 use std::ffi::OsString;
-use std::io::stdout;
 use std::ops::ControlFlow;
 use uucore::display::Quotable;
 use uucore::error::{UResult, UUsageError};
@@ -43,7 +42,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         if let Ok(FormatItem::Spec(_)) = item {
             format_seen = true;
         }
-        match item?.write(stdout(), &mut args)? {
+        match item?.write(uucore::streams::stdout(), &mut args)? {
             ControlFlow::Continue(()) => {}
             ControlFlow::Break(()) => return Ok(()),
         }
@@ -70,7 +69,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
 
     while !args.is_exhausted() {
         for item in parse_spec_and_escape(format) {
-            match item?.write(stdout(), &mut args)? {
+            match item?.write(uucore::streams::stdout(), &mut args)? {
                 ControlFlow::Continue(()) => {}
                 ControlFlow::Break(()) => return Ok(()),
             }

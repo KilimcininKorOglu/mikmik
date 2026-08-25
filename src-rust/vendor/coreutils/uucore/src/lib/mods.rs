@@ -14,3 +14,5 @@ pub mod locale;
 pub mod os;
 pub mod panic;
 pub mod posix;
+// MikMik patch: the three standard streams, redirectable per thread.
+pub mod streams;

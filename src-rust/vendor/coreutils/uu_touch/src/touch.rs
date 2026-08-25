@@ -828,7 +828,7 @@ fn pathbuf_from_stdout() -> Result<PathBuf, TouchError> {
             FILE_NAME_OPENED, GetFinalPathNameByHandleW,
         };
 
-        let handle = std::io::stdout().lock().as_raw_handle() as HANDLE;
+        let handle = uucore::streams::stdout().lock().as_raw_handle() as HANDLE;
         let mut file_path_buffer: [u16; MAX_PATH as usize] = [0; MAX_PATH as usize];
 
         // https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfinalpathnamebyhandlea#examples

@@ -9,7 +9,7 @@ use clap::{Arg, ArgAction, Command};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::io::{Write, stdout};
+use std::io::{Write};
 use std::path::{Path, PathBuf};
 use uucore::display::Quotable;
 use uucore::error::{FromIo, UResult, UUsageError};
@@ -188,7 +188,7 @@ pub fn uu_app() -> Command {
 fn show(path: &Path, line_ending: Option<LineEnding>) -> std::io::Result<()> {
     uucore::display::print_verbatim(path)?;
     if let Some(line_ending) = line_ending {
-        write!(stdout(), "{line_ending}")?;
+        write!(uucore::streams::stdout(), "{line_ending}")?;
     }
-    stdout().flush()
+    uucore::streams::stdout().flush()
 }

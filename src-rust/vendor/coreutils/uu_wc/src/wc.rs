@@ -300,7 +300,7 @@ fn is_stdin_small_file() -> bool {
     use std::os::fd::AsFd;
 
     matches!(
-        rustix::fs::fstat(io::stdin().as_fd()),
+        rustix::fs::fstat(uucore::streams::stdin().as_fd()),
         Ok(meta) if meta.st_mode as libc::mode_t & libc::S_IFMT == libc::S_IFREG && meta.st_size <= (10 << 20)
     )
 }
@@ -694,7 +694,7 @@ enum CountResult {
 /// return an error: ([`WordCount`], `Option<io::Error>`).
 fn word_count_from_input(input: &Input<'_>, settings: &Settings) -> CountResult {
     let (total, maybe_err) = match input {
-        Input::Stdin(_) => word_count_from_reader(io::stdin().lock(), settings),
+        Input::Stdin(_) => word_count_from_reader(uucore::streams::stdin().lock(), settings),
         Input::Path(path) => match File::open(path) {
             Ok(f) => word_count_from_reader(f, settings),
             Err(err) => return CountResult::Failure(err),
@@ -767,7 +767,7 @@ type InputIterItem<'a> = Result<Input<'a>, Box<dyn UError>>;
 /// To be used with `--files0-from=-`, this applies a filter on the results of [`files0_iter`] to
 /// translate '-' into the appropriate error.
 fn files0_iter_stdin<'a>() -> impl Iterator<Item = InputIterItem<'a>> {
-    files0_iter(io::stdin().lock(), STDIN_REPR.into()).map(|i| match i {
+    files0_iter(uucore::streams::stdin().lock(), STDIN_REPR.into()).map(|i| match i {
         Ok(Input::Stdin(_)) => Err(WcError::StdinReprNotAllowed.into()),
         _ => i,
     })
@@ -993,7 +993,7 @@ fn wc(inputs: &Inputs, settings: &Settings) -> UResult<()> {
         }
         // Print deferred error after stats to match GNU wc output order
         if let Some(err) = deferred_error {
-            let _ = io::stdout().flush();
+            let _ = uucore::streams::stdout().flush();
             show!(err);
         }
     }
@@ -1017,7 +1017,7 @@ fn print_stats(
     title: Option<&OsStr>,
     number_width: usize,
 ) -> io::Result<()> {
-    let mut stdout = io::stdout().lock();
+    let mut stdout = uucore::streams::stdout().lock();
 
     let maybe_cols = [
         (settings.show_lines, result.lines),

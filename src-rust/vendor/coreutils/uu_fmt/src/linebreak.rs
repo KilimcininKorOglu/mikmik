@@ -5,7 +5,9 @@
 
 // spell-checker:ignore (ToDO) INFTY MULT accum breakwords linebreak linebreaking linebreaks linelen maxlength minlength nchars ostream overlen parasplit plass posn powf punct signum slen sstart tabwidth tlen underlen winfo wlen wordlen
 
-use std::io::{BufWriter, Stdout, Write};
+use std::io::{BufWriter, Write};
+// MikMik patch: the redirectable stand-in for `std::io::Stdout`.
+use uucore::streams::Stdout;
 use std::mem;
 
 use crate::FmtOptions;

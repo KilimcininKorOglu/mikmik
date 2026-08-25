@@ -12,7 +12,7 @@ use clap::{Arg, ArgAction, Command};
 use memchr::memchr2;
 use std::ffi::OsString;
 use std::fs::{File, metadata};
-use std::io::{self, BufWriter, ErrorKind, IsTerminal, Read, Write};
+use std::io::{self, BufWriter, ErrorKind, Read, Write};
 #[cfg(unix)]
 use std::os::fd::AsFd;
 #[cfg(unix)]
@@ -369,13 +369,13 @@ fn cat_handle<R: FdReadable>(
 fn cat_path(path: &OsString, options: &OutputOptions, state: &mut OutputState) -> CatResult<()> {
     match get_input_type(path)? {
         InputType::StdIn => {
-            let stdin = io::stdin();
-            if is_unsafe_overwrite(&stdin, &io::stdout()) {
+            let stdin = uucore::streams::stdin();
+            if is_unsafe_overwrite(&stdin, &uucore::streams::stdout()) {
                 return Err(CatError::OutputIsInput);
             }
             let mut handle = InputHandle {
                 reader: stdin,
-                is_interactive: io::stdin().is_terminal(),
+                is_interactive: uucore::streams::stdin().is_terminal(),
             };
             cat_handle(&mut handle, options, state)
         }
@@ -384,7 +384,7 @@ fn cat_path(path: &OsString, options: &OutputOptions, state: &mut OutputState) -
         InputType::Socket => Err(CatError::NoSuchDeviceOrAddress),
         _ => {
             let file = File::open(path)?;
-            if is_unsafe_overwrite(&file, &io::stdout()) {
+            if is_unsafe_overwrite(&file, &uucore::streams::stdout()) {
                 return Err(CatError::OutputIsInput);
             }
             let mut handle = InputHandle {
@@ -477,7 +477,7 @@ fn get_input_type(path: &OsString) -> CatResult<InputType> {
 /// Writes handle to stdout with no configuration. This allows a
 /// simple memory copy.
 fn write_fast<R: FdReadable>(handle: &mut InputHandle<R>) -> CatResult<()> {
-    let stdout = io::stdout();
+    let stdout = uucore::streams::stdout();
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         // If we're on Linux or Android, try to use the splice() system call
@@ -522,7 +522,7 @@ fn write_lines<R: FdReadable>(
     state: &mut OutputState,
 ) -> CatResult<()> {
     let mut in_buf = [0; 1024 * 31];
-    let stdout = io::stdout();
+    let stdout = uucore::streams::stdout();
     let stdout = stdout.lock();
     // Add a 32K buffer for stdout - this greatly improves performance.
     let mut writer = BufWriter::with_capacity(32 * 1024, stdout);
@@ -715,25 +715,25 @@ fn handle_broken_pipe(error: &io::Error) {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{BufWriter, stdout};
+    use std::io::{BufWriter};
 
     #[test]
     fn test_write_tab_to_end_with_newline() {
-        let mut writer = BufWriter::with_capacity(1024 * 64, stdout());
+        let mut writer = BufWriter::with_capacity(1024 * 64, uucore::streams::stdout());
         let in_buf = b"a\tb\tc\n";
         assert_eq!(super::write_tab_to_end(in_buf, &mut writer).unwrap(), 5);
     }
 
     #[test]
     fn test_write_tab_to_end_no_newline() {
-        let mut writer = BufWriter::with_capacity(1024 * 64, stdout());
+        let mut writer = BufWriter::with_capacity(1024 * 64, uucore::streams::stdout());
         let in_buf = b"a\tb\tc";
         assert_eq!(super::write_tab_to_end(in_buf, &mut writer).unwrap(), 5);
     }
 
     #[test]
     fn test_write_nonprint_to_end_new_line() {
-        let mut writer = BufWriter::with_capacity(1024 * 64, stdout());
+        let mut writer = BufWriter::with_capacity(1024 * 64, uucore::streams::stdout());
         let in_buf = b"\n";
         let tab = b"";
         super::write_nonprint_to_end(in_buf, &mut writer, tab).unwrap();
@@ -742,7 +742,7 @@ mod tests {
 
     #[test]
     fn test_write_nonprint_to_end_9() {
-        let mut writer = BufWriter::with_capacity(1024 * 64, stdout());
+        let mut writer = BufWriter::with_capacity(1024 * 64, uucore::streams::stdout());
         let in_buf = &[9u8];
         let tab = b"tab";
         super::write_nonprint_to_end(in_buf, &mut writer, tab).unwrap();
@@ -752,7 +752,7 @@ mod tests {
     #[test]
     fn test_write_nonprint_to_end_0_to_8() {
         for byte in 0u8..=8u8 {
-            let mut writer = BufWriter::with_capacity(1024 * 64, stdout());
+            let mut writer = BufWriter::with_capacity(1024 * 64, uucore::streams::stdout());
             let in_buf = &[byte];
             let tab = b"";
             super::write_nonprint_to_end(in_buf, &mut writer, tab).unwrap();
@@ -763,7 +763,7 @@ mod tests {
     #[test]
     fn test_write_nonprint_to_end_10_to_31() {
         for byte in 11u8..=31u8 {
-            let mut writer = BufWriter::with_capacity(1024 * 64, stdout());
+            let mut writer = BufWriter::with_capacity(1024 * 64, uucore::streams::stdout());
             let in_buf = &[byte];
             let tab = b"";
             super::write_nonprint_to_end(in_buf, &mut writer, tab).unwrap();

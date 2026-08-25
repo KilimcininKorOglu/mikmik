@@ -172,7 +172,7 @@ pub fn instantiate_current_writer(
 pub fn paths_refer_to_same_file(p1: &OsStr, p2: &OsStr) -> bool {
     // We have to take symlinks and relative paths into account.
     let p1 = if p1 == "-" {
-        FileInformation::from_file(&std::io::stdin())
+        FileInformation::from_file(&uucore::streams::stdin())
     } else {
         FileInformation::from_path(Path::new(p1), true)
     };

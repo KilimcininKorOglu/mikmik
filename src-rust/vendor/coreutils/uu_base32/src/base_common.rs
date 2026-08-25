@@ -158,7 +158,7 @@ pub fn get_input(config: &Config) -> UResult<Box<dyn BufRead>> {
             // Stdin is already buffered by the OS; wrap once more to reduce syscalls per read.
             Ok(Box::new(BufReader::with_capacity(
                 DEFAULT_BUF_SIZE,
-                io::stdin(),
+                uucore::streams::stdin(),
             )))
         }
     }
@@ -169,7 +169,7 @@ pub fn handle_input<R: BufRead>(input: &mut R, format: Format, config: Config) -
         get_supports_fast_decode_and_encode(format, config.decode, true);
 
     let supports_fast_decode_and_encode_ref = supports_fast_decode_and_encode.as_ref();
-    let mut stdout_lock = io::stdout().lock();
+    let mut stdout_lock = uucore::streams::stdout().lock();
     let result = match (format, config.decode) {
         // Base58 must process the entire input as one big integer; keep the
         // historical behavior of buffering everything for this format only.

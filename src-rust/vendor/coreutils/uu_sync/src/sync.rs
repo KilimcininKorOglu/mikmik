@@ -68,9 +68,9 @@ mod platform {
         // Reset O_NONBLOCK flag if it was set (matches GNU behavior)
         // This is non-critical, so we log errors but don't fail
         if let Err(e) = fcntl(&f, FcntlArg::F_SETFL(OFlag::empty())) {
-            use std::io::{Write, stderr};
+            use std::io::{Write};
             let _ = writeln!(
-                stderr(),
+                uucore::streams::stderr(),
                 "sync: {}",
                 translate!("sync-warning-fcntl-failed", "file" => path, "error" => e.to_string())
             );

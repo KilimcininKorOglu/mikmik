@@ -5,7 +5,7 @@
 
 use clap::Command;
 use platform_info::{PlatformInfo, PlatformInfoAPI, UNameAPI};
-use std::io::{Write, stdout};
+use std::io::{Write};
 use uucore::error::{UResult, USimpleError};
 use uucore::translate;
 
@@ -16,7 +16,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let uts =
         PlatformInfo::new().map_err(|_e| USimpleError::new(1, translate!("cannot-get-system")))?;
 
-    writeln!(stdout(), "{}", uts.machine().to_string_lossy().trim())?;
+    writeln!(uucore::streams::stdout(), "{}", uts.machine().to_string_lossy().trim())?;
     Ok(())
 }
 

@@ -15,7 +15,7 @@ use crate::options::{
 use crate::units::{Result, Unit};
 use clap::{Arg, ArgAction, ArgMatches, Command, builder::ValueParser, parser::ValueSource};
 use std::ffi::OsString;
-use std::io::{BufRead, Write as _, stderr};
+use std::io::{BufRead, Write as _};
 use std::str::FromStr;
 
 use uucore::display::Quotable;
@@ -74,7 +74,7 @@ fn format_and_write<W: std::io::Write>(
                 show!(NumfmtError::FormattingError(msg));
             }
             InvalidModes::Warn => {
-                let _ = writeln!(stderr(), "numfmt: {msg}");
+                let _ = writeln!(uucore::streams::stderr(), "numfmt: {msg}");
             }
             InvalidModes::Ignore => {}
         }
@@ -96,7 +96,7 @@ fn format_and_write<W: std::io::Write>(
 ///
 /// Returns `true` if any line contained invalid input.
 fn handle_args<'a>(args: impl Iterator<Item = &'a [u8]>, options: &NumfmtOptions) -> UResult<bool> {
-    let mut stdout = std::io::stdout().lock();
+    let mut stdout = uucore::streams::stdout().lock();
     let terminator = if options.zero_terminated { 0u8 } else { b'\n' };
     let mut saw_invalid = false;
     for l in args {
@@ -110,7 +110,7 @@ fn handle_args<'a>(args: impl Iterator<Item = &'a [u8]>, options: &NumfmtOptions
 /// Returns `true` if any line contained invalid input.
 fn handle_buffer<R: BufRead>(mut input: R, options: &NumfmtOptions) -> UResult<bool> {
     let terminator = if options.zero_terminated { 0u8 } else { b'\n' };
-    let mut stdout = std::io::stdout().lock();
+    let mut stdout = uucore::streams::stdout().lock();
     let mut buf = Vec::new();
     let mut line_idx = 0;
     let mut saw_invalid = false;
@@ -343,7 +343,7 @@ fn parse_options(args: &ArgMatches) -> Result<NumfmtOptions> {
 
 fn print_debug_warnings(options: &NumfmtOptions, matches: &ArgMatches) {
     fn print_warning(msg_key: &str) {
-        let _ = writeln!(stderr(), "numfmt: {}", translate!(msg_key));
+        let _ = writeln!(uucore::streams::stderr(), "numfmt: {}", translate!(msg_key));
     }
 
     // Warn if no conversion option is specified
@@ -382,7 +382,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             .map_err(NumfmtError::IllegalArgument)?;
         handle_args(byte_args.into_iter(), &options)
     } else {
-        let stdin = std::io::stdin();
+        let stdin = uucore::streams::stdin();
         handle_buffer(stdin.lock(), &options)
     };
 
@@ -390,13 +390,13 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         Err(e) => {
             // Flush stdout before returning the error so any partial output is
             // visible (matches GNU behavior).
-            let _ = std::io::stdout().flush();
+            let _ = uucore::streams::stdout().flush();
             Err(e)
         }
         Ok(saw_invalid) => {
             if options.debug && saw_invalid {
                 let _ = writeln!(
-                    stderr(),
+                    uucore::streams::stderr(),
                     "numfmt: {}",
                     translate!("numfmt-debug-failed-to-convert")
                 );

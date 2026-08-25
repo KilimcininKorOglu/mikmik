@@ -7,7 +7,7 @@
 
 use std::ffi::OsString;
 use std::fs::OpenOptions;
-use std::io::{Error, ErrorKind, Read, Result, Write, stderr, stdin, stdout};
+use std::io::{Error, ErrorKind, Read, Result, Write};
 use std::path::PathBuf;
 use uucore::display::Quotable;
 use uucore::error::{UResult, strip_errno};
@@ -80,12 +80,12 @@ fn tee(options: &Options) -> Result<()> {
         0,
         NamedWriter {
             name: translate!("tee-standard-output").into(),
-            inner: Writer::Stdout(stdout()),
+            inner: Writer::Stdout(uucore::streams::stdout()),
         },
     );
 
     let mut output = MultiWriter::new(writers, options.output_error.clone());
-    let input = NamedReader { inner: stdin() };
+    let input = NamedReader { inner: uucore::streams::stdin() };
 
     #[cfg(target_os = "linux")]
     if options.ignore_pipe_errors && !ensure_stdout_not_broken()? && output.writers.len() == 1 {
@@ -182,7 +182,7 @@ fn open(
             name: name.clone(),
         })),
         Err(f) => {
-            let _ = writeln!(stderr(), "{}: {f}", name.maybe_quote());
+            let _ = writeln!(uucore::streams::stderr(), "{}: {f}", name.maybe_quote());
             match output_error {
                 Some(OutputErrorMode::Exit | OutputErrorMode::ExitNoPipe) => Some(Err(f)),
                 _ => None,
@@ -219,26 +219,26 @@ fn process_error(
 ) -> Result<()> {
     match mode {
         Some(OutputErrorMode::Warn) => {
-            let _ = writeln!(stderr(), "{}: {f}", writer.name.maybe_quote());
+            let _ = writeln!(uucore::streams::stderr(), "{}: {f}", writer.name.maybe_quote());
             *ignored_errors += 1;
             Ok(())
         }
         Some(OutputErrorMode::WarnNoPipe) | None => {
             if f.kind() != ErrorKind::BrokenPipe {
-                let _ = writeln!(stderr(), "{}: {f}", writer.name.maybe_quote());
+                let _ = writeln!(uucore::streams::stderr(), "{}: {f}", writer.name.maybe_quote());
                 *ignored_errors += 1;
             }
             Ok(())
         }
         Some(OutputErrorMode::Exit) => {
-            let _ = writeln!(stderr(), "{}: {f}", writer.name.maybe_quote());
+            let _ = writeln!(uucore::streams::stderr(), "{}: {f}", writer.name.maybe_quote());
             Err(f)
         }
         Some(OutputErrorMode::ExitNoPipe) => {
             if f.kind() == ErrorKind::BrokenPipe {
                 Ok(())
             } else {
-                let _ = writeln!(stderr(), "{}: {f}", writer.name.maybe_quote());
+                let _ = writeln!(uucore::streams::stderr(), "{}: {f}", writer.name.maybe_quote());
                 Err(f)
             }
         }
@@ -306,7 +306,7 @@ impl Write for MultiWriter {
 
 enum Writer {
     File(std::fs::File),
-    Stdout(std::io::Stdout),
+    Stdout(uucore::streams::Stdout),
 }
 
 impl Write for Writer {
@@ -341,7 +341,7 @@ impl Write for NamedWriter {
 }
 
 struct NamedReader {
-    inner: std::io::Stdin,
+    inner: uucore::streams::Stdin,
 }
 
 impl Read for NamedReader {
@@ -349,7 +349,7 @@ impl Read for NamedReader {
         match self.inner.read(buf) {
             Err(f) => {
                 let _ = writeln!(
-                    stderr(),
+                    uucore::streams::stderr(),
                     "tee: {}",
                     translate!("tee-error-stdin", "error" => strip_errno(&f))
                 );

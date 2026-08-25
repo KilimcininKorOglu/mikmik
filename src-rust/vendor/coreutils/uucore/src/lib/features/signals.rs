@@ -511,16 +511,15 @@ pub fn ignore_interrupts() -> Result<(), Errno> {
 /// Installs a signal handler. The handler must be async-signal-safe.
 #[cfg(unix)]
 pub fn install_signal_handler(
-    sig: i32,
+    sig: Signal,
     handler: extern "C" fn(std::os::raw::c_int),
 ) -> Result<(), Errno> {
-    let signal = Signal::try_from(sig).map_err(|_| Errno::EINVAL)?;
     let action = SigAction::new(
         SigHandler::Handler(handler),
         SaFlags::SA_RESTART,
         SigSet::empty(),
     );
-    unsafe { sigaction(signal, &action) }?;
+    unsafe { sigaction(sig, &action) }?;
     Ok(())
 }
 

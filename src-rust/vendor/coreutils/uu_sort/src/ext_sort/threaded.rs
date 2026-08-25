@@ -8,7 +8,7 @@
 
 use std::cmp::Ordering;
 use std::fs::File;
-use std::io::{Read, Write, stderr};
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::thread;
@@ -67,7 +67,7 @@ pub fn ext_sort(
             Err(err) => {
                 // Print the error and disable compression
                 let _ = writeln!(
-                    stderr(),
+                    uucore::streams::stderr(),
                     "sort: could not run compress program '{prog}': {}",
                     strip_errno(&err)
                 );

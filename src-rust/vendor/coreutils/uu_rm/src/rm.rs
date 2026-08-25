@@ -10,7 +10,7 @@ use clap::{Arg, ArgAction, Command, parser::ValueSource};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, Metadata};
-use std::io::{self, IsTerminal, stdin};
+use std::io;
 use std::ops::BitOr;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -864,7 +864,7 @@ fn prompt_file(path: &Path, options: &Options) -> bool {
 }
 
 fn prompt_file_permission_readonly(path: &Path, options: &Options, metadata: &Metadata) -> bool {
-    let stdin_ok = options.__presume_input_tty.unwrap_or(false) || stdin().is_terminal();
+    let stdin_ok = options.__presume_input_tty.unwrap_or(false) || uucore::streams::stdin().is_terminal();
     match (stdin_ok, options.interactive) {
         (false, InteractiveMode::PromptProtected) => true,
         _ if is_writable_metadata(metadata) => true,
@@ -897,7 +897,7 @@ fn path_is_current_or_parent_directory(path: &Path) -> bool {
 // Most cases are covered by keep eye out for edge cases
 #[cfg(unix)]
 fn handle_writable_directory(path: &Path, options: &Options, metadata: &Metadata) -> bool {
-    let stdin_ok = options.__presume_input_tty.unwrap_or(false) || stdin().is_terminal();
+    let stdin_ok = options.__presume_input_tty.unwrap_or(false) || uucore::streams::stdin().is_terminal();
     match (
         stdin_ok,
         is_readable_metadata(metadata),
@@ -926,7 +926,7 @@ fn handle_writable_directory(path: &Path, options: &Options, metadata: &Metadata
     use std::os::windows::prelude::MetadataExt;
     use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY;
     let not_user_writable = (metadata.file_attributes() & FILE_ATTRIBUTE_READONLY) != 0;
-    let stdin_ok = options.__presume_input_tty.unwrap_or(false) || stdin().is_terminal();
+    let stdin_ok = options.__presume_input_tty.unwrap_or(false) || uucore::streams::stdin().is_terminal();
     match (stdin_ok, not_user_writable, options.interactive) {
         (false, _, InteractiveMode::PromptProtected) => true,
         (_, true, _) => prompt_yes!("remove write-protected directory {}?", path.quote()),

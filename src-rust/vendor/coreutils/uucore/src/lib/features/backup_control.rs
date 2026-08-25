@@ -91,7 +91,6 @@ use std::{
     error::Error,
     ffi::{OsStr, OsString},
     fmt::{Debug, Display},
-    fs,
     path::{Path, PathBuf},
 };
 
@@ -443,11 +442,7 @@ fn numbered_backup_path(path: &Path) -> PathBuf {
     let mut i: u64 = 1;
     loop {
         let new_path = simple_backup_path(path, OsString::from(format!(".~{i}~")));
-        // Use `symlink_metadata` rather than `exists()` so that a dangling
-        // symlink still counts as an existing backup (avoiding a silent
-        // overwrite), and so we do not report a live symlink as missing when
-        // the target cannot be stat'd.
-        if fs::symlink_metadata(&new_path).is_err() {
+        if !new_path.exists() {
             return new_path;
         }
         i += 1;
@@ -456,7 +451,7 @@ fn numbered_backup_path(path: &Path) -> PathBuf {
 
 fn existing_backup_path<S: AsRef<OsStr>>(path: &Path, suffix: S) -> PathBuf {
     let test_path = simple_backup_path(path, OsString::from(".~1~"));
-    if fs::symlink_metadata(&test_path).is_ok() {
+    if test_path.exists() {
         return numbered_backup_path(path);
     }
     simple_backup_path(path, suffix.as_ref())

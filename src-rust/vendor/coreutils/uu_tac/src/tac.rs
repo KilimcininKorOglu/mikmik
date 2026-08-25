@@ -11,7 +11,7 @@ use clap::{Arg, ArgAction, Command};
 use memchr::memmem;
 use memmap2::Mmap;
 use std::ffi::{OsStr, OsString};
-use std::io::{BufWriter, Read, Write, stdin, stdout};
+use std::io::{BufWriter, Read, Write};
 use std::{fs::File, io::copy, path::Path};
 #[cfg(unix)]
 use uucore::error::UError;
@@ -104,7 +104,7 @@ pub fn uu_app() -> Command {
 /// `before` is `false`, then each match of this pattern is interpreted
 /// as the end of a line.
 ///
-/// This function writes each line in `data` to [`std::io::Stdout`] in
+/// This function writes each line in `data` to [`uucore::streams::Stdout`] in
 /// reverse.
 ///
 /// # Errors
@@ -116,7 +116,7 @@ fn buffer_tac_regex(
     pattern: &regex::bytes::Regex,
     before: bool,
 ) -> std::io::Result<()> {
-    let out = stdout();
+    let out = uucore::streams::stdout();
     let mut out = BufWriter::new(out.lock());
 
     // The index of the line separator for the current line.
@@ -186,7 +186,7 @@ fn buffer_tac_regex(
 /// `separator` appears at the beginning of each line, as in
 /// `"/abc/def"`.
 fn buffer_tac(data: &[u8], before: bool, separator: &OsStr) -> std::io::Result<()> {
-    let out = stdout();
+    let out = uucore::streams::stdout();
     let mut out = BufWriter::new(out.lock());
 
     // The number of bytes in the line separator.
@@ -419,7 +419,7 @@ fn tac(filenames: &[OsString], before: bool, regex: bool, separator: &OsStr) -> 
 fn try_mmap_stdin() -> Option<Mmap> {
     // SAFETY: If the file is truncated while we map it, SIGBUS will be raised
     // and our process will be terminated, thus preventing access of invalid memory.
-    let mmap = unsafe { Mmap::map(&stdin()).ok()? };
+    let mmap = unsafe { Mmap::map(&uucore::streams::stdin()).ok()? };
     // On Windows, mmap on a pipe handle can "succeed" but return 0 bytes
     // (the file size of a pipe is reported as 0). When that happens, return
     // None so we fall through to buffer_stdin() which reads the pipe properly.
@@ -437,7 +437,7 @@ fn buffer_stdin() -> std::io::Result<StdinData> {
     // Try to create a temp file (respects TMPDIR)
     if let Ok(mut tmp) = tempfile::tempfile() {
         // Temp file created - copy stdin to it, then read back
-        copy(&mut stdin(), &mut tmp)?;
+        copy(&mut uucore::streams::stdin(), &mut tmp)?;
         // SAFETY: If the file is truncated while we map it, SIGBUS will be raised
         // and our process will be terminated, thus preventing access of invalid memory.
         let mmap = unsafe { Mmap::map(&tmp)? };
@@ -445,7 +445,7 @@ fn buffer_stdin() -> std::io::Result<StdinData> {
     } else {
         // Fall back to reading directly into memory (e.g., bad TMPDIR)
         let mut buf = Vec::new();
-        stdin().read_to_end(&mut buf)?;
+        uucore::streams::stdin().read_to_end(&mut buf)?;
         Ok(StdinData::Vec(buf))
     }
 }

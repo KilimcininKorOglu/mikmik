@@ -635,7 +635,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         .collect();
     let options = CsplitOptions::new(&matches)?;
     if file_name == "-" {
-        let stdin = io::stdin();
+        let stdin = uucore::streams::stdin();
         Ok(csplit(&options, &patterns, stdin.lock())?)
     } else {
         let file = File::open(file_name)

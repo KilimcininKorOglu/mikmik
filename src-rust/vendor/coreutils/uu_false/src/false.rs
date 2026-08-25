@@ -17,7 +17,7 @@ pub fn uumain(mut args: impl uucore::Args) -> i32 {
         uu_app().print_help()
     } else if flag == "--version" {
         // avoid uu_app for smaller binary size
-        writeln!(std::io::stdout(), "false {}", crate_version!())
+        writeln!(uucore::streams::stdout(), "false {}", crate_version!())
     } else {
         return 1;
     };
@@ -25,7 +25,7 @@ pub fn uumain(mut args: impl uucore::Args) -> i32 {
     if let Err(print_fail) = error
         && print_fail.kind() != std::io::ErrorKind::BrokenPipe
     {
-        let _ = writeln!(std::io::stderr(), "false: {print_fail}");
+        let _ = writeln!(uucore::streams::stderr(), "false: {print_fail}");
     }
     1
 }

@@ -8,7 +8,9 @@
 //! for some common file-like objects. Use the [`WordCountable::buffered`]
 //! method to get an iterator over lines of a file-like object.
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, StdinLock};
+use std::io::{BufRead, BufReader, Read};
+// MikMik patch: the redirectable stand-in for `std::io::StdinLock`.
+use uucore::streams::StdinLock;
 
 #[cfg(unix)]
 use std::os::fd::{AsFd, AsRawFd};
@@ -34,7 +36,7 @@ pub trait WordCountable: Read {
 }
 
 #[cfg(not(target_os = "wasi"))]
-impl WordCountable for StdinLock<'_> {
+impl WordCountable for StdinLock {
     type Buffered = Self;
 
     fn buffered(self) -> Self::Buffered {
@@ -46,7 +48,7 @@ impl WordCountable for StdinLock<'_> {
 }
 
 #[cfg(target_os = "wasi")]
-impl WordCountable for StdinLock<'_> {
+impl WordCountable for StdinLock {
     type Buffered = Self;
 
     fn buffered(self) -> Self::Buffered {

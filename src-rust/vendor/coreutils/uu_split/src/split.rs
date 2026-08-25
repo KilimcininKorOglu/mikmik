@@ -17,7 +17,7 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, metadata};
 use std::io;
-use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write, stdin};
+use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use thiserror::Error;
 use uucore::display::Quotable;
@@ -1139,7 +1139,7 @@ where
     }
 
     // In Kth chunk of N mode - we will write to stdout instead of to a file.
-    let mut stdout_writer = io::stdout().lock();
+    let mut stdout_writer = uucore::streams::stdout().lock();
     // In N chunks mode - we will write to `num_chunks` files
     let mut out_files: OutFiles = OutFiles::new();
 
@@ -1263,7 +1263,7 @@ where
     }
 
     // In Kth chunk of N mode - we will write to stdout instead of to a file.
-    let mut stdout_writer = io::stdout().lock();
+    let mut stdout_writer = uucore::streams::stdout().lock();
     // In N chunks mode - we will write to `num_chunks` files
     let mut out_files: OutFiles = OutFiles::new();
 
@@ -1380,7 +1380,7 @@ where
     R: BufRead,
 {
     // In Kth chunk of N mode - we will write to stdout instead of to a file.
-    let mut stdout_writer = io::stdout().lock();
+    let mut stdout_writer = uucore::streams::stdout().lock();
     // In N chunks mode - we will write to `num_chunks` files
     let mut out_files: OutFiles = OutFiles::new();
 
@@ -1537,7 +1537,7 @@ where
 #[allow(clippy::cognitive_complexity)]
 fn split(settings: &Settings) -> UResult<()> {
     let r_box = if settings.input == "-" {
-        Box::new(stdin()) as Box<dyn Read>
+        Box::new(uucore::streams::stdin()) as Box<dyn Read>
     } else {
         let r = File::open(Path::new(&settings.input)).map_err_context(
             || translate!("split-error-cannot-open-for-reading", "file" => settings.input.quote()),

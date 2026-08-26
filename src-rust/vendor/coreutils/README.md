@@ -27,7 +27,7 @@ These are **not** workspace members, on purpose: `cargo clippy --workspace --all
 
 ## What the patch changes
 
-84 files, 509 lines added and 375 removed against the published crates. One theme runs through all of it: **a utility here is not a process of its own, so nothing it needs may come from the process.** Upstream took four things that way.
+84 files, 526 lines added and 375 removed against the published crates. One theme runs through all of it: **a utility here is not a process of its own, so nothing it needs may come from the process.** Upstream took five things that way.
 
 **1. The three standard streams.** `uucore/src/lib/mods/streams.rs` is new. It holds a per-thread override and hands out stand-ins for `std::io::Stdout`, `Stderr` and `Stdin` that follow it. They answer the same shapes the standard library's do: `Write`, `Read`, `BufRead`, `lock()`, `AsFd`, `AsRawFd`, `is_terminal()`. Every place a utility obtains one of the three now calls `uucore::streams` instead of `std::io`, and a handful of signatures that named `std::io::Stdout` or took `&Stdin` name the stand-in instead.
 

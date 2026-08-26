@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use crate::app::TurnMetadata;
 use crate::kitty_image::render_image;
+use crate::render::tool_duration_line;
 use crate::transcript_turn::reasoning_heading;
 use mikmik_core::format_utils::format_message_time;
 use mikmik_core::types::{ContentBlock, Message, Role, ToolResultContent};
@@ -47,6 +48,13 @@ pub struct RenderContext<'a> {
     /// Whether to print each message's local time beneath it
     /// (`showMessageTimestamps`).
     pub show_timestamps: bool,
+    /// Whether to print how long each tool call took (`showToolDuration`).
+    pub show_tool_duration: bool,
+    /// Maps `tool_use_id` → how long that call took, in milliseconds. The
+    /// durations are recorded on the message that carries the tool results,
+    /// which is not the message a `ToolResult` block is rendered from, so the
+    /// caller gathers them once per rebuild and lends them here.
+    pub tool_durations: &'a HashMap<String, u64>,
     /// The configured advisor model, shown on the `Advisor` tool block. The
     /// tool input does not carry it, so the renderer supplies it.
     pub advisor_model: Option<&'a str>,
@@ -64,6 +72,8 @@ static EMPTY_TOOL_NAMES: std::sync::LazyLock<HashMap<String, String>> =
     std::sync::LazyLock::new(HashMap::new);
 static EMPTY_EXPANDED_THINKING: std::sync::LazyLock<std::collections::HashSet<u64>> =
     std::sync::LazyLock::new(std::collections::HashSet::new);
+static EMPTY_TOOL_DURATIONS: std::sync::LazyLock<HashMap<String, u64>> =
+    std::sync::LazyLock::new(HashMap::new);
 
 impl Default for RenderContext<'static> {
     fn default() -> Self {
@@ -74,6 +84,8 @@ impl Default for RenderContext<'static> {
             tool_names: &EMPTY_TOOL_NAMES,
             expanded_thinking: &EMPTY_EXPANDED_THINKING,
             show_timestamps: false,
+            show_tool_duration: false,
+            tool_durations: &EMPTY_TOOL_DURATIONS,
             advisor_model: None,
             palette: crate::theme_colors::ColorPalette::for_theme("default"),
             goal_completed: false,
@@ -760,6 +772,16 @@ pub fn render_transcript_assistant_message_tagged(
                     }
                 };
                 for line in indent_lines(rendered, "   ", Style::default(), TRANSCRIPT_TEXT) {
+                    out.push((line, None));
+                }
+                // Outside `indent_lines`, which would push the right-aligned
+                // label three columns past the edge it is aligned to. This is
+                // the path a session reopened with --resume renders from.
+                if let Some(line) = tool_duration_line(
+                    ctx.tool_durations.get(&tool_use_id).copied(),
+                    ctx.width,
+                    ctx.show_tool_duration,
+                ) {
                     out.push((line, None));
                 }
             }
@@ -2654,6 +2676,67 @@ mod tests {
         assert!(
             !rendered.contains("Result"),
             "bash output should NOT show generic 'Result' header"
+        );
+    }
+
+    #[test]
+    fn a_reopened_session_still_reports_how_long_a_tool_took() {
+        // `App::tool_use_blocks` is never rebuilt from the messages, so a
+        // session reopened with --resume draws its tool calls from here. A
+        // duration drawn only on the live path would vanish on resume.
+        let mut durations = HashMap::new();
+        durations.insert("tu-1".to_string(), 17_400u64);
+        let ctx = RenderContext {
+            width: 40,
+            show_tool_duration: true,
+            tool_durations: &durations,
+            ..Default::default()
+        };
+
+        let msg = Message::assistant_blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: "tu-1".to_string(),
+            content: ToolResultContent::Text("done".to_string()),
+            is_error: Some(false),
+        }]);
+        let rendered: Vec<String> = render_transcript_assistant_message_tagged(&msg, &ctx)
+            .into_iter()
+            .map(|(line, _)| line_text(&line))
+            .collect();
+
+        let last = rendered.last().expect("the block has lines");
+        assert_eq!(last.trim(), "17.4s", "{rendered:?}");
+        assert_eq!(
+            last.width(),
+            40,
+            "the label sits at the pane's right edge, so it must not be \
+             indented past it: {last:?}"
+        );
+    }
+
+    #[test]
+    fn a_reopened_session_draws_no_duration_while_the_setting_is_off() {
+        let mut durations = HashMap::new();
+        durations.insert("tu-1".to_string(), 17_400u64);
+        let ctx = RenderContext {
+            width: 40,
+            show_tool_duration: false,
+            tool_durations: &durations,
+            ..Default::default()
+        };
+
+        let msg = Message::assistant_blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: "tu-1".to_string(),
+            content: ToolResultContent::Text("done".to_string()),
+            is_error: Some(false),
+        }]);
+        let rendered: Vec<String> = render_transcript_assistant_message_tagged(&msg, &ctx)
+            .into_iter()
+            .map(|(line, _)| line_text(&line))
+            .collect();
+
+        assert!(
+            !rendered.iter().any(|line| line.contains("17.4s")),
+            "{rendered:?}"
         );
     }
 

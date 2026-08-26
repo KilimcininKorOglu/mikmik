@@ -80,6 +80,7 @@ than dropping them silently.
   "disabledPlugins": [],
   "hasCompletedOnboarding": false,
   "showMessageTimestamps": false,
+  "showToolDuration": false,
   "advisorModel": "claude-opus-4-6",
   "advisorMode": "tool",
   "memoryModel": "claude-haiku-4-5",
@@ -142,10 +143,19 @@ all with `/skills`.
 | Key                     | Type    | Default | Description                                                                                                                                                                    |
 |-------------------------|---------|---------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `showMessageTimestamps` | boolean | false   | Print the local time beneath each message. Times are stored in UTC and converted using the machine's time zone. Messages from an earlier day also show their date (`13 Aug 14:32`). |
+| `showToolDuration`      | boolean | false   | Print how long each tool call took, at the bottom right of the tool block. Reads `240ms`, `1.4s` or `2m05s`. |
 
-Toggle it from the TUI with `/config` → **Show message timestamps**. Turns
-restored from a transcript recorded before this option existed carry no time
-and render without one.
+Toggle them from the TUI with `/config` → **Show message timestamps** and
+**Show tool duration**. Turns restored from a transcript recorded before either
+option existed carry no time and render without one.
+
+`showToolDuration` measures the tool's own work. A tool that waits for
+permission does not count the wait, because that is how long you took to
+answer rather than what the call cost. A call that was blocked or cancelled
+before it ran reports nothing at all rather than zero.
+
+Durations of tools that ran at the same time overlap, so a turn's tool
+durations can add up to more than the turn took.
 
 ### Desktop notifications
 

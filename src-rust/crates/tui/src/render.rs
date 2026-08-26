@@ -467,6 +467,9 @@ struct MessageLinesCacheKey {
     // Toggling `showMessageTimestamps` mid-session changes every rendered turn
     // without touching `transcript_version`, so it has to be part of the key.
     show_timestamps: bool,
+    // And `showToolDuration`, for the same reason: it adds or removes a line
+    // on every finished tool block without changing a message.
+    show_tool_duration: bool,
     // Same reasoning for the advisor model, which is printed on advisor tool
     // blocks. Hashed rather than owned so building a key stays allocation-free
     // on the per-frame path.
@@ -507,6 +510,8 @@ struct CompletedMsgCacheKey {
     thinking_expanded_len: usize,
     // See `MessageLinesCacheKey::show_timestamps`.
     show_timestamps: bool,
+    // See `MessageLinesCacheKey::show_tool_duration`.
+    show_tool_duration: bool,
     // See `MessageLinesCacheKey::advisor_model_hash`.
     advisor_model_hash: u64,
     // See `MessageLinesCacheKey::palette`.
@@ -1949,6 +1954,8 @@ fn append_turn_items(
             frame_count,
             ctx.advisor_model,
             &ctx.palette,
+            ctx.width,
+            ctx.show_tool_duration,
         );
         if !lines.is_empty() {
             sections.push((
@@ -2106,6 +2113,7 @@ fn build_all_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
     // Build `tool_names` and the render context ONCE per rebuild and lend them
     // to every message renderer (issue #222).
     let tool_names = build_tool_names(&app.messages);
+    let tool_durations = build_tool_durations(&app.messages);
     let ctx = RenderContext {
         width,
         highlight: true,
@@ -2113,6 +2121,8 @@ fn build_all_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
         tool_names: &tool_names,
         expanded_thinking: &app.thinking_expanded,
         show_timestamps: app.settings_screen.show_message_timestamps,
+        show_tool_duration: app.settings_screen.show_tool_duration,
+        tool_durations: &tool_durations,
         advisor_model: app.config.advisor_model.as_deref(),
         goal_completed: app.goal_completed,
         palette: app.palette,
@@ -2140,6 +2150,8 @@ fn build_all_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
                 app.frame_count,
                 app.config.advisor_model.as_deref(),
                 &app.palette,
+                width,
+                app.settings_screen.show_tool_duration,
             );
             push_rendered_items(&mut items, lines, None, false);
             push_blank_item(&mut items);
@@ -2175,6 +2187,7 @@ fn render_message_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
         annotations_len: app.system_annotations.len(),
         thinking_expanded_len: app.thinking_expanded.len(),
         show_timestamps: app.settings_screen.show_message_timestamps,
+        show_tool_duration: app.settings_screen.show_tool_duration,
         advisor_model_hash: advisor_model_hash(app),
         palette: app.palette,
     };
@@ -2209,6 +2222,7 @@ fn render_message_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
 /// ghosting, no missing content.
 fn render_streaming_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
     let tool_names = build_tool_names(&app.messages);
+    let tool_durations = build_tool_durations(&app.messages);
     let ctx = RenderContext {
         width,
         highlight: true,
@@ -2216,6 +2230,8 @@ fn render_streaming_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
         tool_names: &tool_names,
         expanded_thinking: &app.thinking_expanded,
         show_timestamps: app.settings_screen.show_message_timestamps,
+        show_tool_duration: app.settings_screen.show_tool_duration,
+        tool_durations: &tool_durations,
         advisor_model: app.config.advisor_model.as_deref(),
         goal_completed: app.goal_completed,
         palette: app.palette,
@@ -2245,6 +2261,7 @@ fn render_streaming_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
         annotations_len: app.system_annotations.len(),
         thinking_expanded_len: app.thinking_expanded.len(),
         show_timestamps: app.settings_screen.show_message_timestamps,
+        show_tool_duration: app.settings_screen.show_tool_duration,
         advisor_model_hash: advisor_model_hash(app),
         palette: app.palette,
     };
@@ -2577,6 +2594,51 @@ fn build_tool_names(
     map
 }
 
+/// Gather how long each tool call took, from the messages that recorded it.
+///
+/// The durations sit on the message carrying the tool results, and a
+/// `ToolResult` block is rendered from a different message than the one it was
+/// recorded on, so the lookup is built once per rebuild rather than searched
+/// for per block.
+fn build_tool_durations(
+    messages: &[mikmik_core::types::Message],
+) -> std::collections::HashMap<String, u64> {
+    let mut map = std::collections::HashMap::new();
+    for msg in messages {
+        for (id, took) in msg.tool_durations.iter().flatten() {
+            map.insert(id.clone(), *took);
+        }
+    }
+    map
+}
+
+/// The line that reports how long a tool call took, right-aligned in `width`.
+///
+/// `None` when there is nothing to report, so the caller adds no line at all
+/// rather than an empty one.
+pub(crate) fn tool_duration_line(
+    duration_ms: Option<u64>,
+    width: u16,
+    show: bool,
+) -> Option<Line<'static>> {
+    if !show {
+        return None;
+    }
+    let label = timeline_duration_label(duration_ms?);
+    // Right-aligned by padding rather than by `Alignment::Right`, which needs a
+    // `Rect`; a transcript line is built before any area is known.
+    let padding = (width as usize).saturating_sub(label.width());
+    Some(Line::from(vec![
+        Span::raw(" ".repeat(padding)),
+        Span::styled(
+            label,
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
+        ),
+    ]))
+}
+
 // ── System annotation (compact boundary, info notices) ───────────────────────
 
 fn render_system_annotation_lines(
@@ -2750,6 +2812,10 @@ fn render_tool_block_lines(
     frame_count: u64,
     advisor_model: Option<&str>,
     palette: &crate::theme_colors::ColorPalette,
+    // The pane's width, for the right-aligned duration. Every other line here
+    // is laid out by a fixed indent and needs none.
+    width: u16,
+    show_duration: bool,
 ) {
     let input_val: serde_json::Value =
         serde_json::from_str(&block.input_json).unwrap_or(serde_json::Value::Null);
@@ -2904,6 +2970,12 @@ fn render_tool_block_lines(
                 ]));
             }
         }
+    }
+
+    // Last, so it reads as the block's footer rather than as part of the
+    // output. A running block has no duration yet and gets no line.
+    if let Some(line) = tool_duration_line(block.duration_ms, width, show_duration) {
+        lines.push(line);
     }
 }
 
@@ -4577,14 +4649,141 @@ mod tool_block_tests {
 
     fn render(b: &ToolUseBlock) -> Vec<String> {
         let mut lines = Vec::new();
-        render_tool_block_lines(&mut lines, b, 0, None, &palette());
+        render_tool_block_lines(&mut lines, b, 0, None, &palette(), 80, false);
         lines.iter().map(flatten_line_text).collect()
     }
 
     fn render_with_advisor(b: &ToolUseBlock, model: &str) -> Vec<String> {
         let mut lines = Vec::new();
-        render_tool_block_lines(&mut lines, b, 0, Some(model), &palette());
+        render_tool_block_lines(&mut lines, b, 0, Some(model), &palette(), 80, false);
         lines.iter().map(flatten_line_text).collect()
+    }
+
+    /// Render `b` with `showToolDuration` on, at `width`.
+    fn render_timed(b: &ToolUseBlock, width: u16) -> Vec<String> {
+        let mut lines = Vec::new();
+        render_tool_block_lines(&mut lines, b, 0, None, &palette(), width, true);
+        lines.iter().map(flatten_line_text).collect()
+    }
+
+    fn finished_block(duration_ms: Option<u64>) -> ToolUseBlock {
+        let mut b = block(
+            "Bash",
+            ToolStatus::Done,
+            r#"{"command":"cargo check"}"#,
+            Some("Finished in 17s"),
+        );
+        b.duration_ms = duration_ms;
+        b
+    }
+
+    #[test]
+    fn a_finished_tool_reports_how_long_it_took_at_the_right_edge() {
+        let lines = render_timed(&finished_block(Some(17_400)), 40);
+        let last = lines.last().expect("the block has lines");
+        assert_eq!(last.trim(), "17.4s", "{lines:?}");
+        assert_eq!(
+            last.width(),
+            40,
+            "the label must sit at the pane's right edge: {last:?}"
+        );
+    }
+
+    #[test]
+    fn the_duration_is_absent_while_the_setting_is_off() {
+        let with = render_timed(&finished_block(Some(17_400)), 40);
+        let without = render(&finished_block(Some(17_400)));
+        assert_eq!(
+            without.len(),
+            with.len() - 1,
+            "off must draw exactly the same block minus the duration line"
+        );
+        assert!(
+            !without.iter().any(|line| line.contains("17.4s")),
+            "{without:?}"
+        );
+    }
+
+    #[test]
+    fn a_running_tool_reports_no_duration() {
+        // It has not finished, so there is no number yet and a line saying so
+        // would be an empty row that appears and disappears mid-turn.
+        let mut running = finished_block(None);
+        running.status = ToolStatus::Running;
+        running.output_preview = None;
+        let lines = render_timed(&running, 40);
+        assert!(
+            !lines.iter().any(|line| line.trim().ends_with('s')
+                && line
+                    .trim()
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit())),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn the_duration_reaches_the_drawn_screens_right_edge() {
+        // The line tests measure a `Line` built at a width the test chose. This
+        // one measures the cells a terminal actually shows, which is the only
+        // place a wrong width shows up as a label floating mid-pane.
+        use crate::app::App;
+        use mikmik_core::config::Config;
+        use mikmik_core::cost::CostTracker;
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let mut app = App::new(Config::default(), CostTracker::new());
+        app.settings_screen.show_tool_duration = true;
+        app.handle_query_event(mikmik_query::QueryEvent::ToolStart {
+            tool_name: "Bash".to_string(),
+            tool_id: "t1".to_string(),
+            input_json: r#"{"command":"cargo check"}"#.to_string(),
+        });
+        app.handle_query_event(mikmik_query::QueryEvent::ToolEnd {
+            tool_name: "Bash".to_string(),
+            tool_id: "t1".to_string(),
+            result: "Finished".to_string(),
+            is_error: false,
+            duration_ms: Some(17_400),
+        });
+
+        let width = 60u16;
+        let mut terminal = match Terminal::new(TestBackend::new(width, 24)) {
+            Ok(terminal) => terminal,
+            Err(err) => panic!("test terminal: {err}"),
+        };
+        if let Err(err) = terminal.draw(|frame| render_app(frame, &app)) {
+            panic!("draw: {err}");
+        }
+        let buffer = terminal.backend().buffer();
+        let rows: Vec<String> = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect();
+
+        let row = rows
+            .iter()
+            .find(|row| row.contains("17.4s"))
+            .unwrap_or_else(|| panic!("no row carries the duration: {rows:#?}"));
+        assert!(
+            row.ends_with("17.4s"),
+            "the duration must reach the pane's last column rather than sit \
+             anywhere left of it: {row:?}"
+        );
+    }
+
+    #[test]
+    fn a_duration_wider_than_the_pane_does_not_overflow_it() {
+        // `saturating_sub` on the padding: a pane narrower than the label must
+        // print the label rather than panicking or wrapping the line.
+        let lines = render_timed(&finished_block(Some(3_725_000)), 4);
+        let last = lines.last().expect("the block has lines");
+        assert_eq!(last.trim(), "62m05s", "{lines:?}");
     }
 
     #[test]
@@ -4691,6 +4890,8 @@ mod tool_block_tests {
                 0,
                 None,
                 &crate::theme_colors::ColorPalette::for_theme(theme),
+                80,
+                false,
             );
             lines[0].spans[0].style.fg.expect("the header is coloured")
         }
@@ -6448,6 +6649,8 @@ mod tab_expansion_tests {
             0,
             None,
             &crate::theme_colors::ColorPalette::for_theme("default"),
+            80,
+            false,
         );
 
         let rendered: Vec<String> = lines.iter().map(flatten).collect();

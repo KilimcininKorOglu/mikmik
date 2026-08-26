@@ -2352,6 +2352,11 @@ pub mod config {
         /// Opt in via `"showMessageTimestamps": true`.
         #[serde(default, rename = "showMessageTimestamps")]
         pub show_message_timestamps: bool,
+        /// Whether to print how long each tool call took, at the bottom right
+        /// of the tool block. Defaults to false, because the extra line
+        /// lengthens every tool block. Opt in via `"showToolDuration": true`.
+        #[serde(default, rename = "showToolDuration")]
+        pub show_tool_duration: bool,
         /// Whether to reduce motion in UI. Defaults to false.
         #[serde(default, rename = "reduceMotion")]
         pub reduce_motion: bool,
@@ -4190,6 +4195,7 @@ pub mod config {
                 notify_sound: base.notify_sound,
                 show_turn_duration: base.show_turn_duration,
                 show_message_timestamps: base.show_message_timestamps,
+                show_tool_duration: base.show_tool_duration,
                 // SECURITY: the top-level twins of the `config` keys, and the
                 // same reasoning. A repository does not decide that a second
                 // model runs, which one, or how often.
@@ -5062,6 +5068,7 @@ pub mod config {
                 claude_md_enabled: Some(true),
                 show_turn_duration: true,
                 show_message_timestamps: true,
+                show_tool_duration: true,
                 reduce_motion: true,
                 terminal_progress_bar: true,
                 show_cwd: true,
@@ -5097,6 +5104,7 @@ pub mod config {
             assert_eq!(merged.claude_md_enabled, None);
             assert!(!merged.show_turn_duration);
             assert!(!merged.show_message_timestamps);
+            assert!(!merged.show_tool_duration);
             assert!(!merged.reduce_motion);
             assert!(!merged.terminal_progress_bar);
             assert!(!merged.show_cwd);
@@ -9059,6 +9067,20 @@ mod tests {
 
         let json = serde_json::to_string(&settings).unwrap();
         assert!(json.contains("\"showMessageTimestamps\":true"));
+    }
+
+    #[test]
+    fn show_tool_duration_defaults_off_and_reads_from_the_settings_file() {
+        // Off by default, so upgrading adds no line to anyone's tool blocks.
+        let settings: crate::config::Settings = serde_json::from_str("{}").expect("parse");
+        assert!(!settings.show_tool_duration);
+
+        let settings: crate::config::Settings =
+            serde_json::from_str(r#"{"showToolDuration":true}"#).expect("parse");
+        assert!(settings.show_tool_duration);
+
+        let json = serde_json::to_string(&settings).expect("serialise");
+        assert!(json.contains("\"showToolDuration\":true"));
     }
 
     #[test]

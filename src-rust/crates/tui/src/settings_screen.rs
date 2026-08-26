@@ -127,6 +127,7 @@ pub struct SettingsScreen {
     pub notify_sound: bool,
     pub show_turn_duration: bool,
     pub show_message_timestamps: bool,
+    pub show_tool_duration: bool,
     pub output_style: String,
     pub reduce_motion: bool,
     pub companion_enabled: bool,
@@ -199,6 +200,7 @@ impl SettingsScreen {
             notify_sound: false,
             show_turn_duration: false,
             show_message_timestamps: false,
+            show_tool_duration: false,
             output_style: "default".to_string(),
             reduce_motion: false,
             companion_enabled: false,
@@ -264,6 +266,7 @@ impl SettingsScreen {
         self.notify_sound = self.settings_snapshot.notify_sound;
         self.show_turn_duration = self.settings_snapshot.show_turn_duration;
         self.show_message_timestamps = self.settings_snapshot.show_message_timestamps;
+        self.show_tool_duration = self.settings_snapshot.show_tool_duration;
         self.output_style = self
             .settings_snapshot
             .config
@@ -817,6 +820,13 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             description: "Display the local time under each message.".into(),
             kind: SettingKind::Bool,
             value: if screen.show_message_timestamps { "true" } else { "false" }.to_string(),
+        },
+        SettingsEntry {
+            key: "show_tool_duration".into(),
+            label: "Show tool duration".into(),
+            description: "Display how long each tool call took.".into(),
+            kind: SettingKind::Bool,
+            value: if screen.show_tool_duration { "true" } else { "false" }.to_string(),
         },
         SettingsEntry {
             key: "output_style".into(),
@@ -1619,6 +1629,10 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                         screen.show_message_timestamps = new_value;
                         screen.settings_snapshot.show_message_timestamps = new_value;
                     }
+                    "show_tool_duration" => {
+                        screen.show_tool_duration = new_value;
+                        screen.settings_snapshot.show_tool_duration = new_value;
+                    }
                     "reduce_motion" => {
                         screen.reduce_motion = new_value;
                         screen.settings_snapshot.reduce_motion = new_value;
@@ -2293,6 +2307,36 @@ mod tests {
             config.timeline_enabled,
             "the running session reads this config, so a toggle that misses it \
              looks applied but does nothing until the next launch"
+        );
+        assert_eq!(screen.save_error, None);
+    }
+
+    #[test]
+    fn the_tool_duration_toggle_is_listed_and_reaches_the_snapshot() {
+        let _lock = match HOME_LOCK.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let _home = HomeGuard::new();
+
+        let mut screen = SettingsScreen::new();
+        let entry = all_entries(&screen)
+            .into_iter()
+            .find(|e| e.key == "show_tool_duration")
+            .expect("tool duration entry");
+        assert_eq!(entry.label, "Show tool duration");
+        assert!(matches!(entry.kind, SettingKind::Bool));
+        assert_eq!(entry.value, "false", "it must start off");
+
+        screen.search_query = "Show tool duration".to_string();
+        screen.selected_idx = 0;
+        toggle_or_cycle_current(&mut screen, &mut Config::default());
+
+        assert!(screen.show_tool_duration);
+        assert!(
+            screen.settings_snapshot.show_tool_duration,
+            "the renderer reads the screen's field and `persist` writes the \
+             snapshot, so a toggle that misses either one is only half applied"
         );
         assert_eq!(screen.save_error, None);
     }

@@ -62,6 +62,7 @@ fn get_message_text_user() {
         cost: None,
         snapshot_patch: None,
         timestamp: None,
+        tool_durations: None,
     };
     assert_eq!(get_message_text(&msg), "hello world");
 }
@@ -75,6 +76,7 @@ fn is_tool_use_message_false_for_user() {
         cost: None,
         snapshot_patch: None,
         timestamp: None,
+        tool_durations: None,
     };
     assert!(!is_tool_use_message(&msg));
 }

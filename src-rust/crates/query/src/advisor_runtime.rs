@@ -970,6 +970,7 @@ mod tests {
                 cost: None,
                 snapshot_patch: None,
                 timestamp: None,
+                tool_durations: None,
             },
             Message {
                 role: Role::User,
@@ -984,6 +985,7 @@ mod tests {
                 cost: None,
                 snapshot_patch: None,
                 timestamp: None,
+                tool_durations: None,
             },
         ];
 
@@ -1016,6 +1018,7 @@ mod tests {
             cost: None,
             snapshot_patch: None,
             timestamp: None,
+            tool_durations: None,
         }];
         let rendered = render_delta(&messages, false);
         assert!(rendered.contains("more characters"), "{rendered}");

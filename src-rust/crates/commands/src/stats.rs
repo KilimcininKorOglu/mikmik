@@ -1385,6 +1385,7 @@ mod tests {
                 }),
                 snapshot_patch: None,
                 timestamp: None,
+                tool_durations: None,
             },
             is_sidechain: false,
             user_type: "external".to_string(),

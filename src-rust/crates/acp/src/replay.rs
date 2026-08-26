@@ -186,6 +186,7 @@ mod tests {
             cost: None,
             snapshot_patch: None,
             timestamp: None,
+            tool_durations: None,
         }
     }
 

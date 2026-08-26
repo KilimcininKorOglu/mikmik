@@ -1666,6 +1666,7 @@ async fn run_query_loop_inner(
                         cost: None,
                         snapshot_patch: None,
                         timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                        tool_durations: None,
                     };
 
                     runner::record_turn_usage(
@@ -1721,6 +1722,7 @@ async fn run_query_loop_inner(
                     // finish_reason "stop" even when tool calls are present.
                     if !tool_use_blocks.is_empty() {
                         let mut tool_results = Vec::new();
+                        let mut tool_durations = Vec::new();
                         for (tool_id, tool_name, tool_input) in tool_use_blocks {
                             // Notify TUI that a tool is starting (matches Anthropic path).
                             if let Some(ref tx) = event_tx {
@@ -1763,6 +1765,9 @@ async fn run_query_loop_inner(
                                     duration_ms: result.duration_ms,
                                 });
                             }
+                            if let Some(took) = result.duration_ms {
+                                tool_durations.push((tool_id.clone(), took));
+                            }
                             tool_results.push(ContentBlock::ToolResult {
                                 tool_use_id: tool_id,
                                 content: mikmik_core::types::ToolResultContent::Text(
@@ -1771,14 +1776,9 @@ async fn run_query_loop_inner(
                                 is_error: Some(result.is_error),
                             });
                         }
-                        messages.push(Message {
-                            role: mikmik_core::types::Role::User,
-                            content: mikmik_core::types::MessageContent::Blocks(tool_results),
-                            uuid: None,
-                            cost: None,
-                            snapshot_patch: None,
-                            timestamp: Some(chrono::Utc::now().to_rfc3339()),
-                        });
+                        messages.push(
+                            Message::user_blocks(tool_results).with_tool_durations(tool_durations),
+                        );
                         // Hand the watcher the round that just ran. The primary
                         // is mid-turn here, so a note that comes back can still
                         // stop the work before the next tool goes out.
@@ -2227,6 +2227,7 @@ async fn run_query_loop_inner(
                 // returning promptly) but still emit ToolEnd + build every result
                 // block so the conversation and TUI stay consistent.
                 let mut result_blocks: Vec<ContentBlock> = Vec::with_capacity(prepared.len());
+                let mut tool_durations: Vec<(String, u64)> = Vec::with_capacity(prepared.len());
                 for (p, mut result) in prepared.iter().zip(exec_results) {
                     if !batch_cancelled {
                         run_post_tool_hooks(tool_ctx, &p.name, &p.input, &result).await;
@@ -2248,6 +2249,9 @@ async fn run_query_loop_inner(
                         });
                     }
 
+                    if let Some(took) = result.duration_ms {
+                        tool_durations.push((p.id.clone(), took));
+                    }
                     result_blocks.push(ContentBlock::ToolResult {
                         tool_use_id: p.id.clone(),
                         content: ToolResultContent::Text(result.content),
@@ -2257,7 +2261,8 @@ async fn run_query_loop_inner(
 
                 // Append tool results as a user message so the history remains
                 // valid (every tool_use is answered) even on cancellation.
-                messages.push(Message::user_blocks(result_blocks));
+                messages
+                    .push(Message::user_blocks(result_blocks).with_tool_durations(tool_durations));
 
                 // If the batch was abandoned due to cancellation, stop the loop
                 // now rather than sending the (cancelled) results back to the model.

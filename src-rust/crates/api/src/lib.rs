@@ -1648,6 +1648,30 @@ mod tests {
     use mikmik_core::config::WireModel;
 
     #[test]
+    fn a_messages_own_fields_never_reach_the_provider() {
+        // `ApiMessage::from` copies the role and the content and nothing else,
+        // which is what makes `Message` the safe home for host-side data. A
+        // field added to a `ContentBlock` variant instead would be serialised
+        // straight into the request body.
+        use mikmik_core::types::{ContentBlock, Message, ToolResultContent};
+
+        let msg = Message::user_blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: "toolu_1".into(),
+            content: ToolResultContent::Text("ok".into()),
+            is_error: None,
+        }])
+        .with_tool_durations(vec![("toolu_1".to_string(), 1234)]);
+
+        let wire = serde_json::to_string(&types::ApiMessage::from(&msg)).expect("serialise");
+
+        assert!(
+            !wire.contains("tool_durations") && !wire.contains("1234"),
+            "a host-side field reached the wire: {wire}"
+        );
+        assert!(wire.contains("toolu_1"), "the tool result itself must go");
+    }
+
+    #[test]
     fn test_sse_parser_basic() {
         let mut parser = sse_parser::SseLineParser::new();
         assert!(parser.feed_line("event: message_start").is_none());

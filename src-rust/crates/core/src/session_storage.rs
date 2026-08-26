@@ -1259,6 +1259,7 @@ mod tests {
             cost: None,
             snapshot_patch: None,
             timestamp: None,
+            tool_durations: None,
         }
     }
 
@@ -1383,6 +1384,7 @@ mod tests {
             cost: None,
             snapshot_patch: None,
             timestamp: None,
+            tool_durations: None,
         };
         let tm = TranscriptMessage {
             uuid: Some(uuid.to_string()),
@@ -1544,6 +1546,7 @@ mod tests {
             cost: None,
             snapshot_patch: None,
             timestamp: None,
+            tool_durations: None,
         }
     }
 
@@ -1783,6 +1786,7 @@ mod tests {
             cost: None,
             snapshot_patch: None,
             timestamp: None,
+            tool_durations: None,
         }
     }
 
@@ -1794,6 +1798,7 @@ mod tests {
             cost: None,
             snapshot_patch: None,
             timestamp: None,
+            tool_durations: None,
         }
     }
 

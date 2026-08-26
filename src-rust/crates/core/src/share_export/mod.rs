@@ -130,6 +130,7 @@ mod tests {
             cost: None,
             snapshot_patch: None,
             timestamp: None,
+            tool_durations: None,
         }];
         let html = render_session_html(&msgs, &meta());
         assert!(html.starts_with("<!DOCTYPE html>"));

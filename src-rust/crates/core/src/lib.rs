@@ -376,6 +376,20 @@ pub mod types {
         /// restored from transcripts written before this field existed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub timestamp: Option<String>,
+        /// How long each tool call answered in this message took, in
+        /// milliseconds, as `(tool_use_id, duration)`. Populated by the query
+        /// loop on the message that carries the tool results.
+        ///
+        /// Here rather than on `ContentBlock::ToolResult` because
+        /// `ApiMessage::from` serializes the blocks straight to the wire, so a
+        /// field there would reach every provider. A `Message`'s own fields
+        /// never leave this process.
+        ///
+        /// A `Vec` rather than a map: one batch holds a handful of calls, the
+        /// order is the order they were answered in, and the reader looks each
+        /// one up once per rebuild.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub tool_durations: Option<Vec<(String, u64)>>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -395,6 +409,7 @@ pub mod types {
                 cost: None,
                 snapshot_patch: None,
                 timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                tool_durations: None,
             }
         }
 
@@ -407,6 +422,7 @@ pub mod types {
                 cost: None,
                 snapshot_patch: None,
                 timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                tool_durations: None,
             }
         }
 
@@ -419,6 +435,7 @@ pub mod types {
                 cost: None,
                 snapshot_patch: None,
                 timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                tool_durations: None,
             }
         }
 
@@ -431,7 +448,31 @@ pub mod types {
                 cost: None,
                 snapshot_patch: None,
                 timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                tool_durations: None,
             }
+        }
+
+        /// Record how long each tool call answered in this message took.
+        ///
+        /// An empty list is dropped, so a turn where nothing was measured
+        /// stays out of the transcript rather than writing an empty array.
+        #[must_use]
+        pub fn with_tool_durations(mut self, durations: Vec<(String, u64)>) -> Self {
+            self.tool_durations = if durations.is_empty() {
+                None
+            } else {
+                Some(durations)
+            };
+            self
+        }
+
+        /// How long the call `tool_use_id` took, if this message recorded it.
+        pub fn tool_duration(&self, tool_use_id: &str) -> Option<u64> {
+            self.tool_durations
+                .as_ref()?
+                .iter()
+                .find(|(id, _)| id == tool_use_id)
+                .map(|(_, took)| *took)
         }
 
         /// Extract the first text content from this message.
@@ -527,6 +568,7 @@ pub mod types {
                 cost: None,
                 snapshot_patch: None,
                 timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                tool_durations: None,
             }
         }
 
@@ -542,6 +584,7 @@ pub mod types {
                 cost: None,
                 snapshot_patch: None,
                 timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                tool_durations: None,
             }
         }
 
@@ -557,6 +600,7 @@ pub mod types {
                 cost: None,
                 snapshot_patch: None,
                 timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                tool_durations: None,
             }
         }
 
@@ -572,6 +616,7 @@ pub mod types {
                 cost: None,
                 snapshot_patch: None,
                 timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                tool_durations: None,
             }
         }
 
@@ -592,6 +637,7 @@ pub mod types {
                 cost: None,
                 snapshot_patch: None,
                 timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                tool_durations: None,
             }
         }
 
@@ -612,6 +658,7 @@ pub mod types {
                 cost: None,
                 snapshot_patch: None,
                 timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                tool_durations: None,
             }
         }
     }
@@ -9091,6 +9138,45 @@ mod tests {
         let legacy = r#"{"role":"user","content":"hi"}"#;
         let back: crate::types::Message = serde_json::from_str(legacy).unwrap();
         assert_eq!(back.timestamp, None);
+    }
+
+    #[test]
+    fn a_recorded_tool_duration_survives_a_round_trip() {
+        let msg =
+            crate::types::Message::user_blocks(vec![crate::types::ContentBlock::ToolResult {
+                tool_use_id: "toolu_1".into(),
+                content: crate::types::ToolResultContent::Text("ok".into()),
+                is_error: None,
+            }])
+            .with_tool_durations(vec![("toolu_1".to_string(), 1234)]);
+
+        let json = serde_json::to_string(&msg).expect("serialise");
+        let back: crate::types::Message = serde_json::from_str(&json).expect("parse");
+
+        assert_eq!(back.tool_duration("toolu_1"), Some(1234));
+        assert_eq!(back.tool_duration("toolu_2"), None);
+    }
+
+    #[test]
+    fn a_turn_that_measured_nothing_writes_no_field() {
+        // An empty list would put `"tool_durations":[]` on every message that
+        // answered no tool, which is noise in every transcript ever written.
+        let msg = crate::types::Message::user("hi").with_tool_durations(Vec::new());
+        assert!(msg.tool_durations.is_none());
+
+        let json = serde_json::to_string(&msg).expect("serialise");
+        assert!(
+            !json.contains("tool_durations"),
+            "an unmeasured turn wrote the field anyway: {json}"
+        );
+    }
+
+    #[test]
+    fn a_transcript_written_before_the_field_still_loads() {
+        let legacy = r#"{"role":"user","content":"hi"}"#;
+        let back: crate::types::Message = serde_json::from_str(legacy).expect("parse");
+        assert!(back.tool_durations.is_none());
+        assert_eq!(back.tool_duration("toolu_1"), None);
     }
 
     #[test]

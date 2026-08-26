@@ -152,8 +152,15 @@ use std::sync::{LazyLock, atomic::Ordering};
 
 /// Disables the custom signal handlers installed by Rust for stack-overflow handling. With those custom signal handlers processes ignore the first SIGBUS and SIGSEGV signal they receive.
 /// See <https://github.com/rust-lang/rust/blob/8ac1525e091d3db28e67adcbbd6db1e1deaa37fb/src/libstd/sys/unix/stack_overflow.rs#L71-L92> for details.
+///
+/// PATCH(mikmik): does nothing for a utility running inside a host process,
+/// for the reason given on [`signals::enable_pipe_errors`]. Removing the
+/// handler costs the host its stack-overflow message for the rest of its life.
 #[cfg(unix)]
 pub fn disable_rust_signal_handlers() -> Result<(), Errno> {
+    if streams::is_redirected() {
+        return Ok(());
+    }
     unsafe {
         sigaction(
             SIGSEGV,

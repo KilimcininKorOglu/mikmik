@@ -212,6 +212,45 @@ mod tests {
         (code, read_back(dir, "err"))
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_utility_leaves_the_hosts_signals_alone() {
+        // Every `uumain` sets SIGPIPE, SIGSEGV and SIGBUS back to their
+        // defaults on the way in, because a standalone utility is the whole
+        // process and dying on a broken pipe is what `seq inf | head -1`
+        // needs. Here the process is MikMik: one `ls` would leave every later
+        // write in it able to kill it, and would take away the message a
+        // stack overflow prints.
+        fn defaulted(signal: i32) -> bool {
+            let mut current = std::mem::MaybeUninit::<libc::sigaction>::uninit();
+            // SAFETY: querying with a null new-action only reads the current
+            // disposition; nothing is installed.
+            let queried =
+                unsafe { libc::sigaction(signal, std::ptr::null(), current.as_mut_ptr()) };
+            if queried != 0 {
+                return false;
+            }
+            // SAFETY: the query succeeded, so the value is initialised.
+            unsafe { current.assume_init() }.sa_sigaction == libc::SIG_DFL
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(!defaulted(libc::SIGPIPE), "SIGPIPE was already the default");
+
+        let code = with_streams("ls", three(dir.path(), "out"), || {
+            let run = crate::bundled::registry().get("ls").expect("ls is bundled");
+            run(vec![
+                std::ffi::OsString::from("ls"),
+                std::ffi::OsString::from(dir.path().display().to_string()),
+            ])
+        });
+
+        assert_eq!(code, 0);
+        assert!(!defaulted(libc::SIGPIPE), "`ls` changed SIGPIPE");
+        assert!(!defaulted(libc::SIGSEGV), "`ls` changed SIGSEGV");
+        assert!(!defaulted(libc::SIGBUS), "`ls` changed SIGBUS");
+    }
+
     #[test]
     fn one_utilitys_failure_is_not_the_next_ones_answer() {
         // Upstream keeps the exit code in a process-wide static, because a

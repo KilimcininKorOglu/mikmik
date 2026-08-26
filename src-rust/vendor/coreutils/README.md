@@ -39,6 +39,8 @@ These are **not** workspace members, on purpose: `cargo clippy --workspace --all
 
 **4. The message bundle.** Two problems. `uucore`'s `build.rs` walks `src/uu/<name>/locales` to embed each utility's strings, and a vendored checkout has them in a sibling `uu_<name>/locales`, so nothing but `uucore`'s own strings was embedded. And the localizer was set once per thread and cached one resource per role globally, so the second utility on a thread read the first one's bundle. Both are fixed: the build walks the sibling layout, the localizer is rebuilt when the utility changes, and the resource cache is keyed by file. Without this `head` printed `head-error-cannot-open` where it should print `cannot open 'x' for reading`.
 
+**5. The process's signals.** Every `uumain` sets SIGPIPE back to its default on the way in, and clears the SIGSEGV and SIGBUS handlers Rust installs for stack-overflow reporting. Both are right for a standalone utility, which *is* the process: dying on a broken pipe is what `seq inf | head -1` needs. In a host process one `ls` left every later write able to kill MikMik, and took away the message a stack overflow prints for the rest of the process's life. `signals::enable_pipe_errors` and `disable_rust_signal_handlers` now do nothing while a host has streams installed.
+
 `uu_od` also stops building a `File` from the raw descriptor, which would have closed a descriptor the host is still using.
 
 ## Keeping the patch

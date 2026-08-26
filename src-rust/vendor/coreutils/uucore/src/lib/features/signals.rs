@@ -484,8 +484,18 @@ pub fn signal_list_value_by_name_or_number(spec: &str) -> Option<usize> {
 }
 
 /// Restores SIGPIPE to default behavior (process terminates on broken pipe).
+///
+/// PATCH(mikmik): does nothing for a utility running inside a host process.
+/// Every `uumain` calls this on the way in, because a standalone utility is
+/// the whole process and dying on a broken pipe is what `seq inf | head -1`
+/// needs. A host is not the utility: the disposition is the host's, and one
+/// `ls` would otherwise leave every later write in the process able to kill
+/// it.
 #[cfg(unix)]
 pub fn enable_pipe_errors() -> Result<(), Errno> {
+    if crate::streams::is_redirected() {
+        return Ok(());
+    }
     // We pass the error as is, the return value would just be Ok(SigDfl), so we can safely ignore it.
     // SAFETY: this function is safe as long as we do not use a custom SigHandler -- we use the default one.
     unsafe { signal(SIGPIPE, SigDfl) }.map(|_| ())

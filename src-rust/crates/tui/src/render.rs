@@ -1923,12 +1923,7 @@ fn append_turn_items(
     let width = ctx.width;
     push_rendered_items(
         items,
-        render_transcript_user_message(
-            turn.user_message,
-            width,
-            ctx.show_timestamps,
-            ctx.goal_completed,
-        ),
+        render_transcript_user_message(turn.user_message, ctx),
         Some(turn.user_index),
         true,
     );

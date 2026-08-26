@@ -226,6 +226,10 @@ fn apply_block_style(mut line: Line<'static>, width: u16) -> Line<'static> {
     Line::from(spans)
 }
 
+/// What `apply_block_style` puts in front of every line it wraps: the block's
+/// bar and one space.
+const BLOCK_BAR_WIDTH: u16 = 2;
+
 fn empty_block_line(width: u16) -> Line<'static> {
     apply_block_style(Line::from(""), width)
 }
@@ -419,12 +423,12 @@ fn extract_file_segments(text: &str) -> Vec<TextSegment> {
     result
 }
 
-pub fn render_transcript_user_message(
-    msg: &Message,
-    width: u16,
-    show_timestamps: bool,
-    goal_completed: bool,
-) -> Vec<Line<'static>> {
+pub fn render_transcript_user_message(msg: &Message, ctx: &RenderContext) -> Vec<Line<'static>> {
+    // The three values this used to take one by one all live on the context,
+    // and a tool result needs two more from it.
+    let width = ctx.width;
+    let show_timestamps = ctx.show_timestamps;
+    let goal_completed = ctx.goal_completed;
     // Goal-event messages injected by the /goal machinery render as a compact
     // event block, not as a user input bubble. The same applies to the user's
     // own `/goal <objective>` typing — replace it with the yellow GOAL ACTIVE
@@ -591,7 +595,7 @@ pub fn render_transcript_user_message(
                 lines.extend(render_tool_use_inner(&name, &input));
             }
             ContentBlock::ToolResult {
-                tool_use_id: _,
+                tool_use_id,
                 content,
                 is_error,
             } => {
@@ -603,6 +607,20 @@ pub fn render_transcript_user_message(
                     render_tool_result_success(&text, false)
                 };
                 lines.extend(rendered);
+                // A tool result is answered in a user message, so this is the
+                // arm a session reopened with --resume draws its tool calls
+                // from.
+                // Aligned to the width `apply_block_style` leaves: it puts the
+                // block's bar and a space in front of every line, so aligning
+                // to the full width would push the label one column past the
+                // pane.
+                if let Some(line) = tool_duration_line(
+                    ctx.tool_durations.get(&tool_use_id).copied(),
+                    ctx.width.saturating_sub(BLOCK_BAR_WIDTH),
+                    ctx.show_tool_duration,
+                ) {
+                    lines.push(line);
+                }
             }
             ContentBlock::Thinking { thinking, .. } => {
                 flush_text(&mut pending_text, &mut lines);
@@ -2693,23 +2711,29 @@ mod tests {
             ..Default::default()
         };
 
-        let msg = Message::assistant_blocks(vec![ContentBlock::ToolResult {
+        // A user message, because that is where a tool result is answered and
+        // therefore what a resumed transcript holds.
+        let msg = Message::user_blocks(vec![ContentBlock::ToolResult {
             tool_use_id: "tu-1".to_string(),
             content: ToolResultContent::Text("done".to_string()),
             is_error: Some(false),
         }]);
-        let rendered: Vec<String> = render_transcript_assistant_message_tagged(&msg, &ctx)
+        let rendered: Vec<String> = render_transcript_user_message(&msg, &ctx)
             .into_iter()
-            .map(|(line, _)| line_text(&line))
+            .map(|line| line_text(&line))
             .collect();
 
-        let last = rendered.last().expect("the block has lines");
-        assert_eq!(last.trim(), "17.4s", "{rendered:?}");
+        // Not the last line: the user block closes with a bar of its own.
+        let row = rendered
+            .iter()
+            .find(|line| line.contains("17.4s"))
+            .unwrap_or_else(|| panic!("no line carries the duration: {rendered:?}"));
+        assert!(row.ends_with("17.4s"), "{row:?}");
         assert_eq!(
-            last.width(),
+            row.width(),
             40,
-            "the label sits at the pane's right edge, so it must not be \
-             indented past it: {last:?}"
+            "the block's bar takes two columns, so aligning to the full width \
+             would push the label one past the pane: {row:?}"
         );
     }
 
@@ -2724,14 +2748,14 @@ mod tests {
             ..Default::default()
         };
 
-        let msg = Message::assistant_blocks(vec![ContentBlock::ToolResult {
+        let msg = Message::user_blocks(vec![ContentBlock::ToolResult {
             tool_use_id: "tu-1".to_string(),
             content: ToolResultContent::Text("done".to_string()),
             is_error: Some(false),
         }]);
-        let rendered: Vec<String> = render_transcript_assistant_message_tagged(&msg, &ctx)
+        let rendered: Vec<String> = render_transcript_user_message(&msg, &ctx)
             .into_iter()
-            .map(|(line, _)| line_text(&line))
+            .map(|line| line_text(&line))
             .collect();
 
         assert!(
@@ -3168,7 +3192,7 @@ mod tests {
     fn user_message_omits_time_when_the_setting_is_off() {
         let msg = Message::user("hello");
         assert!(msg.timestamp.is_some(), "constructor stamps the instant");
-        let rendered: String = render_transcript_user_message(&msg, 80, false, false)
+        let rendered: String = render_transcript_user_message(&msg, &RenderContext::default())
             .iter()
             .map(line_text)
             .collect();
@@ -3181,10 +3205,16 @@ mod tests {
     #[test]
     fn user_message_shows_time_when_the_setting_is_on() {
         let msg = Message::user("hello");
-        let rendered: String = render_transcript_user_message(&msg, 80, true, false)
-            .iter()
-            .map(line_text)
-            .collect();
+        let rendered: String = render_transcript_user_message(
+            &msg,
+            &RenderContext {
+                show_timestamps: true,
+                ..Default::default()
+            },
+        )
+        .iter()
+        .map(line_text)
+        .collect();
         assert!(has_clock(&rendered), "expected a clock, got {rendered:?}");
         assert!(rendered.contains("hello"), "message text must survive");
     }
@@ -3194,10 +3224,16 @@ mod tests {
         // A turn restored from a transcript written before timestamping.
         let mut msg = Message::user("legacy");
         msg.timestamp = None;
-        let rendered: String = render_transcript_user_message(&msg, 80, true, false)
-            .iter()
-            .map(line_text)
-            .collect();
+        let rendered: String = render_transcript_user_message(
+            &msg,
+            &RenderContext {
+                show_timestamps: true,
+                ..Default::default()
+            },
+        )
+        .iter()
+        .map(line_text)
+        .collect();
         assert!(!has_clock(&rendered), "got {rendered:?}");
     }
 

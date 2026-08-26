@@ -332,6 +332,9 @@ pub enum QueryEvent {
         tool_id: String,
         result: String,
         is_error: bool,
+        /// How long the tool's own work took, in milliseconds. `None` when
+        /// nothing ran, which is what a cancelled call answers.
+        duration_ms: Option<u64>,
     },
     /// The model finished a turn.
     TurnComplete {
@@ -1757,6 +1760,7 @@ async fn run_query_loop_inner(
                                     tool_id: tool_id.clone(),
                                     result: result.content.clone(),
                                     is_error: result.is_error,
+                                    duration_ms: result.duration_ms,
                                 });
                             }
                             tool_results.push(ContentBlock::ToolResult {
@@ -2240,6 +2244,7 @@ async fn run_query_loop_inner(
                             tool_id: p.id.clone(),
                             result: result.content.clone(),
                             is_error: result.is_error,
+                            duration_ms: result.duration_ms,
                         });
                     }
 
@@ -3458,6 +3463,85 @@ mod tests {
         // Only the dispatcher's per-call copy carries one; the context the turn
         // was built with must not claim to belong to some call.
         assert!(deny_all_context().current_call.is_none());
+    }
+
+    /// A tool that takes a known amount of time, so a measurement of it can be
+    /// checked against something.
+    struct SlowTool {
+        millis: u64,
+    }
+
+    #[async_trait::async_trait]
+    impl Tool for SlowTool {
+        fn name(&self) -> &str {
+            "MockSlow"
+        }
+        fn description(&self) -> &str {
+            "mock tool that takes a known time"
+        }
+        fn permission_level(&self) -> PermissionLevel {
+            // Read-only, so the backstop lets it through and the measurement is
+            // of the tool alone.
+            PermissionLevel::ReadOnly
+        }
+        fn self_gates(&self) -> bool {
+            false
+        }
+        fn input_schema(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+        async fn execute(&self, _input: Value, _ctx: &ToolContext) -> ToolResult {
+            tokio::time::sleep(std::time::Duration::from_millis(self.millis)).await;
+            ToolResult::success("slept")
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tool_reports_how_long_its_own_work_took() {
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(SlowTool { millis: 60 })];
+        let ctx = deny_all_context();
+
+        let result = execute_tool("MockSlow", "call-1", &serde_json::json!({}), &tools, &ctx).await;
+
+        let measured = result.duration_ms.expect("the call was timed");
+        assert!(
+            measured >= 50,
+            "a 60 ms tool reported {measured} ms, which is less than it slept"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_call_the_backstop_blocks_reports_no_duration() {
+        // The number means the tool's own work. Nothing ran here, so answering
+        // a duration would report how long the permission check took.
+        let ran = Arc::new(AtomicBool::new(false));
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(MockTool {
+            name: "MockExec",
+            level: PermissionLevel::Execute,
+            self_gates: false,
+            ran: ran.clone(),
+        })];
+        let ctx = deny_all_context();
+
+        let result = execute_tool("MockExec", "call-1", &serde_json::json!({}), &tools, &ctx).await;
+
+        assert!(result.is_error, "the backstop must block this tool");
+        assert!(
+            result.duration_ms.is_none(),
+            "a tool that never ran must report no duration"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_tool_reports_no_duration() {
+        let tools: Vec<Box<dyn Tool>> = Vec::new();
+        let ctx = deny_all_context();
+
+        let result =
+            execute_tool("NoSuchTool", "call-1", &serde_json::json!({}), &tools, &ctx).await;
+
+        assert!(result.is_error);
+        assert!(result.duration_ms.is_none());
     }
 
     #[test]

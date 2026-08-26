@@ -443,6 +443,8 @@ async fn forward_events(
                 tool_id,
                 result,
                 is_error,
+                // The protocol has no field for it, so the editor is not told.
+                duration_ms: _,
             } => {
                 let status = if is_error {
                     acp::ToolCallStatus::Failed

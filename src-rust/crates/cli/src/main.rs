@@ -5609,6 +5609,10 @@ async fn run_interactive(
                         tool_id,
                         result,
                         is_error,
+                        // Not forwarded: the relay's web client has nowhere to
+                        // put it, and inventing a field it ignores would date
+                        // the protocol for nothing.
+                        ..
                     } => Some(
                         serde_json::json!({
                             "type": "tool_end",

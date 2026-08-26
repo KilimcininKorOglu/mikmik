@@ -4521,6 +4521,7 @@ mod tool_block_tests {
             output_preview: preview.map(|s| s.to_string()),
             input_json: input.into(),
             live_output: String::new(),
+            duration_ms: None,
         }
     }
 
@@ -6437,6 +6438,7 @@ mod tab_expansion_tests {
             status: ToolStatus::Done,
             output_preview: Some("1\talpha\n2\tbeta\n3\tgamma".to_string()),
             live_output: String::new(),
+            duration_ms: None,
         };
 
         let mut lines = Vec::new();

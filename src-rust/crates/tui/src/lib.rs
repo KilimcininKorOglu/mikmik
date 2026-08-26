@@ -1607,6 +1607,7 @@ mod tests {
             tool_id: "t1".to_string(),
             result: "output".to_string(),
             is_error: false,
+            duration_ms: Some(7),
         });
         assert_eq!(app.tool_use_blocks[0].status, ToolStatus::Done);
     }
@@ -1622,12 +1623,14 @@ mod tests {
             output_preview: None,
             input_json: r#"{"file_path":"foo.rs"}"#.to_string(),
             live_output: String::new(),
+            duration_ms: None,
         });
         app.handle_query_event(mikmik_query::QueryEvent::ToolEnd {
             tool_name: "Read".to_string(),
             tool_id: "t2".to_string(),
             result: "file not found".to_string(),
             is_error: true,
+            duration_ms: Some(3),
         });
         assert_eq!(app.tool_use_blocks[0].status, ToolStatus::Error);
         assert!(app.status_message.is_some());

@@ -837,6 +837,10 @@ pub struct ToolUseBlock {
     /// replaces it once the call finishes, so the transcript keeps the result
     /// rather than the play-by-play.
     pub live_output: String,
+    /// How long the tool's own work took, in milliseconds. Filled when the
+    /// call finishes; `None` while it runs and for a call that was cancelled
+    /// before it started.
+    pub duration_ms: Option<u64>,
 }
 
 impl ToolUseBlock {
@@ -8505,6 +8509,7 @@ impl App {
                         output_preview: None,
                         input_json,
                         live_output: String::new(),
+                        duration_ms: None,
                     });
                 }
                 self.invalidate_transcript();
@@ -8515,6 +8520,7 @@ impl App {
                 tool_id,
                 result,
                 is_error,
+                duration_ms,
             } => {
                 self.timeline_tool_finished(&tool_id, &result, is_error);
                 // Build a multi-line preview: show up to 3 lines, truncate if more.
@@ -8533,6 +8539,7 @@ impl App {
                     };
                     block.output_preview = Some(preview);
                     block.live_output.clear();
+                    block.duration_ms = duration_ms;
                 }
                 self.invalidate_transcript();
                 if is_error {
@@ -11436,6 +11443,7 @@ mod timeline_tests {
             tool_id: id.to_string(),
             result: "line one\nline two".to_string(),
             is_error,
+            duration_ms: Some(12),
         }
     }
 

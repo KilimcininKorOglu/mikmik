@@ -87,7 +87,13 @@ pub(crate) async fn execute_tool(
                     return ToolResult::error(e.to_string());
                 }
             }
-            tool.execute(input.clone(), ctx).await
+            // Timed here rather than around the whole function, so the number
+            // is the tool's own work. A tool that prompts for permission would
+            // otherwise report how long the user took to answer.
+            let started = std::time::Instant::now();
+            let mut result = tool.execute(input.clone(), ctx).await;
+            result.duration_ms = Some(started.elapsed().as_millis() as u64);
+            result
         }
         None => {
             warn!(tool = name, "Unknown tool requested");

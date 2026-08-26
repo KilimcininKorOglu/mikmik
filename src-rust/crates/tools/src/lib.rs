@@ -229,6 +229,15 @@ pub struct ToolResult {
     pub is_error: bool,
     /// Optional structured metadata (for the TUI to render diffs, etc.).
     pub metadata: Option<Value>,
+    /// How long the tool's own work took, in milliseconds.
+    ///
+    /// Stamped by `execute_tool` in `mikmik-query` rather than by the tool, so
+    /// every tool is measured the same way and none has to remember to. It
+    /// covers the `execute` call alone: a tool that waits for the user to
+    /// approve it would otherwise report how long the user took to answer.
+    ///
+    /// `None` when nothing ran, which is what a cancelled call answers.
+    pub duration_ms: Option<u64>,
 }
 
 impl ToolResult {
@@ -237,6 +246,7 @@ impl ToolResult {
             content: content.into(),
             is_error: false,
             metadata: None,
+            duration_ms: None,
         }
     }
 
@@ -245,6 +255,7 @@ impl ToolResult {
             content: content.into(),
             is_error: true,
             metadata: None,
+            duration_ms: None,
         }
     }
 

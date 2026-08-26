@@ -9,6 +9,7 @@ mod error;
 #[cfg(unix)]
 mod hardlink;
 
+use uucore::streams::println;
 use clap::builder::ValueParser;
 use clap::error::ErrorKind;
 use clap::{Arg, ArgAction, ArgMatches, Command};

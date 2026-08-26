@@ -5,6 +5,7 @@
 
 // spell-checker:ignore (ToDO) ENOTDIR
 
+use uucore::streams::println;
 use clap::builder::ValueParser;
 use clap::{Arg, ArgAction, Command};
 use std::ffi::OsString;

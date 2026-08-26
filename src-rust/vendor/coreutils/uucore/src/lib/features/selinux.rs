@@ -5,6 +5,7 @@
 
 //! Set of functions to manage SELinux security contexts
 
+use crate::streams::println;
 use std::error::Error;
 use std::path::Path;
 

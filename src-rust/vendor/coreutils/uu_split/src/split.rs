@@ -10,6 +10,7 @@ mod number;
 mod platform;
 mod strategy;
 
+use uucore::streams::println;
 use crate::filenames::{FilenameIterator, Suffix, SuffixError};
 use crate::strategy::{NumberType, Strategy, StrategyError};
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint, parser::ValueSource};

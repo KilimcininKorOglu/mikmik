@@ -7,6 +7,7 @@
 
 mod platform;
 
+use uucore::streams::print;
 use crate::platform::is_unsafe_overwrite;
 use clap::{Arg, ArgAction, Command};
 use memchr::memchr2;

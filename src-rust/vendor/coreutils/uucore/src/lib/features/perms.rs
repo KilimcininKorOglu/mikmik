@@ -7,6 +7,7 @@
 
 // spell-checker:ignore (jargon) TOCTOU fchownat fchown
 
+use crate::streams::println;
 use crate::display::Quotable;
 use crate::error::{UResult, USimpleError, strip_errno};
 pub use crate::features::entries;

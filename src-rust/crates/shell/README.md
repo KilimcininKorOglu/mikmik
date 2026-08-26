@@ -74,7 +74,9 @@ Three things a child process gave for free.
 
 **The working directory is the process's.** brush keeps the shell's own and hands it to a child through `Command::current_dir`; a utility running here resolves `sort list` against whatever directory the process is in. `src/cwd.rs` lends the process's directory for the length of the call, shared by everything asking for the same one so a pipeline cannot deadlock on it, and put back afterwards.
 
-**State that used to be per process is now per thread.** The exit code, the utility's name and its message bundle all came from the utility being a process of its own. Each is scoped to one run in the fork; the patch notes say how. The same applies to the process's signal dispositions, which every `uumain` used to reset: one `ls` left MikMik able to be killed by any later broken-pipe write.
+**State that used to be per process is now per thread.** The exit code, the utility's name and its message bundle all came from the utility being a process of its own. Each is scoped to one run in the fork; the patch notes say how. The same applies to the process's signal dispositions, which every `uumain` used to reset: one `ls` left MikMik able to be killed by any later broken-pipe write. Per thread also means `du` and `dd` needed the streams handing over, because each prints from a thread it spawns.
+
+Against the machine's own GNU coreutils, the 32 calls in `tests/gnu_parity.rs` all answer identically. `vendor/coreutils/README.md` says what that covers and what it does not.
 
 ## What it does not do
 
@@ -91,6 +93,7 @@ An external program is still a real process. brush removes the shell process and
 | `src/bundled.rs` | The registry of bundled commands and the built-in that runs one |
 | `src/bundled/find.rs` | `find`, through the `findutils` library |
 | `src/bundled/jq.rs` | `jq`, through the `jaq` libraries |
+| `tests/gnu_parity.rs` | What the carried utilities answer, against what GNU answers |
 
 ## Upstream
 

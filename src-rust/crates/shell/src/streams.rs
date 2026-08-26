@@ -346,4 +346,48 @@ mod tests {
             read_back(dir.path(), "out")
         );
     }
+
+    /// Run a bundled utility with the three streams pointing at `dir`.
+    fn carry(dir: &std::path::Path, name: &str, args: &[&str]) -> (i32, String) {
+        let code = with_streams(name, three(dir, "out"), || {
+            let run = crate::bundled::registry()
+                .get(name)
+                .unwrap_or_else(|| panic!("{name} is bundled"));
+            let mut argv = vec![std::ffi::OsString::from(name)];
+            argv.extend(args.iter().map(std::ffi::OsString::from));
+            run(argv)
+        });
+        (code, read_back(dir, "out"))
+    }
+
+    #[test]
+    fn a_utility_that_prints_writes_where_it_was_told() {
+        // `print!` and its three siblings reach the process's real streams
+        // without asking for a handle, so a call site that uses one bypasses
+        // the override entirely. `dirname` writes its whole answer that way.
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let (code, answer) = carry(dir.path(), "dirname", &["/a/b/c.txt"]);
+
+        assert_eq!(code, 0);
+        assert_eq!(answer, "/a/b\n");
+    }
+
+    #[test]
+    fn a_utility_that_prints_from_a_helper_thread_writes_where_it_was_told() {
+        // The override is per thread, and `du` prints its whole answer from a
+        // thread it spawns. Without the handoff that thread writes to the
+        // process's own standard output and the redirected file stays empty.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("source"), "one\ntwo\n").expect("write");
+        let counted = dir.path().join("source").display().to_string();
+
+        let (code, answer) = carry(dir.path(), "du", &["-s", &counted]);
+
+        assert_eq!(code, 0);
+        assert!(
+            answer.trim_end().ends_with(&counted) && answer.contains('\t'),
+            "du wrote {answer:?}"
+        );
+    }
 }

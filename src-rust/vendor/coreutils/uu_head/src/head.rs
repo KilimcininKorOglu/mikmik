@@ -5,6 +5,7 @@
 
 // spell-checker:ignore (vars) seekable memrchr
 
+use uucore::streams::{print, println};
 use clap::ArgMatches;
 use memchr::memrchr_iter;
 use std::ffi::OsString;

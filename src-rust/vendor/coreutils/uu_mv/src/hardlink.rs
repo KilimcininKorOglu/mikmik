@@ -9,6 +9,7 @@
 //! This module provides functionality to preserve hardlink relationships
 //! when moving files across different filesystems/partitions.
 
+use uucore::streams::eprintln;
 use rustc_hash::FxHashMap;
 use std::io;
 use std::path::{Path, PathBuf};

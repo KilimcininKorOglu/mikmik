@@ -34,6 +34,7 @@
 /// Overall, the module ensures each entry in the DIRED output has the correct
 /// byte position, considering additional lines or padding affecting positions.
 ///
+use uucore::streams::{print, println};
 use crate::Config;
 use std::fmt;
 use std::io::{BufWriter, Write};

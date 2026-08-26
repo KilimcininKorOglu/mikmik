@@ -588,9 +588,11 @@ pub fn read_os_string_lines<R: std::io::Read>(
 macro_rules! prompt_yes(
     ($($args:tt)+) => ({
         use std::io::Write;
-        eprint!("{}: ", uucore::util_name());
-        eprint!($($args)+);
-        eprint!(" ");
+        // Not `eprint!`: that reaches the process's real standard error, and
+        // the prompt has to go where the host redirected the utility.
+        $crate::streams::write_err(::std::format_args!("{}: ", uucore::util_name()));
+        $crate::streams::write_err(::std::format_args!($($args)+));
+        $crate::streams::write_err(::std::format_args!(" "));
         let res = $crate::streams::stderr().flush().map_err(|err| {
             $crate::error::USimpleError::new(1, err.to_string())
         });

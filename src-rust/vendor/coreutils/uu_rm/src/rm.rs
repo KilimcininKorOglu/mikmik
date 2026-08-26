@@ -5,6 +5,7 @@
 
 // spell-checker:ignore (path) eacces inacc rm-r4 unlinkat fstatat rootlink
 
+use uucore::streams::println;
 use clap::builder::{PossibleValue, ValueParser};
 use clap::{Arg, ArgAction, Command, parser::ValueSource};
 use indicatif::{ProgressBar, ProgressStyle};

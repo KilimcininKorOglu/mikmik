@@ -11,6 +11,7 @@
 //! instead of parsing error strings, providing a more robust solution.
 //!
 
+use crate::streams::{eprint, eprintln, print};
 use crate::error::{UResult, USimpleError};
 use crate::locale::translate;
 

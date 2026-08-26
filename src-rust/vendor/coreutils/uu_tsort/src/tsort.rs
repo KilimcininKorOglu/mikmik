@@ -4,6 +4,7 @@
 // file that was distributed with this source code.
 //spell-checker:ignore TAOCP indegree fadvise FADV
 //spell-checker:ignore (libs) interner uclibc
+use uucore::streams::println;
 use clap::{Arg, ArgAction, Command};
 use rustc_hash::FxHashMap;
 use std::collections::VecDeque;

@@ -8,6 +8,7 @@
 //! See the [`copy_directory`] function for more information.
 #[cfg(windows)]
 use std::borrow::Cow;
+use uucore::streams::{eprintln, println};
 use std::collections::{HashMap, HashSet};
 use std::convert::identity;
 use std::env;

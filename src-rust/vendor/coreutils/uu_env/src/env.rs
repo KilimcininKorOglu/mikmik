@@ -11,6 +11,7 @@ pub mod string_expander;
 pub mod string_parser;
 pub mod variable_parser;
 
+use uucore::streams::eprintln;
 use clap::builder::ValueParser;
 use clap::{Arg, ArgAction, Command};
 use ini::Ini;

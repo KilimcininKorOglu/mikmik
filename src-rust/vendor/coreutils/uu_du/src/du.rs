@@ -5,6 +5,7 @@
 //
 // spell-checker:ignore fstatat openat dirfd
 
+use uucore::streams::{print, println};
 use clap::{Arg, ArgAction, ArgMatches, Command, builder::PossibleValue};
 use glob::Pattern;
 use rustc_hash::FxHashSet as HashSet;
@@ -1130,7 +1131,13 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
 
     // Use separate thread to print output, so we can print finished results while computation is still running
     let (print_tx, rx) = mpsc::channel::<UResult<StatPrintInfo>>();
-    let printing_thread = thread::spawn(move || stat_printer.print_stats(&rx));
+    // The whole answer is written from that thread, and a thread starts with
+    // no idea where a host redirected this utility. Carry it over.
+    // The whole answer is written from that thread, and a thread starts with
+    // no idea where a host redirected this utility. Carry it over.
+    let streams = uucore::streams::handoff();
+    let printing_thread =
+        thread::spawn(move || uucore::streams::adopt(streams, || stat_printer.print_stats(&rx)));
 
     // Check existence of path provided in argument
     let mut seen_inodes: HashSet<FileInfo> = HashSet::default();

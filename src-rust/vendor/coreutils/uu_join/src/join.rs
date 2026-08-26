@@ -5,6 +5,7 @@
 
 // spell-checker:ignore (ToDO) autoformat FILENUM whitespaces pairable unpairable nocheck memmem
 
+use uucore::streams::eprintln;
 use clap::builder::ValueParser;
 use clap::{Arg, ArgAction, Command};
 use memchr::{Memchr3, memchr_iter, memmem::Finder};

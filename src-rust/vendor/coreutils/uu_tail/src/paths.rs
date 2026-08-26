@@ -5,6 +5,7 @@
 
 // spell-checker:ignore tailable seekable stdlib (stdlib)
 
+use uucore::streams::println;
 use crate::text;
 use std::ffi::OsStr;
 use std::fs::{File, Metadata};

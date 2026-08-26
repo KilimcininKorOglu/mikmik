@@ -8,6 +8,9 @@ mod columns;
 mod filesystem;
 mod table;
 
+// The one call site is the `--inodes` notice, which only Windows builds.
+#[cfg(windows)]
+use uucore::streams::println;
 use blocks::HumanReadable;
 use clap::builder::ValueParser;
 use table::HeaderMode;

@@ -5,6 +5,7 @@
 
 // spell-checker:ignore bitlen
 
+use crate::streams::print;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};

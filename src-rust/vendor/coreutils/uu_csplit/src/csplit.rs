@@ -5,6 +5,7 @@
 // spell-checker:ignore rustdoc
 #![allow(rustdoc::private_intra_doc_links)]
 
+use uucore::streams::println;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::ffi::OsString;

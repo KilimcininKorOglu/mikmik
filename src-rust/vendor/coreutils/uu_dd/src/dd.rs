@@ -13,6 +13,10 @@ mod numbers;
 mod parseargs;
 mod progress;
 
+// The one call site is the SIGUSR1 handler's warning, which only Linux builds.
+#[cfg(target_os = "linux")]
+use uucore::streams::eprintln;
+
 use crate::bufferedoutput::BufferedOutput;
 use blocks::conv_block_unblock_helper;
 use datastructures::{ConversionMode, IConvFlags, IFlags, OConvFlags, OFlags, options};
@@ -1142,7 +1146,11 @@ fn dd_copy(mut i: Input, o: Output) -> io::Result<()> {
     // to the receives `rx`, and the receiver prints the transfer
     // information.
     let (prog_tx, rx) = mpsc::channel();
-    let output_thread = thread::spawn(gen_prog_updater(rx, i.settings.status));
+    // The progress report is written from that thread, and a thread starts
+    // with no idea where a host redirected this utility. Carry it over.
+    let streams = uucore::streams::handoff();
+    let report = gen_prog_updater(rx, i.settings.status);
+    let output_thread = thread::spawn(move || uucore::streams::adopt(streams, report));
 
     // Whether to truncate the output file after all blocks have been written.
     let truncate = !o.settings.oconv.notrunc;

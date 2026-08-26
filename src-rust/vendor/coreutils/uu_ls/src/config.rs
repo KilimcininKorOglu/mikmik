@@ -6,6 +6,7 @@
 // spell-checker:ignore (ToDO) somegroup nlink tabsize dired subdired dtype colorterm stringly
 // spell-checker:ignore nohash strtime clocale
 
+use uucore::streams::eprintln;
 use std::{
     borrow::Cow,
     ffi::{OsStr, OsString},

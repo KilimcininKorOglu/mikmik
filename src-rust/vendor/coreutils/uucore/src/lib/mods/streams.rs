@@ -28,6 +28,30 @@
 //! start to finish, so there is no await boundary for the thread to change
 //! across. Anything that moves part of a utility onto another thread breaks
 //! this silently: the moved part writes to the real standard output.
+//!
+//! Two utilities do move part of themselves: `du` prints its whole answer from
+//! a helper thread, and `dd` reports its progress from one. Both hand the
+//! streams over with [`handoff`] and [`adopt`] rather than being restructured.
+//!
+//! # The print macros
+//!
+//! Obtaining a stream is only half of it. `print!`, `println!`, `eprint!` and
+//! `eprintln!` reach the process's real streams without asking for a handle at
+//! all, so a call site that uses one bypasses everything above. This module
+//! carries four macros of the same names and shapes that go through the
+//! override, and each file that prints imports them:
+//!
+//! ```ignore
+//! use uucore::streams::{print, println};
+//! ```
+//!
+//! A `use` shadows the macro the prelude offers, so the call sites read exactly
+//! as they did.
+//!
+//! The one difference from the standard macros: a failed write is dropped
+//! rather than panicking. In a host process a full disk or a closed pipe must
+//! not end a thread the host owns, and every loop that prints this way is
+//! bounded by its input rather than running until the write fails.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
@@ -136,6 +160,54 @@ fn intern(name: &str) -> &'static str {
     kept
 }
 
+/// What one thread needs to write where another thread was told to.
+///
+/// Produced by [`handoff`] and consumed by [`adopt`]. Carries only shared
+/// handles and a `&'static str`, so it crosses a thread boundary.
+#[derive(Clone)]
+pub struct Handoff {
+    streams: Option<Installed>,
+    name: Option<&'static str>,
+}
+
+/// Take a copy of what the current thread writes to, to give to another one.
+///
+/// Call this on the utility's own thread, before spawning the helper.
+#[must_use]
+pub fn handoff() -> Handoff {
+    Handoff {
+        streams: installed(),
+        name: util_name(),
+    }
+}
+
+/// Run `body` writing where the thread that produced `handoff` writes.
+///
+/// The helper thread's entry point. Unlike [`with_streams`] this leaves the
+/// exit code alone: the utility is still running on its own thread and owns
+/// that code, so a helper must not clear it.
+pub fn adopt<T>(handoff: Handoff, body: impl FnOnce() -> T) -> T {
+    struct Restore {
+        streams: Option<Installed>,
+        name: Option<&'static str>,
+    }
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OVERRIDE.with(|slot| *slot.borrow_mut() = self.streams.take());
+            UTIL_NAME.with(|slot| slot.set(self.name));
+        }
+    }
+
+    let _restore = Restore {
+        streams: OVERRIDE.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            std::mem::replace(&mut *slot, handoff.streams)
+        }),
+        name: UTIL_NAME.with(|slot| slot.replace(handoff.name)),
+    };
+    body()
+}
+
 /// Whether the current thread is writing somewhere the host chose.
 ///
 /// Useful to a utility that wants to know it is not talking to the process's
@@ -147,6 +219,79 @@ pub fn is_redirected() -> bool {
 fn installed() -> Option<Installed> {
     OVERRIDE.with(|slot| slot.borrow().clone())
 }
+
+// ---------------------------------------------------------------------------
+// The print macros
+// ---------------------------------------------------------------------------
+
+/// Write `args` to the current thread's standard output.
+///
+/// The body of [`print!`] and [`println!`]. A failed write is dropped; see the
+/// module documentation for why.
+pub fn write_out(args: std::fmt::Arguments<'_>) {
+    let _ = stdout().write_fmt(args);
+}
+
+/// Write `args` to the current thread's standard error.
+///
+/// The body of [`eprint!`] and [`eprintln!`].
+pub fn write_err(args: std::fmt::Arguments<'_>) {
+    let _ = stderr().write_fmt(args);
+}
+
+/// Write to the current thread's standard output, as [`std::print!`] does.
+#[macro_export]
+macro_rules! stream_print {
+    ($($arg:tt)*) => {
+        $crate::streams::write_out(::std::format_args!($($arg)*))
+    };
+}
+
+/// Write a line to the current thread's standard output, as [`std::println!`]
+/// does.
+#[macro_export]
+macro_rules! stream_println {
+    () => {
+        $crate::streams::write_out(::std::format_args!("\n"))
+    };
+    ($($arg:tt)*) => {
+        $crate::streams::write_out(::std::format_args!(
+            "{}\n",
+            ::std::format_args!($($arg)*)
+        ))
+    };
+}
+
+/// Write to the current thread's standard error, as [`std::eprint!`] does.
+#[macro_export]
+macro_rules! stream_eprint {
+    ($($arg:tt)*) => {
+        $crate::streams::write_err(::std::format_args!($($arg)*))
+    };
+}
+
+/// Write a line to the current thread's standard error, as [`std::eprintln!`]
+/// does.
+#[macro_export]
+macro_rules! stream_eprintln {
+    () => {
+        $crate::streams::write_err(::std::format_args!("\n"))
+    };
+    ($($arg:tt)*) => {
+        $crate::streams::write_err(::std::format_args!(
+            "{}\n",
+            ::std::format_args!($($arg)*)
+        ))
+    };
+}
+
+// Reachable under the names the call sites already use. `#[macro_export]` puts
+// a macro at the crate root whatever module it was written in, so these
+// re-exports are what make `use uucore::streams::println;` resolve.
+pub use crate::stream_eprint as eprint;
+pub use crate::stream_eprintln as eprintln;
+pub use crate::stream_print as print;
+pub use crate::stream_println as println;
 
 // ---------------------------------------------------------------------------
 // Standard output

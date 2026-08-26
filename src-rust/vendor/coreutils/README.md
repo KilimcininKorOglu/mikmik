@@ -27,7 +27,7 @@ These are **not** workspace members, on purpose: `cargo clippy --workspace --all
 
 ## What the patch changes
 
-84 files, 526 lines added and 375 removed against the published crates. One theme runs through all of it: **a utility here is not a process of its own, so nothing it needs may come from the process.** Upstream took five things that way.
+92 files, 1,369 lines added and 380 removed against the published crates. One theme runs through all of it: **a utility here is not a process of its own, so nothing it needs may come from the process.** Upstream took seven things that way.
 
 **1. The three standard streams.** `uucore/src/lib/mods/streams.rs` is new. It holds a per-thread override and hands out stand-ins for `std::io::Stdout`, `Stderr` and `Stdin` that follow it. They answer the same shapes the standard library's do: `Write`, `Read`, `BufRead`, `lock()`, `AsFd`, `AsRawFd`, `is_terminal()`. Every place a utility obtains one of the three now calls `uucore::streams` instead of `std::io`, and a handful of signatures that named `std::io::Stdout` or took `&Stdin` name the stand-in instead.
 
@@ -41,16 +41,34 @@ These are **not** workspace members, on purpose: `cargo clippy --workspace --all
 
 **5. The process's signals.** Every `uumain` sets SIGPIPE back to its default on the way in, and clears the SIGSEGV and SIGBUS handlers Rust installs for stack-overflow reporting. Both are right for a standalone utility, which *is* the process: dying on a broken pipe is what `seq inf | head -1` needs. In a host process one `ls` left every later write able to kill MikMik, and took away the message a stack overflow prints for the rest of the process's life. `signals::enable_pipe_errors` and `disable_rust_signal_handlers` now do nothing while a host has streams installed.
 
+**6. The print macros.** Obtaining a stream is only half of it. `print!`, `println!`, `eprint!` and `eprintln!` reach the process's real streams without asking for a handle at all, so 79 call sites across 26 files bypassed everything above. `dirname` writes its whole answer that way, and `du` does too. `uucore::streams` carries four macros of the same names and shapes that go through the override, and each file that prints imports them; a `use` shadows the macro the prelude offers, so the call sites read as they did. The one difference from the standard macros is that a failed write is dropped rather than panicking: in a host process a closed pipe must not end a thread the host owns, and every loop that prints this way is bounded by its input.
+
+**7. The thread the output is written from.** The override is per thread, which holds because a `uumain` is synchronous from start to finish. Two utilities break that on their own: `du` prints its whole answer from a thread it spawns, and `dd` reports its progress from one. Both now carry the streams over with `streams::handoff` and `streams::adopt`. Upstream already knew those threads start blank, and sets the localizer up again inside `dd`'s.
+
 `uu_od` also stops building a `File` from the raw descriptor, which would have closed a descriptor the host is still using.
+
+## What it answers, against GNU
+
+`bundledUtilities` defaults to `prefer`, so this copy stands in for the machine's own `ls` and `sort` rather than only filling a gap. uutils aims at GNU compatibility rather than claiming it, so the difference is measured rather than assumed.
+
+`src-rust/crates/shell/tests/gnu_parity.rs` runs 32 calls a model actually writes, twice on the same input: once through the carried copy, once through the machine's GNU binary, comparing stdout, stderr and exit code. On a machine with GNU coreutils installed, **all 32 answer identically**. A call whose GNU binary is not on the machine skips itself, so the test is useful where GNU is installed and silent where it is not.
+
+Two of the calls found real breaks rather than differences of opinion, and both were the patch's own gap: `dirname` printed to the process's standard output instead of the redirected one, and `du` produced nothing at all because it prints from a thread it spawns. Items 6 and 7 above are what closed them. Nothing is left over that would belong upstream.
+
+The comparison covers the utilities a model reaches for, not the 83. A flag it does not exercise can still differ, and `bundledUtilities: "fallback"` is the way out for a script that depends on one.
 
 ## Keeping the patch
 
-The whole tree is in git, so the diff is the history rather than a file that can drift from it. The import commit brought the source in unchanged; everything after it is the patch:
+The diff is the history rather than a file that can drift from it, but the import commit is not the right base to read it against: it brought `uucore` in at 0.9.0, and the next commit replaced that with the 0.8.0 the 83 utilities depend on. So a `git diff` from the import mixes a version change into the patch.
+
+Measure against the published crates instead, which is where the numbers above come from:
 
 ```
-git log --oneline -- src-rust/vendor/coreutils
-git diff <import-commit> -- src-rust/vendor/coreutils
+diff -ru --exclude=.cargo-checksum.json \
+  ~/.cargo/registry/src/*/uucore-0.8.0 src-rust/vendor/coreutils/uucore
 ```
+
+The same command with a `uu_<name>-0.8.0` pair reads one utility's share of it. `git log --oneline -- src-rust/vendor/coreutils` still says which commit did what.
 
 To bring in a newer release: copy the new crate directories over the old ones, replay that diff, fix what no longer applies, and record the new versions in the table above.
 

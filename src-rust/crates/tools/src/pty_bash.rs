@@ -161,6 +161,11 @@ fn apply_restored_env(cmd: &mut portable_pty::CommandBuilder, env_vars: &HashMap
 // Background execution (identical to bash.rs — no PTY needed for background)
 // ---------------------------------------------------------------------------
 
+/// Run a background command through the machine's own `bash`.
+///
+/// Only reached by `bashEngine: "system"`, which Windows never answers, so
+/// there is no `cmd /C` branch: it gave the model no pipelines and it is not
+/// what the setting names.
 async fn run_in_background(command: String, cwd: PathBuf, timeout_ms: u64) -> ToolResult {
     let task_name = format!("bg: {}", &command[..command.len().min(60)]);
     let mut task = BackgroundTask::new(&task_name);
@@ -175,15 +180,8 @@ async fn run_in_background(command: String, cwd: PathBuf, timeout_ms: u64) -> To
             // with it, otherwise a timed-out background command leaks (#220).
             // It reaps the shell itself; the guard below covers what the shell
             // started, which `kill_on_drop` never reaches.
-            let mut builder = if cfg!(windows) {
-                let mut cmd = Command::new("cmd");
-                cmd.arg("/C").arg(&command_clone);
-                cmd
-            } else {
-                let mut cmd = Command::new("bash");
-                cmd.arg("-c").arg(&command_clone);
-                cmd
-            };
+            let mut builder = Command::new("bash");
+            builder.arg("-c").arg(&command_clone);
             builder
                 .current_dir(&cwd)
                 .stdout(Stdio::piped())
@@ -728,7 +726,25 @@ async fn run_bash(params: BashInput, ctx: &ToolContext) -> ToolResult {
     let shell_state_arc = session_shell_state(&ctx.session_id);
 
     // ── Background path ──────────────────────────────────────────────────
+    //
+    // A shell of its own, seeded from the foreground one. That is what `&`
+    // does in bash, and it is what keeps `monitor` answering while a
+    // foreground command holds the session's shell.
     if params.run_in_background {
+        if ctx.config.effective_bash_engine() == BashEngine::Brush {
+            let id = crate::brush_background::run(
+                params.command.clone(),
+                &ctx.session_id,
+                &ctx.working_dir,
+                ctx.config.effective_bundled_utilities(),
+                timeout_dur,
+            );
+            return ToolResult::success(format!(
+                "Command started in background.\nTask ID: {}\nCommand: {}",
+                id, params.command
+            ));
+        }
+
         let cwd = {
             let state = shell_state_arc.lock();
             state.cwd.clone().unwrap_or_else(|| ctx.working_dir.clone())

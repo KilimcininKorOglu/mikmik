@@ -302,7 +302,10 @@ mod tests {
         let started = crate::pty_bash::PtyBashTool
             .execute(
                 json!({
-                    "command": format!("sleep {marker} & wait"),
+                    // `/bin/sleep` spelled out: the carried `sleep` runs in
+                    // this process and starts nothing for a cancel to reach,
+                    // and what this test is about is the child process.
+                    "command": format!("/bin/sleep {marker} & wait"),
                     "run_in_background": true,
                 }),
                 &bypassing_ctx(),

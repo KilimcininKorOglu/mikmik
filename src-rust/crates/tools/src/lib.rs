@@ -26,6 +26,7 @@ pub mod apply_patch;
 pub mod ask_user;
 pub mod batch_edit;
 pub mod brief;
+pub(crate) mod brush_background;
 pub(crate) mod brush_bash;
 pub mod bundled_skills;
 pub mod computer_use;

@@ -128,6 +128,39 @@ impl ShellSession {
         self.shell.working_dir()
     }
 
+    /// Every variable this shell would hand to a child process.
+    ///
+    /// A background command runs in a shell of its own, and this is what the
+    /// foreground shell passes to it. Only the exported ones: an unexported
+    /// variable is not something `bash -c` would have carried either.
+    pub fn exported_env(&self) -> Vec<(String, String)> {
+        let mut exported: Vec<(String, String)> = self
+            .shell
+            .env()
+            .iter_exported()
+            .map(|(name, variable)| {
+                (
+                    name.clone(),
+                    variable.value().to_cow_str(&self.shell).to_string(),
+                )
+            })
+            .collect();
+        // The iterator's order comes from a hash map, and a caller replaying
+        // these into another shell should get the same result every time.
+        exported.sort_by(|left, right| left.0.cmp(&right.0));
+        exported
+    }
+
+    /// Set one exported variable, as `export NAME=value` would.
+    pub fn export(&mut self, name: &str, value: &str) -> anyhow::Result<()> {
+        let mut variable = brush_core::variables::ShellVariable::new(value);
+        variable.export();
+        self.shell
+            .env_mut()
+            .set_global(name, variable)
+            .map_err(|error| anyhow::anyhow!("could not set {name}: {error}"))
+    }
+
     /// The value of one shell variable, if it is set.
     pub fn var(&self, name: &str) -> Option<String> {
         self.shell
@@ -153,6 +186,30 @@ impl ShellSession {
         stderr: impl Into<Sink>,
         timeout: Duration,
     ) -> anyhow::Result<RunOutcome> {
+        self.run_cancellable(
+            command,
+            stdout,
+            stderr,
+            timeout,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+    }
+
+    /// Run `command` as [`Self::run`] does, and stop early if `cancel` is
+    /// signalled.
+    ///
+    /// A cancel ends the same way a timeout does: the shell stops waiting and
+    /// whatever the command started is killed. The exit code is 130, which is
+    /// what a shell answers for a command an interrupt ended.
+    pub async fn run_cancellable(
+        &mut self,
+        command: &str,
+        stdout: impl Into<Sink>,
+        stderr: impl Into<Sink>,
+        timeout: Duration,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> anyhow::Result<RunOutcome> {
         let mut params = self.shell.default_exec_params();
         // Explicit rather than inherited: `default_exec_params` answers
         // `SameProcessGroup` while job control is off, and killing that group
@@ -169,25 +226,26 @@ impl ShellSession {
         let source_info = brush_core::SourceInfo::from("mikmik");
         let before = children::direct_children();
 
-        match tokio::time::timeout(
-            timeout,
-            self.shell.run_string(command, &source_info, &params),
-        )
-        .await
-        {
-            Ok(Ok(result)) => Ok(RunOutcome {
-                exit_code: i32::from(u8::from(result.exit_code)),
-                timed_out: false,
-            }),
-            Ok(Err(error)) => Err(anyhow::anyhow!("{error}")),
-            Err(_elapsed) => {
+        let running = self.shell.run_string(command, &source_info, &params);
+        tokio::pin!(running);
+
+        tokio::select! {
+            result = &mut running => match result {
+                Ok(result) => Ok(RunOutcome {
+                    exit_code: i32::from(u8::from(result.exit_code)),
+                    timed_out: false,
+                }),
+                Err(error) => Err(anyhow::anyhow!("{error}")),
+            },
+            () = tokio::time::sleep(timeout) => {
                 // The future is dropped, which stops the shell waiting, but
                 // the process it started is not ours to leave running.
                 children::kill_new_since(&before);
-                Ok(RunOutcome {
-                    exit_code: 124,
-                    timed_out: true,
-                })
+                Ok(RunOutcome { exit_code: 124, timed_out: true })
+            }
+            () = cancel.cancelled() => {
+                children::kill_new_since(&before);
+                Ok(RunOutcome { exit_code: 130, timed_out: false })
             }
         }
     }
@@ -287,6 +345,42 @@ mod tests {
 
         assert_eq!(text.trim(), "hello");
         assert_eq!(shell.var("GREETING").as_deref(), Some("hello"));
+    }
+
+    #[tokio::test]
+    async fn only_the_exported_variables_are_offered_to_another_shell() {
+        // What a background command inherits. An unexported variable is not
+        // something `bash -c` would have carried either.
+        let (_dir, mut shell) = session().await;
+
+        run(&mut shell, "export CARRIED=yes").await;
+        run(&mut shell, "KEPT=no").await;
+
+        let exported = shell.exported_env();
+        assert!(
+            exported.contains(&("CARRIED".to_string(), "yes".to_string())),
+            "{exported:?}"
+        );
+        assert!(
+            !exported.iter().any(|(name, _)| name == "KEPT"),
+            "{exported:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_exported_variable_can_be_planted_in_a_second_shell() {
+        // The other half: a background command's shell is seeded from the
+        // foreground one, and a planted variable has to behave like an
+        // `export` rather than a local.
+        let (_dir, mut shell) = session().await;
+
+        shell.export("PLANTED", "here").expect("export");
+
+        let (text, _) = run(&mut shell, "echo $PLANTED").await;
+        assert_eq!(text.trim(), "here");
+        assert!(shell
+            .exported_env()
+            .contains(&("PLANTED".to_string(), "here".to_string())));
     }
 
     #[tokio::test]

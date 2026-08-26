@@ -41,11 +41,19 @@ The 16.8 MiB is what the bundled utilities weigh. The compile cost is paid once 
 
 The per-command figure was almost lost to the safeguard rather than the shell. Listing this process's children before each command through `pgrep -P` cost 27 ms, which is why `children.rs` asks the platform directly instead.
 
+## Background commands
+
+`run_in_background` opens a **second** `ShellSession`, seeded from the foreground one's working directory and exported variables. That is what `&` does in bash: the command sees the session's state, and what it changes does not come back. It also means a background command runs while a foreground one does, which sharing the session could not manage.
+
+`monitor cancel` reaches it through a cancellation token rather than a process id. The shell is this process, so there is no pid to signal; the token ends the wait and kills whatever the command started, exactly as the timeout does.
+
+Starting one never waits for the command. Reading the seed does take the foreground session's lock, so a background command started while a foreground one is in flight begins when that one ends; the tool call itself answers straight away with the task's id.
+
 ## What running in this process costs
 
 Three things a child process gave for free.
 
-**A utility cannot be killed.** A timeout stops the caller waiting for it; the thread runs to the end. `run` answers 124 and kills the *processes* the command started, and a bundled utility is not one of them.
+**A utility cannot be killed.** A timeout stops the caller waiting for it; the thread runs to the end. `run` answers 124 and kills the *processes* the command started, and a bundled utility is not one of them. `sleep 30` starts nothing, so nothing is left for a timeout or a cancel to reach: a test about killing a child has to spell out `/bin/sleep`.
 
 **The working directory is the process's.** brush keeps the shell's own and hands it to a child through `Command::current_dir`; a utility running here resolves `sort list` against whatever directory the process is in. `src/cwd.rs` lends the process's directory for the length of the call, shared by everything asking for the same one so a pipeline cannot deadlock on it, and put back afterwards.
 

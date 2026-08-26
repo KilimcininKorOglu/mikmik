@@ -196,9 +196,12 @@ fn drain(
     }
 }
 
+/// Whether `source` has something to read, waiting at most `timeout_ms`.
+///
+/// Shared with `brush_background`, which drains a pipe the same way and for
+/// the same reason.
 #[cfg(unix)]
-fn readable(source: &std::fs::File, timeout_ms: i32) -> bool {
-    use std::os::fd::AsRawFd;
+pub(crate) fn readable(source: &impl std::os::fd::AsRawFd, timeout_ms: i32) -> bool {
     let mut poll_fd = libc::pollfd {
         fd: source.as_raw_fd(),
         events: libc::POLLIN,

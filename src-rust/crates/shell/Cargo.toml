@@ -8,6 +8,7 @@ license.workspace = true
 brush-core = { workspace = true }
 brush-parser = { workspace = true }
 brush-builtins = { workspace = true }
+tokio-util = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

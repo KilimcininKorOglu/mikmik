@@ -4360,6 +4360,7 @@ dependencies = [
  "sysinfo 0.37.2",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "uucore 0.8.0",
  "which",

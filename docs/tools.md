@@ -269,6 +269,8 @@ Execute a PowerShell command. Equivalent to `Bash` but uses `pwsh` (PowerShell C
 
 Offered on Windows, and on macOS and Linux when `pwsh` is on `PATH`. On a machine without it the tool is left out of the roster entirely, so the model never spends a turn calling something that cannot run.
 
+One interpreter stays open for the whole session, so a variable, a `cd`, an imported module and a defined function all outlive the call that made them, and only the first call pays PowerShell's startup. A command that runs past its timeout is the exception: the interpreter is killed along with whatever the command started, and the next call starts a new one from nothing.
+
 ---
 
 ### REPL

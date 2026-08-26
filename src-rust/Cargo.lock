@@ -4380,6 +4380,7 @@ dependencies = [
  "dirs",
  "enigo",
  "futures",
+ "getrandom 0.2.17",
  "glob",
  "grep-matcher",
  "grep-regex",

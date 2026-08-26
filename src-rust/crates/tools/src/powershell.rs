@@ -18,10 +18,7 @@ use async_trait::async_trait;
 use mikmik_core::ps_classifier::{classify_ps_command, PsRiskLevel};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 use tracing::debug;
 
 pub struct PowerShellTool;
@@ -211,15 +208,9 @@ impl Tool for PowerShellTool {
         }
 
         // ── Step 3: execute ──────────────────────────────────────────────────
-        let (exe, args) = if cfg!(windows) {
-            (
-                "powershell",
-                vec!["-NoProfile", "-NonInteractive", "-Command"],
-            )
-        } else {
-            ("pwsh", vec!["-NoProfile", "-NonInteractive", "-Command"])
-        };
-
+        //
+        // In the session's own interpreter, which stays open, so a variable, a
+        // `cd` and an imported module outlive the command that made them.
         debug!(
             command = %params.command,
             risk    = ?risk,
@@ -229,101 +220,59 @@ impl Tool for PowerShellTool {
         let timeout_ms = params.timeout.min(600_000);
         let timeout_dur = Duration::from_millis(timeout_ms);
 
-        let mut builder = Command::new(exe);
-        builder
-            .args(&args)
-            .arg(&params.command)
-            .current_dir(&ctx.working_dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .stdin(Stdio::null());
-        mikmik_core::process_tree::spawn_in_own_group(&mut builder);
-        let mut child = match builder.spawn() {
-            Ok(c) => c,
-            Err(e) => return ToolResult::error(format!("Failed to spawn PowerShell: {}", e)),
+        let session = match crate::session_powershell(&ctx.session_id, &ctx.working_dir) {
+            Ok(session) => session,
+            Err(error) => return ToolResult::error(format!("Failed to spawn PowerShell: {error}")),
         };
 
-        // The interpreter is only the wrapper. Nothing here killed anything on
-        // drop, and the timeout below reached the interpreter alone, so a
-        // cancelled turn left the script's own children running on every
-        // platform, not just Windows.
-        let mut tree_guard = mikmik_core::process_tree::ProcessTreeKillGuard::new(child.id());
+        let ran = {
+            let mut session = session.lock().await;
+            session.run(&params.command, timeout_dur).await
+        };
 
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        let result = tokio::time::timeout(timeout_dur, async {
-            let mut stdout_lines = Vec::new();
-            let mut stderr_lines = Vec::new();
-
-            if let Some(out) = stdout {
-                let mut lines = BufReader::new(out).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    stdout_lines.push(line);
-                }
+        let ran = match ran {
+            Ok(ran) => ran,
+            Err(error) => {
+                // The interpreter was killed, so the session is finished with
+                // it; the next call starts a new one.
+                crate::drop_session_powershell(&ctx.session_id);
+                return ToolResult::error(format!("PowerShell command failed: {error}"));
             }
-            if let Some(err) = stderr {
-                let mut lines = BufReader::new(err).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    stderr_lines.push(line);
-                }
+        };
+
+        let mut output = ran.output.trim_end().to_string();
+        if !ran.errors.trim().is_empty() {
+            if !output.is_empty() {
+                output.push('\n');
             }
+            output.push_str("STDERR:\n");
+            output.push_str(ran.errors.trim_end());
+        }
+        if output.is_empty() {
+            output = "(no output)".to_string();
+        }
 
-            let status = child.wait().await;
-            (stdout_lines, stderr_lines, status)
-        })
-        .await;
+        // Truncate very long output (same limit as BashTool)
+        const MAX_OUTPUT_LEN: usize = 100_000;
+        if output.len() > MAX_OUTPUT_LEN {
+            let half = MAX_OUTPUT_LEN / 2;
+            let start = &output[..half];
+            let end = &output[output.len() - half..];
+            output = format!(
+                "{}\n\n... ({} characters truncated) ...\n\n{}",
+                start,
+                output.len() - MAX_OUTPUT_LEN,
+                end
+            );
+        }
 
-        match result {
-            Ok((stdout_lines, stderr_lines, status)) => {
-                tree_guard.disarm();
-                let exit_code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
-                let mut output = stdout_lines.join("\n");
-                if !stderr_lines.is_empty() {
-                    if !output.is_empty() {
-                        output.push('\n');
-                    }
-                    output.push_str("STDERR:\n");
-                    output.push_str(&stderr_lines.join("\n"));
-                }
-                if output.is_empty() {
-                    output = "(no output)".to_string();
-                }
-
-                // Truncate very long output (same limit as BashTool)
-                const MAX_OUTPUT_LEN: usize = 100_000;
-                if output.len() > MAX_OUTPUT_LEN {
-                    let half = MAX_OUTPUT_LEN / 2;
-                    let start = &output[..half];
-                    let end = &output[output.len() - half..];
-                    output = format!(
-                        "{}\n\n... ({} characters truncated) ...\n\n{}",
-                        start,
-                        output.len() - MAX_OUTPUT_LEN,
-                        end
-                    );
-                }
-
-                if exit_code != 0 {
-                    ToolResult::error(format!(
-                        "PowerShell exited with code {}\n{}",
-                        exit_code, output
-                    ))
-                } else {
-                    ToolResult::success(output)
-                }
-            }
-            Err(_) => {
-                // The tree first, then the wrapper: killing the interpreter
-                // first orphans its children and `taskkill /T` can no longer
-                // find them through it.
-                tree_guard.kill_now();
-                let _ = child.kill().await;
-                ToolResult::error(format!(
-                    "PowerShell command timed out after {}ms",
-                    timeout_ms
-                ))
-            }
+        if ran.exit_code == 0 {
+            ToolResult::success(output)
+        } else {
+            ToolResult::error(format!(
+                "PowerShell exited with code {}\n{}",
+                ran.exit_code, output
+            ))
         }
     }
 }
@@ -362,7 +311,12 @@ mod tests {
                 },
             ),
             cost_tracker: mikmik_core::cost::CostTracker::new(),
-            session_id: "powershell-test".to_string(),
+            // A session of its own per test. The interpreter belongs to the
+            // runtime that started it, and each `#[tokio::test]` builds its
+            // own, so a shared one would be reached after its runtime had
+            // gone. One process running MikMik has one runtime, so this is a
+            // property of the tests rather than of the tool.
+            session_id: format!("powershell-test-{}", uuid::Uuid::new_v4()),
             file_history: std::sync::Arc::new(parking_lot::Mutex::new(
                 mikmik_core::file_history::FileHistory::new(),
             )),
@@ -468,5 +422,84 @@ mod tests {
             .output();
         let _ = std::fs::remove_file(&err_file);
         assert!(survived, "a completed command had its leftovers killed");
+    }
+
+    /// The whole point of holding the interpreter open: what one call leaves
+    /// behind, the next one sees.
+    #[tokio::test]
+    async fn state_outlives_the_call_that_made_it() {
+        if which::which("pwsh").is_err() {
+            eprintln!("skipped: pwsh is not installed on this machine");
+            return;
+        }
+        let ctx = bypassing_ctx();
+
+        let set = PowerShellTool
+            .execute(json!({"command": "$mikmik_probe = 'kept'"}), &ctx)
+            .await;
+        assert!(!set.is_error, "{}", set.content);
+
+        let read = PowerShellTool
+            .execute(json!({"command": "$mikmik_probe"}), &ctx)
+            .await;
+        assert!(!read.is_error, "{}", read.content);
+        assert_eq!(read.content.trim(), "kept");
+
+        crate::clear_session_shell_state(&ctx.session_id);
+    }
+
+    /// A session that ended takes its interpreter with it, so the next one
+    /// starts from nothing rather than inheriting a stranger's variables.
+    #[tokio::test]
+    async fn ending_the_session_ends_the_interpreter() {
+        if which::which("pwsh").is_err() {
+            eprintln!("skipped: pwsh is not installed on this machine");
+            return;
+        }
+        let ctx = bypassing_ctx();
+
+        PowerShellTool
+            .execute(json!({"command": "$mikmik_probe = 'kept'"}), &ctx)
+            .await;
+        crate::clear_session_shell_state(&ctx.session_id);
+
+        let read = PowerShellTool
+            .execute(json!({"command": "\"[$mikmik_probe]\""}), &ctx)
+            .await;
+        assert_eq!(read.content.trim(), "[]");
+
+        crate::clear_session_shell_state(&ctx.session_id);
+    }
+
+    /// A command that ran too long leaves the interpreter killed, so the next
+    /// call has to start a new one rather than talk to a corpse.
+    #[tokio::test]
+    async fn the_session_recovers_from_a_timeout() {
+        if which::which("pwsh").is_err() {
+            eprintln!("skipped: pwsh is not installed on this machine");
+            return;
+        }
+        let ctx = bypassing_ctx();
+
+        let timed_out = PowerShellTool
+            .execute(
+                json!({"command": "Start-Sleep -Seconds 60", "timeout": 1_000u64}),
+                &ctx,
+            )
+            .await;
+        assert!(timed_out.is_error);
+        assert!(
+            timed_out.content.contains("timed out"),
+            "{}",
+            timed_out.content
+        );
+
+        let after = PowerShellTool
+            .execute(json!({"command": "Write-Output 'a new one'"}), &ctx)
+            .await;
+        assert!(!after.is_error, "{}", after.content);
+        assert_eq!(after.content.trim(), "a new one");
+
+        crate::clear_session_shell_state(&ctx.session_id);
     }
 }

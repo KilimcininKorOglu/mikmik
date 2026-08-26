@@ -55,6 +55,7 @@ pub mod memory_tool;
 pub mod monitor_tool;
 pub mod notebook_edit;
 pub mod powershell;
+pub(crate) mod powershell_session;
 pub mod pty_bash;
 pub mod repl_tool;
 pub mod send_message;
@@ -412,6 +413,39 @@ fn bundled_policy(choice: mikmik_core::config::BundledUtilities) -> mikmik_shell
     }
 }
 
+/// Process-global registry of PowerShell interpreters keyed by session id.
+///
+/// Beside [`BRUSH_SESSIONS`] and for the same reason: a variable, a `cd` and
+/// an imported module have to outlive the command that made them, so the
+/// interpreter has to be the same one every call.
+static POWERSHELL_SESSIONS: once_cell::sync::Lazy<
+    dashmap::DashMap<String, Arc<tokio::sync::Mutex<powershell_session::PowerShellSession>>>,
+> = once_cell::sync::Lazy::new(dashmap::DashMap::new);
+
+/// Return the PowerShell interpreter for this session, starting one on first
+/// use.
+pub(crate) fn session_powershell(
+    session_id: &str,
+    working_dir: &std::path::Path,
+) -> anyhow::Result<Arc<tokio::sync::Mutex<powershell_session::PowerShellSession>>> {
+    if let Some(existing) = POWERSHELL_SESSIONS.get(session_id) {
+        return Ok(existing.clone());
+    }
+    let opened = powershell_session::PowerShellSession::open(working_dir)?;
+    Ok(POWERSHELL_SESSIONS
+        .entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(opened)))
+        .clone())
+}
+
+/// Forget this session's PowerShell interpreter.
+///
+/// A command that ran too long left the interpreter killed, and a killed one
+/// answers nothing; the next call starts a new one.
+pub(crate) fn drop_session_powershell(session_id: &str) {
+    POWERSHELL_SESSIONS.remove(session_id);
+}
+
 /// Remove the shell state for a session (e.g. when the session ends).
 ///
 /// Both stores: the embedded shell holds open descriptors and a child process
@@ -419,6 +453,7 @@ fn bundled_policy(choice: mikmik_core::config::BundledUtilities) -> mikmik_shell
 pub fn clear_session_shell_state(session_id: &str) {
     SHELL_STATE_REGISTRY.remove(session_id);
     BRUSH_SESSIONS.remove(session_id);
+    POWERSHELL_SESSIONS.remove(session_id);
 }
 
 /// Return the `ShadowSnapshot` for `working_dir`, creating it on first call.
@@ -915,7 +950,7 @@ pub trait Tool: Send + Sync {
 /// the call fails, and the model works out what happened. Windows always has
 /// it. Elsewhere it is there only if someone installed `pwsh`.
 fn powershell_is_available() -> bool {
-    cfg!(windows) || which::which("pwsh").is_ok()
+    powershell_session::available()
 }
 
 /// Return all built-in tools (excluding AgentTool, which lives in cc-query).

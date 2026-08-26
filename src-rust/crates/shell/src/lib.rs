@@ -384,6 +384,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_startup_file_the_user_owns_never_reaches_the_session() {
+        // Both files a shell would read on the way up, and both name
+        // something the user controls. Sourcing either would run whatever is
+        // in it before every command the model writes, and its `export`s
+        // would be in the session for the rest of it. `.bashrc` is what
+        // `rc(Skip)` refuses; `BASH_ENV` is what a non-interactive shell
+        // would read instead.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let home = dir.path().join("home");
+        std::fs::create_dir(&home).expect("mkdir");
+        std::fs::write(home.join(".bashrc"), "export FROM_RC=leaked\necho banner\n")
+            .expect("write");
+        let planted = dir.path().join("startup.sh");
+        std::fs::write(&planted, "export FROM_STARTUP=leaked\necho banner\n").expect("write");
+
+        // SAFETY: the suite runs with `--test-threads=1`, so no other test is
+        // reading the environment, and both are put back below.
+        unsafe {
+            std::env::set_var("BASH_ENV", &planted);
+            std::env::set_var("HOME", &home);
+        }
+        let opened = ShellSession::new(dir.path(), BundledUtilities::default()).await;
+        // SAFETY: as above.
+        unsafe {
+            std::env::remove_var("BASH_ENV");
+            std::env::remove_var("HOME");
+        }
+
+        let mut shell = opened.expect("a startup file must not stop the session opening");
+        let (text, outcome) = run(&mut shell, "echo [$FROM_STARTUP][$FROM_RC]").await;
+        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(text, "[][]\n");
+    }
+
+    #[tokio::test]
+    async fn an_alias_expands_even_though_the_shell_is_not_interactive() {
+        // `expand_aliases` is one of the options brush turns on for an
+        // interactive shell only, and this shell is not one, so the promise
+        // this crate makes about aliases rests on brush expanding them
+        // anyway. Nothing in this crate can break it; a brush upgrade can.
+        let (_dir, mut shell) = session().await;
+
+        run(&mut shell, "alias greet='echo hello from an alias'").await;
+        let (text, outcome) = run(&mut shell, "greet").await;
+
+        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(text.trim(), "hello from an alias");
+    }
+
+    #[tokio::test]
+    async fn a_fatal_error_is_a_status_rather_than_the_end_of_the_session() {
+        // brush answers `ExitShell` for a fatal error in a non-interactive
+        // shell. The session has to outlive it: a model that writes `set -u`
+        // and then a typo must get an exit code, not a dead shell. Like the
+        // alias above, this is brush's behaviour rather than a setting here,
+        // so what it guards against is a brush upgrade.
+        let (_dir, mut shell) = session().await;
+
+        let (_, fatal) = run(&mut shell, "set -u; echo $NOTHING_IS_SET_HERE").await;
+        assert_ne!(fatal.exit_code, 0);
+
+        let (text, after) = run(&mut shell, "set +u; echo still here").await;
+        assert_eq!(after.exit_code, 0);
+        assert_eq!(text.trim(), "still here");
+    }
+
+    #[tokio::test]
+    async fn job_control_is_off_until_a_script_asks_for_it() {
+        // Off is what `bash -c` does: `&` prints the command's output and
+        // nothing else. A `[1]+ Done` line brush added would read as part of
+        // the command's output to a model.
+        let (_dir, mut shell) = session().await;
+
+        let (quiet, outcome) = run(&mut shell, "/bin/echo backgrounded & wait").await;
+        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(quiet, "backgrounded\n");
+
+        // And a script that wants it can have it.
+        let (noisy, outcome) = run(&mut shell, "set -m; /bin/echo again & wait").await;
+        assert_eq!(outcome.exit_code, 0);
+        assert!(noisy.contains("Done"), "{noisy:?}");
+    }
+
+    #[tokio::test]
     async fn a_shell_function_outlives_the_command_that_defined_it() {
         // A sentinel block could never have carried this one at all.
         let (_dir, mut shell) = session().await;

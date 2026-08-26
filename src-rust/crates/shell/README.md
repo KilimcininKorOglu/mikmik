@@ -41,6 +41,23 @@ The 16.8 MiB is what the bundled utilities weigh. The compile cost is paid once 
 
 The per-command figure was almost lost to the safeguard rather than the shell. Listing this process's children before each command through `pgrep -P` cost 27 ms, which is why `children.rs` asks the platform directly instead.
 
+## How the shell is configured
+
+`ShellSession::new` builds a shell that is deliberately not interactive, and skips both the profile and the rc files. What that turns off, and why each stays off:
+
+| Off | What it means | Why |
+|---|---|---|
+| The profile and rc files | No `~/.bashrc`, no `~/.bash_profile`, no `BASH_ENV` | They name files the user controls, and sourcing one would run whatever is in it before every command the model writes. `bash -c` did not read them either |
+| `enable_job_control` | `&` prints the command's output and nothing else | Matches `bash -c`. A `[1]+ Done` line brush added would read as part of the command's output. A script that wants job control writes `set -m`, which works |
+| `enable_command_history` | No history file | Nothing reads it |
+| `enable_bang_style_history_substitution` | `!!` and `!$` do not expand | There is no history to expand from |
+| `emacs_mode` | No line editor | Nothing is typed at this shell |
+| `PS1` and `PS2` | Not set | A prompt string cannot reach a tool's output |
+
+Two things a reader might assume it takes away, and it does not. **Aliases expand**: `alias ll='ls -l'; ll` works, even though `expand_aliases` is one of the options brush turns on for interactive shells. And **a fatal error is a status rather than the end of the session**: `set -u` followed by an unset variable answers non-zero and the session runs the next command.
+
+Job control being off is also why `run` sets `NewProcessGroup` explicitly. `default_exec_params` answers `SameProcessGroup` while job control is off, and a timeout that killed *that* group would kill this process with it.
+
 ## Background commands
 
 `run_in_background` opens a **second** `ShellSession`, seeded from the foreground one's working directory and exported variables. That is what `&` does in bash: the command sees the session's state, and what it changes does not come back. It also means a background command runs while a foreground one does, which sharing the session could not manage.
@@ -90,7 +107,7 @@ An external program is still a real process. brush removes the shell process and
 
 All are MIT. MikMik is GPL-3.0, which MIT is compatible with. The forked coreutils keep their own `LICENSE` files and copyright notices where they were copied to; the rest ship their notices with the dependencies.
 
-`brush-interactive` is not taken. It supplies the readline layer, the prompt and the line editor, and MikMik's TUI already owns all three. A session here is driven by a model rather than typed at, so there is no line to edit.
+`brush-interactive` is not taken. It supplies the readline layer, the prompt, the completion menu and the line editor, and MikMik's TUI already owns all of them. A session here is driven by a model rather than typed at, so there is no line to edit, no prompt to draw and no completion to offer. Taking it would also mean turning the shell interactive, which is what the table above spends its length arguing against.
 
 brush states that it is not production-complete: `select` and some edge cases are unsupported. `bashEngine: "system"` in `settings.json` puts the session back on the real `bash` binary on Unix, which is why that setting exists.
 

@@ -2,7 +2,7 @@
 //!
 //! A model writes `ls`, `cat`, `sort`, `head` and `wc` without asking whether
 //! the machine has them. On Windows it usually does not, and on a stripped
-//! container image neither does Linux. These are compiled in: 83 coreutils
+//! container image neither does Linux. These are compiled in: 82 coreutils
 //! from `uutils`, plus `find`, `xargs`, `sed` and `jq`.
 //!
 //! ## They run in this process

@@ -200,7 +200,7 @@ Either way an external program is still a real process. The embedded shell remov
 
 #### Which utilities a command gets
 
-83 coreutils (`ls`, `cat`, `sort`, `wc` and the rest) plus `find`, `xargs`, `sed` and `jq` ship inside the binary. They run in the MikMik process: no fork, no exec, and nothing to install. That is what makes a command work on Windows or in a stripped container image.
+82 coreutils (`ls`, `cat`, `sort`, `wc` and the rest) plus `find`, `xargs`, `sed` and `jq` ship inside the binary. They run in the MikMik process: no fork, no exec, and nothing to install. That is what makes a command work on Windows or in a stripped container image.
 
 ```json
 "config": {

@@ -10,7 +10,7 @@ This crate embeds [brush](https://github.com/reubeno/brush), a bash implementati
 
 ## Bundled utilities
 
-A model writes `ls`, `cat`, `sort`, `head`, `wc`, `sed`, `find` and `jq` without asking whether the machine has them. On Windows it usually does not, and on a stripped container image neither does Linux. 83 `uutils` coreutils plus `find`, `xargs`, `sed` and `jq` are compiled into the binary.
+A model writes `ls`, `cat`, `sort`, `head`, `wc`, `sed`, `find` and `jq` without asking whether the machine has them. On Windows it usually does not, and on a stripped container image neither does Linux. 82 `uutils` coreutils plus `find`, `xargs`, `sed` and `jq` are compiled into the binary.
 
 **They run in this process.** Nothing is spawned. The published `uutils` crates could not manage that, because each obtains its output with `std::io::stdout()`, so a utility called that way writes over whatever else the process is printing. The source is forked under `vendor/coreutils/` and patched: `uucore::streams` holds a per-thread override for the three standard streams, and each utility runs on its own thread with the shell's descriptors installed for that thread. `vendor/coreutils/README.md` has the whole of it.
 
@@ -102,7 +102,7 @@ An external program is still a real process. brush removes the shell process and
 | `brush-core` | 0.5 | MIT | The parser, the interpreter, redirection, job and process-group handling |
 | `brush-parser` | 0.4 | MIT | The tokenizer and the POSIX/bash grammars |
 | `brush-builtins` | 0.2 | MIT | The shell built-ins: `cd`, `echo`, `export`, `test`, `printf`, `read`, and the rest |
-| `brush-coreutils-builtins` | 0.1 | MIT | The registry of 83 `uutils` coreutils, behind the `coreutils.all` feature |
+| `brush-coreutils-builtins` | 0.1 | MIT | The registry of 82 `uutils` coreutils, behind the `coreutils.all` feature |
 | `uucore` and 83 `uu_*` | 0.8 | MIT | The coreutils themselves, forked under `vendor/coreutils/` |
 | `findutils` | 0.10 | MIT | `find` and `xargs` |
 | `sed` | 0.1 | MIT | `sed` |

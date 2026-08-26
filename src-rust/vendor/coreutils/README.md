@@ -13,8 +13,8 @@ The published crates give no way to redirect that. So the source is copied here 
 | | |
 |---|---|
 | Source | The published crates, as they were resolved into `Cargo.lock` |
-| `uucore` | 0.8.0, which is what the 83 utilities depend on |
-| The 83 `uu_*` crates | 0.8.0 |
+| `uucore` | 0.8.0, which is what the 82 utilities depend on |
+| The 83 `uu_*` crates | 0.8.0. 82 are utilities; `uu_checksum_common` is the macro that generates `uumain` for the checksum ones |
 | Size | about 113,000 lines of Rust |
 
 Each directory is the published crate with its `.cargo-checksum.json` removed, which is what lets Cargo treat it as a path dependency. `Cargo.toml.orig` and `LICENSE` are left as they came.
@@ -55,11 +55,11 @@ These are **not** workspace members, on purpose: `cargo clippy --workspace --all
 
 Two of the calls found real breaks rather than differences of opinion, and both were the patch's own gap: `dirname` printed to the process's standard output instead of the redirected one, and `du` produced nothing at all because it prints from a thread it spawns. Items 6 and 7 above are what closed them. Nothing is left over that would belong upstream.
 
-The comparison covers the utilities a model reaches for, not the 83. A flag it does not exercise can still differ, and `bundledUtilities: "fallback"` is the way out for a script that depends on one.
+The comparison covers the utilities a model reaches for, not the 82. A flag it does not exercise can still differ, and `bundledUtilities: "fallback"` is the way out for a script that depends on one.
 
 ## Keeping the patch
 
-The diff is the history rather than a file that can drift from it, but the import commit is not the right base to read it against: it brought `uucore` in at 0.9.0, and the next commit replaced that with the 0.8.0 the 83 utilities depend on. So a `git diff` from the import mixes a version change into the patch.
+The diff is the history rather than a file that can drift from it, but the import commit is not the right base to read it against: it brought `uucore` in at 0.9.0, and the next commit replaced that with the 0.8.0 the 82 utilities depend on. So a `git diff` from the import mixes a version change into the patch.
 
 Measure against the published crates instead, which is where the numbers above come from:
 

@@ -31,7 +31,7 @@ It's fast, it's memory-efficient, it's yours to run however you want, and there'
 >
 > - **Embedded shell:** The `Bash` tool no longer spawns `bash -c` per call. It runs [brush](https://github.com/reubeno/brush), a bash written in Rust, as a library, and one shell lives as long as the session does, so `cd`, `export`, functions, aliases and `$?` are the shell's own state. The same bash runs on Windows, with no WSL. Set `"bashEngine": "system"` in `settings.json` to go back to the real `bash` binary on Unix; see [docs/configuration.md](docs/configuration.md).
 >
-> - **Utilities in the binary:** 83 coreutils from [uutils](https://github.com/uutils/coreutils) plus `find`, `xargs`, `sed` and `jq` ship inside `mikmik`, so `ls`, `cat`, `sort`, `wc` and the rest work on a Windows box or a stripped container that has none of them installed. Whatever the machine already has on `PATH` still wins, so nothing changes on a normal Unix box.
+> - **Utilities in the binary:** 82 coreutils from [uutils](https://github.com/uutils/coreutils) plus `find`, `xargs`, `sed` and `jq` ship inside `mikmik`, so `ls`, `cat`, `sort`, `wc` and the rest work on a Windows box or a stripped container that has none of them installed. They run in the MikMik process, with no fork and no exec, and the carried copy is used even where the machine has its own: `ls -1` costs 164 us against 2.54 ms. Set `"bundledUtilities": "fallback"` in `settings.json` to use the machine's binary wherever it has one; see [docs/configuration.md](docs/configuration.md).
 >
 > - **/share support:** Use `/share` to share chat sessions with others via unlisted GitHub Gists. `[EXPERIMENTAL]`
 >

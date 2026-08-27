@@ -112,7 +112,7 @@ impl AgentRuntime {
 
         // The same roster a terminal session gets, MCP tools included: both
         // read the same settings, so both must end up with the same tools.
-        let tools = mikmik_query::build_tool_roster(mcp_manager.clone(), &config);
+        let tools = mikmik_query::build_tool_roster(mcp_manager.clone(), &config, &working_dir);
 
         // Same catalog the CLI reads, so a session started from an editor
         // resolves the same model as one started from a terminal.

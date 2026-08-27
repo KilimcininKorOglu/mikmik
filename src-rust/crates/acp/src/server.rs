@@ -595,7 +595,7 @@ impl AgentServer {
         self: &Arc<Self>,
         servers: &[acp::McpServer],
     ) -> Result<Option<crate::mcp::SessionMcp>, acp::Error> {
-        crate::mcp::connect(servers, &self.runtime.config).await
+        crate::mcp::connect(servers, &self.runtime.config, &self.runtime.working_dir).await
     }
 
     async fn on_prompt(

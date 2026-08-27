@@ -1791,6 +1791,38 @@ pub mod config {
         /// [`timeline_enabled`](Self::timeline_enabled).
         #[serde(default, rename = "liveToolOutput")]
         pub live_tool_output: bool,
+        /// Whether `TeamCreate` and `TeamDelete` are offered.
+        ///
+        /// Off by default. A session that never runs a team pays their schema
+        /// on every turn otherwise, and `TeamCreate` alone is the fourth
+        /// largest of the built-in tools.
+        ///
+        /// `SendMessage` is not gated here: it also carries messages between
+        /// the sub-agents `AgentTool` starts, which have nothing to do with
+        /// teams.
+        #[serde(default, rename = "teamsEnabled")]
+        pub teams_enabled: bool,
+        /// Whether `CronCreate`, `CronDelete` and `CronList` are offered.
+        ///
+        /// Off by default, for the same reason as
+        /// [`teams_enabled`](Self::teams_enabled). A scheduled job already
+        /// created keeps running; this decides only whether the model may
+        /// reach the three tools.
+        #[serde(default, rename = "cronEnabled")]
+        pub cron_enabled: bool,
+        /// Whether the `Repl` tool is offered.
+        ///
+        /// Off by default, for the same reason as
+        /// [`teams_enabled`](Self::teams_enabled).
+        #[serde(default, rename = "replEnabled")]
+        pub repl_enabled: bool,
+        /// Whether the computer-use tool is offered.
+        ///
+        /// Off by default. The Cargo feature `computer-use` is a separate
+        /// axis: with the feature off the tool is not compiled in at all and
+        /// this setting decides nothing.
+        #[serde(default, rename = "computerUseEnabled")]
+        pub computer_use_enabled: bool,
         /// Base address of the SearXNG instance WebSearch prefers, for example
         /// `http://localhost:8080`. `None` means no instance is configured, and
         /// the tool then falls back to the `SEARXNG_URL` environment variable.
@@ -4151,6 +4183,15 @@ pub mod config {
                 // Whether a running tool draws its output is a display
                 // preference, so it follows `timeline_enabled` above.
                 live_tool_output: base.config.live_tool_output,
+                // SECURITY: each of these four decides whether a capability is
+                // offered to the model at all. A repository able to turn one on
+                // could hand itself a shell (`repl_enabled`), the desktop
+                // (`computer_use_enabled`), scheduled execution
+                // (`cron_enabled`) or a fleet of agents (`teams_enabled`).
+                teams_enabled: base.config.teams_enabled,
+                cron_enabled: base.config.cron_enabled,
+                repl_enabled: base.config.repl_enabled,
+                computer_use_enabled: base.config.computer_use_enabled,
                 // SECURITY: a search endpoint receives whatever the model
                 // searches for, so pointing it at a host of the repository's
                 // choosing hands that stream away.
@@ -11993,6 +12034,28 @@ mod project_settings_boundary_tests {
             merged.permission_rules.is_empty(),
             "a rule from the repository would silence the prompt for the very command it wanted"
         );
+    }
+
+    #[tokio::test]
+    async fn a_repository_cannot_offer_itself_a_capability() {
+        // Each of these four decides whether a tool reaches the model at all.
+        // A repository able to set one could hand itself a shell, the desktop,
+        // scheduled execution, or a fleet of agents.
+        let _lock = ENV_LOCK.lock().await;
+        let _home = HomeGuard::new();
+        let repo = project_dir(
+            r#"{"config":{"teamsEnabled":true,"cronEnabled":true,
+                 "replEnabled":true,"computerUseEnabled":true}}"#,
+        );
+
+        let merged = Settings::load_hierarchical(repo.path())
+            .await
+            .expect("load");
+
+        assert!(!merged.config.teams_enabled);
+        assert!(!merged.config.cron_enabled);
+        assert!(!merged.config.repl_enabled);
+        assert!(!merged.config.computer_use_enabled);
     }
 
     /// A project file that asks to run a command on every prompt.

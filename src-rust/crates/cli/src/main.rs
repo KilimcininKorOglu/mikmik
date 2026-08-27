@@ -867,7 +867,7 @@ async fn main() -> anyhow::Result<()> {
         dump_config.working_directory = Some(cwd.display().to_string());
         dump_config.workspace_roots = roots_for_prompt(&cwd, &config);
         dump_config.enabled_tools = Some(
-            mikmik_query::build_tool_roster(None, &config)
+            mikmik_query::build_tool_roster(None, &config, &cwd)
                 .iter()
                 .map(|tool| tool.name().to_string())
                 .collect(),
@@ -1245,7 +1245,7 @@ async fn main() -> anyhow::Result<()> {
     // Build the full tool list: built-ins from cc-tools plus AgentTool from cc-query
     // (AgentTool lives in cc-query to avoid a circular cc-tools ↔ cc-query dependency).
     // Wrap in Arc so the list can be shared by the main loop AND the cron scheduler.
-    let tools = mikmik_query::build_tool_roster(mcp_manager_arc.clone(), &config);
+    let tools = mikmik_query::build_tool_roster(mcp_manager_arc.clone(), &config, &cwd);
 
     // Build model registry for dynamic model/provider resolution.
     // The registry is pre-populated with a hardcoded snapshot and enriched
@@ -7041,7 +7041,11 @@ async fn run_interactive(
             let new_mcp_manager = connect_mcp_manager_arc(&decision.allowed).await;
             tool_ctx.mcp_manager = new_mcp_manager.clone();
             app.mcp_manager = new_mcp_manager.clone();
-            tools_arc = mikmik_query::build_tool_roster(new_mcp_manager.clone(), &tool_ctx.config);
+            tools_arc = mikmik_query::build_tool_roster(
+                new_mcp_manager.clone(),
+                &tool_ctx.config,
+                &tool_ctx.working_dir,
+            );
             if app.mcp_view.visible {
                 app.refresh_mcp_view();
             }
@@ -7079,8 +7083,11 @@ async fn run_interactive(
                     session_slash_commands(&tool_ctx.working_dir, &cmd_ctx.config);
                 app.set_extra_slash_commands(session_commands);
                 app.skill_count = skill_count;
-                tools_arc =
-                    mikmik_query::build_tool_roster(app.mcp_manager.clone(), &tool_ctx.config);
+                tools_arc = mikmik_query::build_tool_roster(
+                    app.mcp_manager.clone(),
+                    &tool_ctx.config,
+                    &tool_ctx.working_dir,
+                );
             }
         }
 
@@ -8098,7 +8105,7 @@ mod dump_system_prompt_tests {
         let mut dump_config =
             mikmik_query::QueryConfig::from_config_with_registry(&config, &model_registry);
         dump_config.enabled_tools = Some(
-            mikmik_query::build_tool_roster(None, &config)
+            mikmik_query::build_tool_roster(None, &config, std::path::Path::new("."))
                 .iter()
                 .map(|tool| tool.name().to_string())
                 .collect(),

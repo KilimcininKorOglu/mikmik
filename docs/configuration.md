@@ -588,6 +588,36 @@ All three are editable from `/settings`, as **Execution timeline**, **Mouse
 capture** and **Live tool output**. See [Commands](commands.md#timeline) for what the timeline panel
 shows.
 
+### Which tools are offered
+
+Each of these decides whether a group of tools reaches the model at all. A
+withheld tool is absent rather than refused, so it costs nothing at run time
+and no schema on any turn. All four are off by default and editable from
+`/settings`.
+
+| Key                  | Type    | Default | Description                                                                                                       |
+|----------------------|---------|---------|-------------------------------------------------------------------------------------------------------------------|
+| `teamsEnabled`       | boolean | false   | Offer `TeamCreate` and `TeamDelete`. `SendMessage` is unaffected: it also carries messages between the sub-agents `Agent` starts. |
+| `cronEnabled`        | boolean | false   | Offer `CronCreate`, `CronDelete` and `CronList`. A job already scheduled keeps running either way.                 |
+| `replEnabled`        | boolean | false   | Offer the persistent Python and JavaScript `REPL`.                                                                |
+| `computerUseEnabled` | boolean | false   | Offer the desktop control tool. The `computer-use` Cargo feature is a separate axis: with it off the tool is not built at all. |
+
+A project's `.mikmik/settings.json` cannot turn any of them on. Each decides
+whether a capability is offered, so a repository able to set one could hand
+itself a shell, the desktop, scheduled execution, or a fleet of agents.
+
+Four more groups are decided by the machine and the directory rather than by a
+setting, on the same reasoning: a tool that could only report its own absence
+is not offered.
+
+- `ListMcpResources`, `ReadMcpResource` and `mcp__auth` need a connected MCP server.
+- `EnterWorktree` and `ExitWorktree` need the session to be inside a git repository.
+- `LSP` needs a configured language server, or one that auto-detection finds installed for this tree.
+- `PowerShell` needs `pwsh` on the PATH, or Windows.
+
+Measured in this repository: the roster went from 44 tools and 30,246
+characters of tool definitions to 35 and 25,730 with nothing configured.
+
 While MikMik captures the mouse, the terminal no longer sees it, so its own
 selection and its right-click paste stop working. That matters most over SSH,
 where the remote host often has no `wl-copy` or `xclip` for `Ctrl+V` to reach:

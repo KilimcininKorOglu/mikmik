@@ -5,6 +5,7 @@
 //! end up with the same tools; building the roster in each front end is how
 //! they drifted apart.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use mikmik_tools::Tool;
@@ -17,12 +18,33 @@ use tracing::debug;
 /// Takes the whole config rather than the individual fields it gates on: two
 /// of the tools are already conditional and threading one more derived value
 /// through six call sites buys nothing.
+///
+/// `cwd` is what the session works in. Three of the gates below read it,
+/// because whether a tool can do anything depends on the directory rather than
+/// on the settings: there is no worktree outside a repository and no language
+/// server for a tree none of them recognises.
 pub fn build_tool_roster(
     mcp_manager: Option<Arc<mikmik_mcp::McpManager>>,
     config: &mikmik_core::Config,
+    cwd: &Path,
 ) -> Arc<Vec<Box<dyn Tool>>> {
     let mut tools: Vec<Box<dyn Tool>> = mikmik_tools::all_tools();
     tools.push(Box::new(crate::AgentTool));
+
+    // Each of these withholds a tool that could only answer "there is nothing
+    // here" where its condition fails. The reasoning is the one the ACP bridge
+    // and the advisor already follow: a session that cannot use a tool should
+    // pay neither its schema nor its system-prompt guideline.
+    let unusable: Vec<&str> = unusable_tools(mcp_manager.is_some(), config, cwd);
+    if !unusable.is_empty() {
+        let before = tools.len();
+        tools.retain(|t| !unusable.contains(&t.name()));
+        debug!(
+            removed = before - tools.len(),
+            withheld = ?unusable,
+            "withheld the tools this session cannot use"
+        );
+    }
 
     // Offer the advisor only when a model backs it and the mode asks the model
     // to consult one, so a session without either pays neither the tool schema
@@ -76,6 +98,56 @@ pub fn build_tool_roster(
     apply_roster_filter(&mut tools, config);
 
     Arc::new(tools)
+}
+
+/// The tools this session has no use for, by name.
+///
+/// Two kinds are collected here. A tool the *machine or the directory* cannot
+/// support is withheld because it could only report its own absence: there are
+/// no MCP resources without a manager, no worktree outside a repository, and
+/// no language server for a tree none of them recognises. A tool behind a
+/// setting is withheld because the user has not asked for it.
+fn unusable_tools(has_mcp: bool, config: &mikmik_core::Config, cwd: &Path) -> Vec<&'static str> {
+    use mikmik_core::constants::{
+        TOOL_NAME_COMPUTER_USE, TOOL_NAME_REPL, TOOL_NAME_TEAM_CREATE, TOOL_NAME_TEAM_DELETE,
+    };
+
+    let mut withheld = Vec::new();
+    if !has_mcp {
+        withheld.extend(["ListMcpResources", "ReadMcpResource", "mcp__auth"]);
+    }
+    if mikmik_core::snapshot::shadow::find_repo_root(cwd).is_none() {
+        withheld.extend(["EnterWorktree", "ExitWorktree"]);
+    }
+    if !any_language_server_reachable(config, cwd) {
+        withheld.push("LSP");
+    }
+    if !config.teams_enabled {
+        withheld.extend([TOOL_NAME_TEAM_CREATE, TOOL_NAME_TEAM_DELETE]);
+    }
+    if !config.cron_enabled {
+        withheld.extend(["CronCreate", "CronDelete", "CronList"]);
+    }
+    if !config.repl_enabled {
+        withheld.push(TOOL_NAME_REPL);
+    }
+    if !config.computer_use_enabled {
+        withheld.push(TOOL_NAME_COMPUTER_USE);
+    }
+    withheld
+}
+
+/// Whether any language server this tree would use is installed.
+///
+/// A configured server counts without probing: the user named it, and a
+/// missing binary is their own report to read, which they cannot get if the
+/// tool that would report it is withheld. `detect_servers` already requires
+/// both a root marker and a resolvable binary, so no probe is repeated here.
+fn any_language_server_reachable(config: &mikmik_core::Config, cwd: &Path) -> bool {
+    if !config.lsp_servers.is_empty() {
+        return true;
+    }
+    config.effective_lsp_auto_detect() && !mikmik_core::lsp::detect_servers(cwd).is_empty()
 }
 
 /// Cut the roster down to what `--allowed-tools` and `--disallowed-tools` name.
@@ -144,6 +216,14 @@ mod tests {
         tools.iter().map(|t| t.name()).collect()
     }
 
+    /// This crate's own directory, which is inside a git repository.
+    ///
+    /// The directory decides three of the gates, so a test that says nothing
+    /// about it needs one that behaves like a real session's.
+    fn here() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    }
+
     fn with_advisor(model: Option<&str>) -> Config {
         Config {
             advisor_model: model.map(str::to_string),
@@ -171,7 +251,7 @@ mod tests {
     /// execute tools. Only the roster decides that.
     #[test]
     fn a_manager_holds_nothing_that_does_the_work() {
-        let tools = build_tool_roster(None, &managed(true));
+        let tools = build_tool_roster(None, &managed(true), &here());
         let names = names(&tools);
 
         for denied in MANAGER_DENIED_TOOLS {
@@ -181,13 +261,120 @@ mod tests {
 
     #[test]
     fn a_manager_still_reads_searches_and_delegates() {
-        let tools = build_tool_roster(None, &managed(true));
+        let tools = build_tool_roster(None, &managed(true), &here());
         let names = names(&tools);
 
         assert!(names.contains(&"Read"), "{names:?}");
         assert!(names.contains(&"Grep"), "{names:?}");
         assert!(names.contains(&"Agent"), "{names:?}");
         assert!(names.contains(&"TodoWrite"), "{names:?}");
+    }
+
+    #[test]
+    fn the_mcp_tools_are_offered_only_when_a_manager_is_connected() {
+        // Without a manager the three can only report that nothing is
+        // configured, which is a turn spent to learn nothing.
+        let tools = build_tool_roster(None, &Config::default(), &here());
+        let names = names(&tools);
+
+        for tool in ["ListMcpResources", "ReadMcpResource", "mcp__auth"] {
+            assert!(
+                !names.contains(&tool),
+                "{tool} reached a session with no MCP"
+            );
+        }
+    }
+
+    #[test]
+    fn the_worktree_tools_need_a_repository() {
+        let outside = tempfile::tempdir().expect("temp dir");
+        let tools = build_tool_roster(None, &Config::default(), outside.path());
+        let names = names(&tools);
+
+        assert!(!names.contains(&"EnterWorktree"), "{names:?}");
+        assert!(!names.contains(&"ExitWorktree"), "{names:?}");
+    }
+
+    #[test]
+    fn the_worktree_tools_are_there_inside_one() {
+        let tools = build_tool_roster(None, &Config::default(), &here());
+        let names = names(&tools);
+
+        assert!(names.contains(&"EnterWorktree"), "{names:?}");
+        assert!(names.contains(&"ExitWorktree"), "{names:?}");
+    }
+
+    #[test]
+    fn lsp_is_withheld_when_no_server_is_reachable() {
+        // Auto-detection off and nothing configured leaves nothing to reach.
+        let config = Config {
+            lsp_auto_detect: Some(false),
+            ..Default::default()
+        };
+        let tools = build_tool_roster(None, &config, &here());
+
+        assert!(!names(&tools).contains(&"LSP"), "{:?}", names(&tools));
+    }
+
+    #[test]
+    fn a_configured_server_is_taken_at_its_word() {
+        // The user named it. A missing binary is their own report to read,
+        // and withholding the tool would take away what would report it.
+        let server: mikmik_core::lsp::LspServerConfig = serde_json::from_value(serde_json::json!({
+            "name": "made-up",
+            "command": "no-such-language-server",
+            "file_patterns": ["*.made-up"],
+            "initialization_options": null,
+        }))
+        .expect("a minimal server config parses");
+        let config = Config {
+            lsp_auto_detect: Some(false),
+            lsp_servers: vec![server],
+            ..Default::default()
+        };
+        let tools = build_tool_roster(None, &config, &here());
+
+        assert!(names(&tools).contains(&"LSP"), "{:?}", names(&tools));
+    }
+
+    /// The settings-gated groups, and the tools each one holds.
+    const GATED: &[(&str, &[&str])] = &[
+        ("teams", &["TeamCreate", "TeamDelete"]),
+        ("cron", &["CronCreate", "CronDelete", "CronList"]),
+        ("repl", &["REPL"]),
+    ];
+
+    fn with_gate(gate: &str, on: bool) -> Config {
+        let mut config = Config::default();
+        match gate {
+            "teams" => config.teams_enabled = on,
+            "cron" => config.cron_enabled = on,
+            "repl" => config.repl_enabled = on,
+            other => panic!("unknown gate {other}"),
+        }
+        config
+    }
+
+    #[test]
+    fn a_gated_group_is_absent_by_default() {
+        for (gate, gated) in GATED {
+            let tools = build_tool_roster(None, &with_gate(gate, false), &here());
+            let names = names(&tools);
+            for tool in *gated {
+                assert!(!names.contains(tool), "{tool} offered while {gate} is off");
+            }
+        }
+    }
+
+    #[test]
+    fn turning_a_gate_on_brings_its_tools_back() {
+        for (gate, gated) in GATED {
+            let tools = build_tool_roster(None, &with_gate(gate, true), &here());
+            let names = names(&tools);
+            for tool in *gated {
+                assert!(names.contains(tool), "{tool} missing while {gate} is on");
+            }
+        }
     }
 
     fn filtered(allowed: &[&str], denied: &[&str]) -> Config {
@@ -200,7 +387,7 @@ mod tests {
 
     #[test]
     fn a_denied_tool_is_not_offered() {
-        let tools = build_tool_roster(None, &filtered(&[], &["Bash"]));
+        let tools = build_tool_roster(None, &filtered(&[], &["Bash"]), &here());
         let names = names(&tools);
 
         assert!(!names.contains(&"Bash"), "{names:?}");
@@ -209,7 +396,7 @@ mod tests {
 
     #[test]
     fn an_allow_list_offers_exactly_what_it_names() {
-        let tools = build_tool_roster(None, &filtered(&["Read", "Grep"], &[]));
+        let tools = build_tool_roster(None, &filtered(&["Read", "Grep"], &[]), &here());
         let mut names = names(&tools);
         names.sort_unstable();
 
@@ -219,15 +406,15 @@ mod tests {
     #[test]
     fn deny_wins_over_allow_for_the_same_tool() {
         // Matches how `PermissionManager::evaluate` resolves a contradiction.
-        let tools = build_tool_roster(None, &filtered(&["Read"], &["Read"]));
+        let tools = build_tool_roster(None, &filtered(&["Read"], &["Read"]), &here());
 
         assert!(names(&tools).is_empty(), "{:?}", names(&tools));
     }
 
     #[test]
     fn a_name_that_matches_nothing_leaves_the_roster_alone() {
-        let unfiltered = build_tool_roster(None, &Config::default()).len();
-        let tools = build_tool_roster(None, &filtered(&[], &["NoSuchTool"]));
+        let unfiltered = build_tool_roster(None, &Config::default(), &here()).len();
+        let tools = build_tool_roster(None, &filtered(&[], &["NoSuchTool"]), &here());
 
         assert_eq!(tools.len(), unfiltered);
     }
@@ -236,7 +423,7 @@ mod tests {
     fn an_allow_list_cannot_return_a_tool_managed_mode_took_away() {
         let mut config = managed(true);
         config.allowed_tools = vec!["Bash".to_string(), "Read".to_string()];
-        let tools = build_tool_roster(None, &config);
+        let tools = build_tool_roster(None, &config, &here());
 
         assert!(!names(&tools).contains(&"Bash"), "{:?}", names(&tools));
         assert!(names(&tools).contains(&"Read"), "{:?}", names(&tools));
@@ -244,7 +431,7 @@ mod tests {
 
     #[test]
     fn a_configured_but_inactive_managed_mode_changes_nothing() {
-        let tools = build_tool_roster(None, &managed(false));
+        let tools = build_tool_roster(None, &managed(false), &here());
         let names = names(&tools);
 
         assert!(names.contains(&"Bash"), "{names:?}");
@@ -254,7 +441,7 @@ mod tests {
     #[test]
     fn a_session_always_gets_the_built_ins_and_the_sub_agent_tool() {
         let config = Config::default();
-        let tools = build_tool_roster(None, &config);
+        let tools = build_tool_roster(None, &config, &here());
         let names = names(&tools);
 
         assert!(names.contains(&"Bash"), "{names:?}");
@@ -264,11 +451,19 @@ mod tests {
 
     #[test]
     fn the_advisor_is_offered_only_when_a_model_backs_it() {
-        assert!(!names(&build_tool_roster(None, &with_advisor(None))).contains(&"Advisor"));
-        assert!(!names(&build_tool_roster(None, &with_advisor(Some("   ")))).contains(&"Advisor"));
+        assert!(
+            !names(&build_tool_roster(None, &with_advisor(None), &here())).contains(&"Advisor")
+        );
+        assert!(!names(&build_tool_roster(
+            None,
+            &with_advisor(Some("   ")),
+            &here()
+        ))
+        .contains(&"Advisor"));
         assert!(names(&build_tool_roster(
             None,
-            &with_advisor(Some("claude-haiku-4-5"))
+            &with_advisor(Some("claude-haiku-4-5")),
+            &here()
         ))
         .contains(&"Advisor"));
     }
@@ -278,7 +473,7 @@ mod tests {
         let with_mode = |mode: &str| {
             let mut config = with_advisor(Some("claude-haiku-4-5"));
             config.advisor_mode = Some(mode.to_string());
-            names(&build_tool_roster(None, &config)).contains(&"Advisor")
+            names(&build_tool_roster(None, &config, &here())).contains(&"Advisor")
         };
 
         assert!(with_mode("tool"), "the default keeps today's behaviour");
@@ -293,7 +488,7 @@ mod tests {
         for mode in mikmik_core::advisor::AdvisorMode::ALL {
             config.advisor_mode = Some(mode.to_string());
             assert!(
-                !names(&build_tool_roster(None, &config)).contains(&"Advise"),
+                !names(&build_tool_roster(None, &config, &here())).contains(&"Advise"),
                 "Advise belongs to a watcher's own roster, never a primary's ({mode})"
             );
         }
@@ -344,7 +539,7 @@ mod tests {
         let _env = MemoryEnvGuard::cleared();
 
         // Off by default, so a session that never asked pays no schema tokens.
-        let bare = build_tool_roster(None, &Config::default());
+        let bare = build_tool_roster(None, &Config::default(), &here());
         let off = names(&bare);
         assert!(!off.contains(&"Memory"), "{off:?}");
         assert!(!off.contains(&"Learn"), "{off:?}");
@@ -353,7 +548,7 @@ mod tests {
             auto_memory_enabled: Some(true),
             ..Default::default()
         };
-        let kept = build_tool_roster(None, &config);
+        let kept = build_tool_roster(None, &config, &here());
         let on = names(&kept);
         assert!(on.contains(&"Memory"), "{on:?}");
         // `Learn` writes into the directory `Memory` reads, so one gate has to
@@ -365,7 +560,7 @@ mod tests {
     #[test]
     fn the_acp_bridge_is_offered_only_when_an_agent_is_configured() {
         let bare = Config::default();
-        assert!(!names(&build_tool_roster(None, &bare)).contains(&"AcpAgent"));
+        assert!(!names(&build_tool_roster(None, &bare, &here())).contains(&"AcpAgent"));
 
         let mut configured = Config::default();
         configured.acp_agents.insert(
@@ -376,6 +571,6 @@ mod tests {
                 env: Default::default(),
             },
         );
-        assert!(names(&build_tool_roster(None, &configured)).contains(&"AcpAgent"));
+        assert!(names(&build_tool_roster(None, &configured, &here())).contains(&"AcpAgent"));
     }
 }

@@ -792,7 +792,11 @@ impl ShadowSnapshot {
 // Free helpers
 // -------------------------------------------------------------------------
 
-fn find_repo_root(start: &Path) -> Option<PathBuf> {
+/// The repository `start` belongs to, walking up until a `.git` is found.
+///
+/// `None` outside a repository, which is what the roster reads to decide
+/// whether the worktree tools have anything to work on.
+pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
     let mut cur = start.to_path_buf();
     loop {
         if cur.join(".git").exists() {

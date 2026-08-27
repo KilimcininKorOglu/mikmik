@@ -143,6 +143,10 @@ pub struct SettingsScreen {
     pub include_ignored_files: bool,
     pub web_search_fallback: bool,
     pub timeline_enabled: bool,
+    pub teams_enabled: bool,
+    pub cron_enabled: bool,
+    pub repl_enabled: bool,
+    pub computer_use_enabled: bool,
     pub live_tool_output: bool,
     /// Empty when no SearXNG instance is configured.
     pub searxng_url: String,
@@ -216,6 +220,10 @@ impl SettingsScreen {
             include_ignored_files: false,
             web_search_fallback: false,
             timeline_enabled: false,
+            teams_enabled: false,
+            cron_enabled: false,
+            repl_enabled: false,
+            computer_use_enabled: false,
             live_tool_output: false,
             searxng_url: String::new(),
             compact_model: String::new(),
@@ -300,6 +308,10 @@ impl SettingsScreen {
             .effective_include_ignored_files();
         self.web_search_fallback = self.settings_snapshot.config.web_search_fallback;
         self.timeline_enabled = self.settings_snapshot.config.timeline_enabled;
+        self.teams_enabled = self.settings_snapshot.config.teams_enabled;
+        self.cron_enabled = self.settings_snapshot.config.cron_enabled;
+        self.repl_enabled = self.settings_snapshot.config.repl_enabled;
+        self.computer_use_enabled = self.settings_snapshot.config.computer_use_enabled;
         self.live_tool_output = self.settings_snapshot.config.live_tool_output;
         self.searxng_url = self
             .settings_snapshot
@@ -1001,6 +1013,44 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             description: "Base address of the instance, for example http://localhost:8080. Empty turns SearXNG off.".into(),
             kind: SettingKind::Text,
             value: screen.searxng_url.clone(),
+        },
+        SettingsEntry {
+            key: "teams_enabled".into(),
+            label: "Team tools".into(),
+            description:
+                "Offer TeamCreate and TeamDelete. Off keeps their schema out of every turn."
+                    .into(),
+            kind: SettingKind::Bool,
+            value: if screen.teams_enabled { "true" } else { "false" }.to_string(),
+        },
+        SettingsEntry {
+            key: "cron_enabled".into(),
+            label: "Cron tools".into(),
+            description:
+                "Offer CronCreate, CronDelete and CronList. A job already scheduled keeps running."
+                    .into(),
+            kind: SettingKind::Bool,
+            value: if screen.cron_enabled { "true" } else { "false" }.to_string(),
+        },
+        SettingsEntry {
+            key: "repl_enabled".into(),
+            label: "REPL tool".into(),
+            description: "Offer the persistent Python and JavaScript REPL.".into(),
+            kind: SettingKind::Bool,
+            value: if screen.repl_enabled { "true" } else { "false" }.to_string(),
+        },
+        SettingsEntry {
+            key: "computer_use_enabled".into(),
+            label: "Computer use".into(),
+            description:
+                "Offer the desktop control tool: screenshots, keyboard and pointer input.".into(),
+            kind: SettingKind::Bool,
+            value: if screen.computer_use_enabled {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
         },
         SettingsEntry {
             key: "timeline_enabled".into(),
@@ -1718,6 +1768,26 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                         screen.settings_snapshot.config.live_tool_output = new_value;
                         config.live_tool_output = new_value;
                     }
+                    "teams_enabled" => {
+                        screen.teams_enabled = new_value;
+                        screen.settings_snapshot.config.teams_enabled = new_value;
+                        config.teams_enabled = new_value;
+                    }
+                    "cron_enabled" => {
+                        screen.cron_enabled = new_value;
+                        screen.settings_snapshot.config.cron_enabled = new_value;
+                        config.cron_enabled = new_value;
+                    }
+                    "repl_enabled" => {
+                        screen.repl_enabled = new_value;
+                        screen.settings_snapshot.config.repl_enabled = new_value;
+                        config.repl_enabled = new_value;
+                    }
+                    "computer_use_enabled" => {
+                        screen.computer_use_enabled = new_value;
+                        screen.settings_snapshot.config.computer_use_enabled = new_value;
+                        config.computer_use_enabled = new_value;
+                    }
                     "timeline_enabled" => {
                         screen.timeline_enabled = new_value;
                         screen.settings_snapshot.config.timeline_enabled = new_value;
@@ -2361,6 +2431,10 @@ mod tests {
             }),
             ("Web search fallback", |config| config.web_search_fallback),
             ("Execution timeline", |config| config.timeline_enabled),
+            ("Team tools", |config| config.teams_enabled),
+            ("Cron tools", |config| config.cron_enabled),
+            ("REPL tool", |config| config.repl_enabled),
+            ("Computer use", |config| config.computer_use_enabled),
             ("Live tool output", |config| config.live_tool_output),
             ("File injection (@)", |config| {
                 config.file_injection_enabled.is_some()

@@ -28,6 +28,7 @@ pub struct SessionMcp {
 pub async fn connect(
     servers: &[acp::McpServer],
     config: &mikmik_core::Config,
+    working_dir: &std::path::Path,
 ) -> Result<Option<SessionMcp>, acp::Error> {
     if servers.is_empty() {
         return Ok(None);
@@ -63,7 +64,7 @@ pub async fn connect(
 
     let manager = Arc::new(mikmik_mcp::McpManager::connect_all(&decision.allowed).await);
     manager.clone().spawn_notification_poll_loop();
-    let tools = mikmik_query::build_tool_roster(Some(manager.clone()), config);
+    let tools = mikmik_query::build_tool_roster(Some(manager.clone()), config, working_dir);
     info!(
         servers = decision.allowed.len(),
         tools = tools.len(),
@@ -217,10 +218,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_session_that_named_no_servers_shares_the_agents_roster() {
-        assert!(connect(&[], &mikmik_core::Config::default())
-            .await
-            .expect("no servers is fine")
-            .is_none());
+        assert!(connect(
+            &[],
+            &mikmik_core::Config::default(),
+            std::path::Path::new(".")
+        )
+        .await
+        .expect("no servers is fine")
+        .is_none());
     }
 
     #[tokio::test]
@@ -235,7 +240,8 @@ mod tests {
 
         assert!(connect(
             std::slice::from_ref(&server),
-            &mikmik_core::Config::default()
+            &mikmik_core::Config::default(),
+            std::path::Path::new(".")
         )
         .await
         .is_err());

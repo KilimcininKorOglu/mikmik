@@ -35,7 +35,8 @@ pub fn build_tool_roster(
     // here" where its condition fails. The reasoning is the one the ACP bridge
     // and the advisor already follow: a session that cannot use a tool should
     // pay neither its schema nor its system-prompt guideline.
-    let unusable: Vec<&str> = unusable_tools(mcp_manager.is_some(), config, cwd);
+    let unusable: Vec<&str> =
+        mikmik_core::tool_gates::unusable_tools(mcp_manager.is_some(), config, cwd);
     if !unusable.is_empty() {
         let before = tools.len();
         tools.retain(|t| !unusable.contains(&t.name()));
@@ -69,7 +70,7 @@ pub fn build_tool_roster(
     // And again for memory: with the feature off there is no directory to
     // search, so the tool could only ever answer "nothing is there". `Learn`
     // rides the same gate, because it writes into the directory `Memory` reads.
-    if mikmik_core::memdir::is_auto_memory_enabled(config.auto_memory_enabled) {
+    if mikmik_core::tool_gates::offers_memory_tools(config) {
         tools.push(Box::new(mikmik_tools::MemoryTool));
         tools.push(Box::new(mikmik_tools::LearnTool));
     }
@@ -100,56 +101,6 @@ pub fn build_tool_roster(
     Arc::new(tools)
 }
 
-/// The tools this session has no use for, by name.
-///
-/// Two kinds are collected here. A tool the *machine or the directory* cannot
-/// support is withheld because it could only report its own absence: there are
-/// no MCP resources without a manager, no worktree outside a repository, and
-/// no language server for a tree none of them recognises. A tool behind a
-/// setting is withheld because the user has not asked for it.
-fn unusable_tools(has_mcp: bool, config: &mikmik_core::Config, cwd: &Path) -> Vec<&'static str> {
-    use mikmik_core::constants::{
-        TOOL_NAME_COMPUTER_USE, TOOL_NAME_REPL, TOOL_NAME_TEAM_CREATE, TOOL_NAME_TEAM_DELETE,
-    };
-
-    let mut withheld = Vec::new();
-    if !has_mcp {
-        withheld.extend(["ListMcpResources", "ReadMcpResource", "mcp__auth"]);
-    }
-    if mikmik_core::snapshot::shadow::find_repo_root(cwd).is_none() {
-        withheld.extend(["EnterWorktree", "ExitWorktree"]);
-    }
-    if !any_language_server_reachable(config, cwd) {
-        withheld.push("LSP");
-    }
-    if !config.teams_enabled {
-        withheld.extend([TOOL_NAME_TEAM_CREATE, TOOL_NAME_TEAM_DELETE]);
-    }
-    if !config.cron_enabled {
-        withheld.extend(["CronCreate", "CronDelete", "CronList"]);
-    }
-    if !config.repl_enabled {
-        withheld.push(TOOL_NAME_REPL);
-    }
-    if !config.computer_use_enabled {
-        withheld.push(TOOL_NAME_COMPUTER_USE);
-    }
-    withheld
-}
-
-/// Whether any language server this tree would use is installed.
-///
-/// A configured server counts without probing: the user named it, and a
-/// missing binary is their own report to read, which they cannot get if the
-/// tool that would report it is withheld. `detect_servers` already requires
-/// both a root marker and a resolvable binary, so no probe is repeated here.
-fn any_language_server_reachable(config: &mikmik_core::Config, cwd: &Path) -> bool {
-    if !config.lsp_servers.is_empty() {
-        return true;
-    }
-    config.effective_lsp_auto_detect() && !mikmik_core::lsp::detect_servers(cwd).is_empty()
-}
-
 /// Cut the roster down to what `--allowed-tools` and `--disallowed-tools` name.
 ///
 /// These decide which tools exist for the session, not whether a call is
@@ -174,13 +125,7 @@ fn apply_roster_filter(tools: &mut Vec<Box<dyn Tool>>, config: &mikmik_core::Con
     }
 
     let before = tools.len();
-    tools.retain(|t| {
-        let name = t.name();
-        if config.disallowed_tools.iter().any(|d| d == name) {
-            return false;
-        }
-        config.allowed_tools.is_empty() || config.allowed_tools.iter().any(|a| a == name)
-    });
+    tools.retain(|t| mikmik_core::tool_gates::passes_roster_filter(t.name(), config));
     debug!(
         removed = before - tools.len(),
         kept = tools.len(),

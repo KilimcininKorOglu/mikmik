@@ -367,6 +367,13 @@ Search available tools by name or keyword to retrieve their full parameter schem
 | `query`       | string  | yes      | Tool name or keyword search |
 | `max_results` | integer | no       | Maximum results (default 5) |
 
+The catalogue is the session's own roster, not the full tool list. A tool this
+session withholds is not listed and cannot be selected, so a search never
+returns a name that the call would answer with `Unknown tool`. Turning a
+capability on in `settings.json`, connecting an MCP server, or working inside a
+repository puts the matching tools back in the catalogue as well as in the
+roster.
+
 ---
 
 ## Web Tools

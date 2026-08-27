@@ -2,8 +2,9 @@
 //
 // The model uses this to find the right tool for a task, or to look up a
 // tool it half-remembers. The catalog is built from the *actually registered*
-// tools (`all_tools()`), so it always reflects real tool names and their
-// one-line descriptions instead of a hand-maintained list that can drift.
+// tools and then narrowed by `mikmik_core::tool_gates`, so it lists exactly
+// what this session can call rather than a hand-maintained list that can drift
+// from the roster in either direction.
 //
 // Supports two query modes:
 //   - "select:ToolName[,Other]" → direct lookup by exact name(s)
@@ -94,9 +95,21 @@ fn one_line(desc: &str) -> String {
 }
 
 /// Build the searchable catalog from the live tool registry plus supplements.
-fn build_catalog() -> Vec<CatalogEntry> {
+///
+/// Filtered by the same gates the roster uses. A catalog built from
+/// `all_tools()` alone advertised tools the session had withheld: the model
+/// searched, found `CronList` with `cronEnabled` off, called it, and the
+/// dispatcher answered `Unknown tool` — the wasted turn the gating exists to
+/// prevent.
+fn build_catalog(ctx: &ToolContext) -> Vec<CatalogEntry> {
+    let has_mcp = ctx.mcp_manager.is_some();
+    let offered = |name: &str| {
+        mikmik_core::tool_gates::tool_is_offered(name, has_mcp, &ctx.config, &ctx.working_dir)
+    };
+
     let mut entries: Vec<CatalogEntry> = all_tools()
         .iter()
+        .filter(|t| offered(t.name()))
         .map(|t| CatalogEntry {
             name: t.name().to_string(),
             description: one_line(t.description()),
@@ -104,8 +117,15 @@ fn build_catalog() -> Vec<CatalogEntry> {
         })
         .collect();
 
+    // The supplements are added on a condition rather than withheld on one, so
+    // each carries its own gate. `Agent` has none: the roster always adds it.
+    let memory_tools = mikmik_core::tool_gates::offers_memory_tools(&ctx.config);
     for (name, desc) in SUPPLEMENTAL_TOOLS {
-        if !entries.iter().any(|e| e.name == *name) {
+        let conditional_on = match *name {
+            "Memory" | "Learn" => memory_tools,
+            _ => true,
+        };
+        if conditional_on && offered(name) && !entries.iter().any(|e| e.name == *name) {
             entries.push(CatalogEntry {
                 name: (*name).to_string(),
                 description: one_line(desc),
@@ -187,7 +207,7 @@ impl Tool for ToolSearchTool {
         })
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let params: ToolSearchInput = match serde_json::from_value(input) {
             Ok(p) => p,
             Err(e) => return ToolResult::error(format!("Invalid input: {}", e)),
@@ -195,7 +215,7 @@ impl Tool for ToolSearchTool {
 
         let query = params.query.trim();
         let max = params.max_results.clamp(1, 20);
-        let catalog = build_catalog();
+        let catalog = build_catalog(ctx);
 
         // ---- select: prefix — direct lookup by exact name(s) ----------------
         if let Some(names_str) = query.strip_prefix("select:").map(str::trim) {
@@ -309,12 +329,35 @@ mod tests {
     use super::*;
 
     fn ctx() -> ToolContext {
-        crate::test_support::allow_all_context(std::env::temp_dir())
+        ctx_with(everything_on())
+    }
+
+    fn ctx_with(config: mikmik_core::config::Config) -> ToolContext {
+        let mut ctx = crate::test_support::allow_all_context(std::env::temp_dir());
+        ctx.config = config;
+        ctx
+    }
+
+    /// A session that asked for every gated tool, so a test about ranking or
+    /// about the supplement is not silently answering a question about gating.
+    fn everything_on() -> mikmik_core::config::Config {
+        mikmik_core::config::Config {
+            auto_memory_enabled: Some(true),
+            teams_enabled: true,
+            cron_enabled: true,
+            repl_enabled: true,
+            computer_use_enabled: true,
+            ..Default::default()
+        }
     }
 
     async fn run(query: &str) -> String {
+        run_with(query, ctx()).await
+    }
+
+    async fn run_with(query: &str, ctx: ToolContext) -> String {
         let tool = ToolSearchTool;
-        let out = tool.execute(json!({ "query": query }), &ctx()).await;
+        let out = tool.execute(json!({ "query": query }), &ctx).await;
         out.content
     }
 
@@ -343,9 +386,9 @@ mod tests {
         // Without this the turn loop never learns what to declare, and a
         // session with schema deferral on could reach nothing but the core
         // tools no matter how often it searched.
-        let names = found_names("select:LSP,CronList").await;
+        let names = found_names("select:REPL,CronList").await;
 
-        assert!(names.contains(&"LSP".to_string()), "{names:?}");
+        assert!(names.contains(&"REPL".to_string()), "{names:?}");
         assert!(names.contains(&"CronList".to_string()), "{names:?}");
     }
 
@@ -424,5 +467,63 @@ mod tests {
         let out = run("remember something for a later session").await;
         assert!(out.contains("Memory"), "{out}");
         assert!(out.contains("Learn"), "{out}");
+    }
+
+    /// The defect this filter was written for. A real session with
+    /// `cronEnabled` off searched, found `CronList` here, called it, and read
+    /// `Error: Unknown tool: CronList` — because the dispatcher looks a call up
+    /// in the roster and the roster had withheld it.
+    #[tokio::test]
+    async fn a_withheld_tool_is_not_advertised() {
+        let out = run_with("select:CronList", ctx_with(Default::default())).await;
+
+        assert!(
+            out.contains("No matching tools found"),
+            "search advertised a tool the roster withholds:\n{out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_keyword_search_does_not_surface_a_withheld_tool() {
+        // `select:` is the direct route, but a keyword search reaches the same
+        // catalog and must not leak what the direct route refuses.
+        let out = run_with("schedule a recurring job", ctx_with(Default::default())).await;
+
+        assert!(!out.contains("CronCreate"), "{out}");
+        assert!(!out.contains("CronList"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn turning_the_setting_on_makes_the_tool_discoverable_again() {
+        let config = mikmik_core::config::Config {
+            cron_enabled: true,
+            ..Default::default()
+        };
+        let out = run_with("select:CronList", ctx_with(config)).await;
+
+        assert!(out.contains("CronList:"), "{out}");
+    }
+
+    /// The roster filter decides which tools exist, so the catalog has to read
+    /// it too. Otherwise `--disallowed-tools Grep` hides the schema and leaves
+    /// the search still recommending it.
+    #[tokio::test]
+    async fn the_roster_filter_reaches_the_catalog() {
+        let config = mikmik_core::config::Config {
+            disallowed_tools: vec!["Grep".to_string()],
+            ..everything_on()
+        };
+        let out = run_with("select:Grep", ctx_with(config)).await;
+
+        assert!(out.contains("No matching tools found"), "{out}");
+    }
+
+    /// Memory rides a condition rather than a gate, so it needs its own check:
+    /// the supplement used to add it whatever the setting said.
+    #[tokio::test]
+    async fn the_memory_supplement_follows_its_setting() {
+        let out = run_with("select:Memory,Learn", ctx_with(Default::default())).await;
+
+        assert!(out.contains("No matching tools found"), "{out}");
     }
 }

@@ -8953,6 +8953,7 @@ pub mod prompt_history;
 pub mod ps_classifier;
 pub mod system_prompt;
 pub mod tips;
+pub mod tool_gates;
 pub mod voice;
 
 // ---------------------------------------------------------------------------

@@ -2616,6 +2616,7 @@ async fn run_headless(
     // Interpreters started by the REPL tool are kept alive between calls on
     // purpose; this is where that purpose ends.
     mikmik_tools::repl_tool::shutdown_session(&tool_ctx.session_id).await;
+    mikmik_tools::computer_script::shutdown_session(&tool_ctx.session_id).await;
     // A language server holds the whole project in memory and outlives the
     // session otherwise: its manager is a global, so nothing else stops it.
     // `shutdown` asks first and kills the process tree after, so a server that
@@ -7189,6 +7190,7 @@ async fn run_interactive(
     // Interpreters started by the REPL tool are kept alive between calls on
     // purpose; this is where that purpose ends.
     mikmik_tools::repl_tool::shutdown_session(&tool_ctx.session_id).await;
+    mikmik_tools::computer_script::shutdown_session(&tool_ctx.session_id).await;
     // A language server holds the whole project in memory and outlives the
     // session otherwise: its manager is a global, so nothing else stops it.
     // `shutdown` asks first and kills the process tree after, so a server that

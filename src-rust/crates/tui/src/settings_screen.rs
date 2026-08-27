@@ -147,6 +147,7 @@ pub struct SettingsScreen {
     pub cron_enabled: bool,
     pub repl_enabled: bool,
     pub computer_use_enabled: bool,
+    pub computer_script_enabled: bool,
     pub schema_deferral: bool,
     pub live_tool_output: bool,
     /// Empty when no SearXNG instance is configured.
@@ -225,6 +226,7 @@ impl SettingsScreen {
             cron_enabled: false,
             repl_enabled: false,
             computer_use_enabled: false,
+            computer_script_enabled: false,
             schema_deferral: false,
             live_tool_output: false,
             searxng_url: String::new(),
@@ -314,6 +316,7 @@ impl SettingsScreen {
         self.cron_enabled = self.settings_snapshot.config.cron_enabled;
         self.repl_enabled = self.settings_snapshot.config.repl_enabled;
         self.computer_use_enabled = self.settings_snapshot.config.computer_use_enabled;
+        self.computer_script_enabled = self.settings_snapshot.config.computer_script_enabled;
         self.schema_deferral = self.settings_snapshot.config.schema_deferral;
         self.live_tool_output = self.settings_snapshot.config.live_tool_output;
         self.searxng_url = self
@@ -1049,6 +1052,20 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
                 "Offer the desktop control tool: screenshots, keyboard and pointer input.".into(),
             kind: SettingKind::Bool,
             value: if screen.computer_use_enabled {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
+        },
+        SettingsEntry {
+            key: "computer_script_enabled".into(),
+            label: "Computer scripting".into(),
+            description:
+                "Offer a persistent JavaScript session that drives the desktop. Needs node."
+                    .into(),
+            kind: SettingKind::Bool,
+            value: if screen.computer_script_enabled {
                 "true"
             } else {
                 "false"
@@ -1800,6 +1817,11 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                         screen.settings_snapshot.config.repl_enabled = new_value;
                         config.repl_enabled = new_value;
                     }
+                    "computer_script_enabled" => {
+                        screen.computer_script_enabled = new_value;
+                        screen.settings_snapshot.config.computer_script_enabled = new_value;
+                        config.computer_script_enabled = new_value;
+                    }
                     "computer_use_enabled" => {
                         screen.computer_use_enabled = new_value;
                         screen.settings_snapshot.config.computer_use_enabled = new_value;
@@ -2457,6 +2479,9 @@ mod tests {
             ("Cron tools", |config| config.cron_enabled),
             ("REPL tool", |config| config.repl_enabled),
             ("Computer use", |config| config.computer_use_enabled),
+            ("Computer scripting", |config| {
+                config.computer_script_enabled
+            }),
             ("Deferred tool schemas", |config| config.schema_deferral),
             ("Live tool output", |config| config.live_tool_output),
             ("File injection (@)", |config| {

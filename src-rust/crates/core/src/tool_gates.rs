@@ -43,6 +43,12 @@ pub fn unusable_tools(has_mcp: bool, config: &Config, cwd: &Path) -> Vec<&'stati
     if !config.computer_use_enabled {
         withheld.push(TOOL_NAME_COMPUTER_USE);
     }
+    // Two conditions, because the setting alone is not enough: the session it
+    // would start is a `node` process, and telling the model to script a
+    // desktop through a runtime the machine does not have costs it a turn.
+    if !config.computer_script_enabled || which::which("node").is_err() {
+        withheld.push("computer_script");
+    }
     withheld
 }
 

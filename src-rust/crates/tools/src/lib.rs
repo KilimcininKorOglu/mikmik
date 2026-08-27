@@ -29,6 +29,7 @@ pub mod brief;
 pub(crate) mod brush_background;
 pub(crate) mod brush_bash;
 pub mod bundled_skills;
+pub mod computer_script;
 pub mod computer_use;
 pub mod config_tool;
 pub mod cron;
@@ -80,6 +81,7 @@ pub use apply_patch::ApplyPatchTool;
 pub use ask_user::AskUserQuestionTool;
 pub use batch_edit::BatchEditTool;
 pub use brief::BriefTool;
+pub use computer_script::ComputerScriptTool;
 pub use computer_use::ComputerUseTool;
 pub use config_tool::ConfigTool;
 pub use cron::{CronCreateTool, CronDeleteTool, CronListTool};
@@ -1009,9 +1011,12 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(McpAuthTool),
         Box::new(MonitorTool),
         Box::new(GoalCompleteTool),
-        // Computer Use is only available when compiled with the feature flag.
+        // Both desktop tools need the feature; the roster then decides which
+        // of them a session actually offers.
         #[cfg(feature = "computer-use")]
         Box::new(computer_use::ComputerUseTool),
+        #[cfg(feature = "computer-use")]
+        Box::new(computer_script::ComputerScriptTool),
     ];
     if powershell_is_available() {
         tools.push(Box::new(PowerShellTool));

@@ -511,7 +511,7 @@ fn take_screenshot() -> ToolResult {
 // Each '+'-delimited token is mapped to an enigo Key or modifier.
 
 #[cfg(feature = "computer-use")]
-fn press_key_sequence(
+pub(crate) fn press_key_sequence(
     enigo: &mut enigo::Enigo,
     sequence: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

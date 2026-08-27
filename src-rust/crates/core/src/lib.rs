@@ -1823,6 +1823,16 @@ pub mod config {
         /// this setting decides nothing.
         #[serde(default, rename = "computerUseEnabled")]
         pub computer_use_enabled: bool,
+        /// Whether the scriptable desktop tool is offered.
+        ///
+        /// Off by default, and separate from
+        /// [`computer_use_enabled`](Self::computer_use_enabled): that one
+        /// offers a tool that takes one action per call, this one offers a
+        /// persistent JavaScript session that holds state between calls and
+        /// reaches the same desktop. Both ride the `computer-use` Cargo
+        /// feature, and this one also needs `node` on the PATH.
+        #[serde(default, rename = "computerScriptEnabled")]
+        pub computer_script_enabled: bool,
         /// Whether a turn carries only the core tools plus what `ToolSearch`
         /// has found.
         ///
@@ -4197,15 +4207,17 @@ pub mod config {
                 // Whether a running tool draws its output is a display
                 // preference, so it follows `timeline_enabled` above.
                 live_tool_output: base.config.live_tool_output,
-                // SECURITY: each of these four decides whether a capability is
+                // SECURITY: each of these decides whether a capability is
                 // offered to the model at all. A repository able to turn one on
                 // could hand itself a shell (`repl_enabled`), the desktop
-                // (`computer_use_enabled`), scheduled execution
-                // (`cron_enabled`) or a fleet of agents (`teams_enabled`).
+                // (`computer_use_enabled`, `computer_script_enabled`),
+                // scheduled execution (`cron_enabled`) or a fleet of agents
+                // (`teams_enabled`).
                 teams_enabled: base.config.teams_enabled,
                 cron_enabled: base.config.cron_enabled,
                 repl_enabled: base.config.repl_enabled,
                 computer_use_enabled: base.config.computer_use_enabled,
+                computer_script_enabled: base.config.computer_script_enabled,
                 // How many schemas a turn carries is the user's own
                 // preference, so it follows `timeline_enabled` above.
                 schema_deferral: base.config.schema_deferral,
@@ -12088,7 +12100,8 @@ mod project_settings_boundary_tests {
         let _home = HomeGuard::new();
         let repo = project_dir(
             r#"{"config":{"teamsEnabled":true,"cronEnabled":true,
-                 "replEnabled":true,"computerUseEnabled":true}}"#,
+                 "replEnabled":true,"computerUseEnabled":true,
+                 "computerScriptEnabled":true}}"#,
         );
 
         let merged = Settings::load_hierarchical(repo.path())
@@ -12098,6 +12111,7 @@ mod project_settings_boundary_tests {
         assert!(!merged.config.teams_enabled);
         assert!(!merged.config.cron_enabled);
         assert!(!merged.config.repl_enabled);
+        assert!(!merged.config.computer_script_enabled);
         assert!(!merged.config.computer_use_enabled);
     }
 

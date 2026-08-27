@@ -728,9 +728,14 @@ Run the terminal capability detection and setup wizard. Checks for true-color su
 
 ### /commit
 
-Ask the model to commit the changes that are already staged. It reads
-`git diff --cached`, writes a message following the repository's conventions,
-and runs `git commit`. It does not stage anything itself.
+Ask the model to commit the work in the repository. It reads `git status` and
+`git diff HEAD`, so staged and unstaged changes are both in scope, splits
+unrelated changes into separate commits, stages each group by explicit path,
+and follows the message conventions it reads from `git log`.
+
+The split is the model's judgement, not a computed one. Stage the files
+yourself first if you want a particular grouping; the model commits what it
+finds either way.
 
 ```
 /commit

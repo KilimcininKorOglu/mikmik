@@ -575,7 +575,7 @@ impl SlashCommand for CommitCommand {
         "commit"
     }
     fn description(&self) -> &str {
-        "Ask MikMik to commit staged changes"
+        "Ask MikMik to commit the work in this repository"
     }
 
     async fn execute(&self, args: &str, _ctx: &mut CommandContext) -> CommandResult {
@@ -585,12 +585,75 @@ impl SlashCommand for CommitCommand {
             format!(" with message: {}", args.trim())
         };
 
+        // `git diff HEAD` rather than `git diff --cached`, because this command
+        // used to see only what the user had already staged and answered an
+        // empty diff when nothing was. Splitting is asked for here rather than
+        // computed, because the model reads the diff and the person who made
+        // the change is the one who knows which parts belong together.
         CommandResult::UserMessage(format!(
-            "Please commit the currently staged git changes{}. \
-             Run `git diff --cached` to see what's staged, \
-             write an appropriate commit message following the repository's conventions, \
-             and run `git commit`.",
+            "Please commit the work in this repository{}. \
+             Run `git status` and `git diff HEAD` to see everything that changed, \
+             staged or not. Split unrelated changes into separate commits and \
+             stage each group by explicit path. Read `git log` for the \
+             repository's existing commit message conventions.",
             extra
         ))
+    }
+}
+
+#[cfg(test)]
+mod commit_command_tests {
+    use super::*;
+
+    fn ctx() -> CommandContext {
+        CommandContext {
+            context_window: 200_000,
+            context_used_tokens: 0,
+            config: mikmik_core::Config::default(),
+            cost_tracker: mikmik_core::cost::CostTracker::new(),
+            messages: vec![],
+            working_dir: std::path::PathBuf::from("."),
+            session_id: "test-session".to_string(),
+            session_title: None,
+            effort_level: None,
+            remote_session_url: None,
+            mcp_manager: None,
+            mcp_auth_runner: None,
+            interactive: true,
+            active_agent: None,
+        }
+    }
+
+    async fn prompt(args: &str) -> String {
+        match CommitCommand.execute(args, &mut ctx()).await {
+            CommandResult::UserMessage(text) => text,
+            other => panic!("expected a UserMessage, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_whole_working_tree_is_in_scope() {
+        // The command used to name `git diff --cached`, so a user who had
+        // staged nothing sent the model an empty diff.
+        let text = prompt("").await;
+        assert!(text.contains("git diff HEAD"), "{text}");
+        assert!(text.contains("git status"), "{text}");
+        assert!(
+            !text.contains("--cached"),
+            "the prompt still scopes the diff to the index: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unrelated_changes_are_asked_to_be_split() {
+        let text = prompt("").await;
+        assert!(text.contains("Split unrelated changes"), "{text}");
+        assert!(text.contains("stage each group by explicit path"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn an_argument_reaches_the_model_as_the_requested_message() {
+        let text = prompt("  fix the parser  ").await;
+        assert!(text.contains("with message: fix the parser"), "{text}");
     }
 }

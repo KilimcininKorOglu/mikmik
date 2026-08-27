@@ -1087,12 +1087,22 @@ async fn run_query_loop_inner(
         let api_messages: Vec<ApiMessage> = messages.iter().map(ApiMessage::from).collect();
         // Max-steps degradation: the final summary turn is dispatched with NO
         // tool definitions so the model can only produce text (issue #230).
+        // What this turn declares, decided once for both dispatch arms. Each
+        // arm builds its own request, so a turn-level policy written into one
+        // of them applies to only the providers that arm serves:
+        // `schemaDeferral` reached the raw Anthropic path alone until this list
+        // became shared.
+        let declared: Vec<&dyn Tool> = tools
+            .iter()
+            .filter(|t| declares_this_turn(t.name(), &tool_ctx.config, &found_tools))
+            .map(|t| t.as_ref())
+            .collect();
+
         let api_tools: Vec<ApiToolDefinition> = if degradation_turn {
             Vec::new()
         } else {
-            tools
+            declared
                 .iter()
-                .filter(|t| declares_this_turn(t.name(), &tool_ctx.config, &found_tools))
                 .map(|t| ApiToolDefinition::from(&t.to_definition()))
                 .collect()
         };
@@ -1335,7 +1345,7 @@ async fn run_query_loop_inner(
                     // text (opencode's `toolChoice:"none"` equivalent).
                     let provider_tools: Vec<mikmik_core::types::ToolDefinition> =
                         if caps.tool_calling && !degradation_turn {
-                            tools.iter().map(|t| t.to_definition()).collect()
+                            declared.iter().map(|t| t.to_definition()).collect()
                         } else {
                             Vec::new()
                         };

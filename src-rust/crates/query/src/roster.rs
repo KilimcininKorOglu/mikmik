@@ -73,7 +73,47 @@ pub fn build_tool_roster(
         );
     }
 
+    apply_roster_filter(&mut tools, config);
+
     Arc::new(tools)
+}
+
+/// Cut the roster down to what `--allowed-tools` and `--disallowed-tools` name.
+///
+/// These decide which tools exist for the session, not whether a call is
+/// approved; that is `permission_rules`. Withholding a tool costs nothing at
+/// run time and saves its schema on every turn.
+///
+/// Deny wins, matching `PermissionManager::evaluate`. Runs after managed mode
+/// has taken its tools out, so naming one here cannot put it back.
+fn apply_roster_filter(tools: &mut Vec<Box<dyn Tool>>, config: &mikmik_core::Config) {
+    if config.allowed_tools.is_empty() && config.disallowed_tools.is_empty() {
+        return;
+    }
+
+    // A name that matches nothing is reported rather than ignored. Silently
+    // keeping every tool after a typo tells the user they restricted the
+    // session when they did not.
+    let present: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+    for name in config.allowed_tools.iter().chain(&config.disallowed_tools) {
+        if !present.contains(&name.as_str()) {
+            debug!(tool = %name, "roster filter names a tool that is not registered");
+        }
+    }
+
+    let before = tools.len();
+    tools.retain(|t| {
+        let name = t.name();
+        if config.disallowed_tools.iter().any(|d| d == name) {
+            return false;
+        }
+        config.allowed_tools.is_empty() || config.allowed_tools.iter().any(|a| a == name)
+    });
+    debug!(
+        removed = before - tools.len(),
+        kept = tools.len(),
+        "roster filter applied"
+    );
 }
 
 /// What a manager does not get while managed mode is on.
@@ -148,6 +188,58 @@ mod tests {
         assert!(names.contains(&"Grep"), "{names:?}");
         assert!(names.contains(&"Agent"), "{names:?}");
         assert!(names.contains(&"TodoWrite"), "{names:?}");
+    }
+
+    fn filtered(allowed: &[&str], denied: &[&str]) -> Config {
+        Config {
+            allowed_tools: allowed.iter().map(|s| s.to_string()).collect(),
+            disallowed_tools: denied.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_denied_tool_is_not_offered() {
+        let tools = build_tool_roster(None, &filtered(&[], &["Bash"]));
+        let names = names(&tools);
+
+        assert!(!names.contains(&"Bash"), "{names:?}");
+        assert!(names.contains(&"Read"), "{names:?}");
+    }
+
+    #[test]
+    fn an_allow_list_offers_exactly_what_it_names() {
+        let tools = build_tool_roster(None, &filtered(&["Read", "Grep"], &[]));
+        let mut names = names(&tools);
+        names.sort_unstable();
+
+        assert_eq!(names, vec!["Grep", "Read"]);
+    }
+
+    #[test]
+    fn deny_wins_over_allow_for_the_same_tool() {
+        // Matches how `PermissionManager::evaluate` resolves a contradiction.
+        let tools = build_tool_roster(None, &filtered(&["Read"], &["Read"]));
+
+        assert!(names(&tools).is_empty(), "{:?}", names(&tools));
+    }
+
+    #[test]
+    fn a_name_that_matches_nothing_leaves_the_roster_alone() {
+        let unfiltered = build_tool_roster(None, &Config::default()).len();
+        let tools = build_tool_roster(None, &filtered(&[], &["NoSuchTool"]));
+
+        assert_eq!(tools.len(), unfiltered);
+    }
+
+    #[test]
+    fn an_allow_list_cannot_return_a_tool_managed_mode_took_away() {
+        let mut config = managed(true);
+        config.allowed_tools = vec!["Bash".to_string(), "Read".to_string()];
+        let tools = build_tool_roster(None, &config);
+
+        assert!(!names(&tools).contains(&"Bash"), "{:?}", names(&tools));
+        assert!(names(&tools).contains(&"Read"), "{:?}", names(&tools));
     }
 
     #[test]

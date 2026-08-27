@@ -86,13 +86,37 @@ Each tool declares one permission level:
 
 ### Permission Rules
 
-Rules are stored per-project and per-user. A rule specifies:
+Rules live in `permissionRules` in the user's global `settings.json`. A project
+settings file cannot contribute one: a repository able to add a rule could
+pre-approve the exact command it wanted to run, so `Settings::merge_with` keeps
+the base list. A rule specifies:
 
-- **Tool name** (or glob pattern matching tool names)
-- **Path pattern** (optional, for file tools)
+- **Tool name** (omit to match every tool)
+- **Path pattern** (optional glob, for file tools)
 - **Decision**: `allow` or `deny`
 
-Rules are evaluated in order; the first match wins. Manage rules with `/permissions`.
+Every rule is evaluated, not just the first match, and a `deny` wins wherever
+one matches. Manage rules with `/permissions`, which writes one verdict per
+tool, and with the permission dialog, which writes the rules that name a path.
+
+### Which tools exist at all
+
+Separate from whether a call is approved: `--allowed-tools` and
+`--disallowed-tools` decide which tools the session offers the model.
+
+```
+mikmik --allowed-tools Read,Grep,Edit,Bash     # offer only these four
+mikmik --disallowed-tools Bash                 # offer everything else
+```
+
+A withheld tool is absent rather than refused, so it costs no schema on any
+turn. Measured on one machine: the full roster serialises to 30,246 characters
+of tool definitions, and `--allowed-tools Read,Grep,Edit,Bash` to 4,045.
+
+`deny` wins here too, so a tool named in both lists is withheld. A name that
+matches no registered tool is reported in the debug log and changes nothing.
+The filter runs after managed mode has withheld the tools that do the work, so
+naming one cannot bring it back.
 
 ### Change recording
 

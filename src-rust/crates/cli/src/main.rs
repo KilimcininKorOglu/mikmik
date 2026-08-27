@@ -207,11 +207,11 @@ struct Cli {
     #[arg(long = "system-prompt-file")]
     system_prompt_file: Option<PathBuf>,
 
-    /// Tools to allow (comma-separated, default: all)
+    /// Offer the model only these tools (comma-separated; default: all)
     #[arg(long = "allowed-tools", value_name = "TOOLS")]
     allowed_tools: Option<String>,
 
-    /// Tools to disallow (comma-separated)
+    /// Withhold these tools from the model (comma-separated)
     #[arg(long = "disallowed-tools", value_name = "TOOLS")]
     disallowed_tools: Option<String>,
 
@@ -494,6 +494,19 @@ fn bypass_gate_for(mode: PermissionMode, gate_cleared: bool, dialog_visible: boo
     BypassGate::Warn
 }
 
+/// Split a comma-separated tool list, dropping the empty pieces.
+///
+/// A trailing comma and a stray space are both easy to type, and neither names
+/// a tool; keeping them would put an entry in the roster filter that can never
+/// match and make `--allowed-tools Read,` offer nothing.
+fn split_tool_names(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// Tells the model that GitHub is reached through `gh`, not through a fetch.
 ///
 /// Only added to a run on a machine where `gh` is on the PATH.
@@ -756,6 +769,16 @@ async fn main() -> anyhow::Result<()> {
     }
     if let Some(asp) = cli.append_system_prompt.clone() {
         config.append_system_prompt = Some(asp);
+    }
+    // These two name which tools the roster offers, not which calls are
+    // approved; a call is decided against `permission_rules`. The flag replaces
+    // the settings value rather than adding to it, because a run that asks for
+    // exactly these tools means exactly these.
+    if let Some(ref names) = cli.allowed_tools {
+        config.allowed_tools = split_tool_names(names);
+    }
+    if let Some(ref names) = cli.disallowed_tools {
+        config.disallowed_tools = split_tool_names(names);
     }
     config.permission_mode = startup_permission_mode(
         config.permission_mode,

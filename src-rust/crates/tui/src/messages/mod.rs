@@ -45,6 +45,10 @@ pub struct RenderContext<'a> {
     pub tool_names: &'a HashMap<String, String>,
     /// Set of thinking block content hashes that are expanded per-block.
     pub expanded_thinking: &'a std::collections::HashSet<u64>,
+    /// Tool blocks the reader opened, by call-id hash.
+    pub expanded_tools: &'a std::collections::HashSet<u64>,
+    /// Where each open tool block is scrolled to, by the same hash.
+    pub tool_scroll: &'a HashMap<u64, usize>,
     /// Whether to print each message's local time beneath it
     /// (`showMessageTimestamps`).
     pub show_timestamps: bool,
@@ -74,6 +78,10 @@ static EMPTY_EXPANDED_THINKING: std::sync::LazyLock<std::collections::HashSet<u6
     std::sync::LazyLock::new(std::collections::HashSet::new);
 static EMPTY_TOOL_DURATIONS: std::sync::LazyLock<HashMap<String, u64>> =
     std::sync::LazyLock::new(HashMap::new);
+static EMPTY_EXPANDED_TOOLS: std::sync::LazyLock<std::collections::HashSet<u64>> =
+    std::sync::LazyLock::new(std::collections::HashSet::new);
+static EMPTY_TOOL_SCROLL: std::sync::LazyLock<HashMap<u64, usize>> =
+    std::sync::LazyLock::new(HashMap::new);
 
 impl Default for RenderContext<'static> {
     fn default() -> Self {
@@ -83,6 +91,8 @@ impl Default for RenderContext<'static> {
             show_thinking: false,
             tool_names: &EMPTY_TOOL_NAMES,
             expanded_thinking: &EMPTY_EXPANDED_THINKING,
+            expanded_tools: &EMPTY_EXPANDED_TOOLS,
+            tool_scroll: &EMPTY_TOOL_SCROLL,
             show_timestamps: false,
             show_tool_duration: false,
             tool_durations: &EMPTY_TOOL_DURATIONS,

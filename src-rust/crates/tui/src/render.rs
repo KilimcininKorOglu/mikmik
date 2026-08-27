@@ -427,6 +427,11 @@ struct RenderedLineItem {
     message_index: Option<usize>,
     /// If this line is the clickable header of a thinking block, its hash.
     thinking_hash: Option<u64>,
+    /// If this line belongs to a tool block, that block's hash. Every line of
+    /// the block carries it, because the wheel works anywhere over the block.
+    tool_hash: Option<u64>,
+    /// Whether this is the tool block's header, the one line a click opens.
+    tool_is_header: bool,
 }
 
 impl VirtualItem for RenderedLineItem {
@@ -1414,6 +1419,9 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
 
     let mut visible_rows: std::collections::HashMap<u16, usize> = std::collections::HashMap::new();
     let mut thinking_rows: std::collections::HashMap<u16, u64> = std::collections::HashMap::new();
+    let mut tool_header_rows: std::collections::HashMap<u16, u64> =
+        std::collections::HashMap::new();
+    let mut tool_body_rows: std::collections::HashMap<u16, u64> = std::collections::HashMap::new();
     for (idx, item) in lines
         .iter()
         .enumerate()
@@ -1429,9 +1437,18 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
         if let Some(hash) = item.thinking_hash {
             thinking_rows.insert(screen_row, hash);
         }
+        if let Some(hash) = item.tool_hash {
+            tool_body_rows.insert(screen_row, hash);
+            if item.tool_is_header {
+                tool_header_rows.insert(screen_row, hash);
+            }
+        }
     }
     *app.message_row_map.borrow_mut() = visible_rows;
     *app.thinking_row_map.borrow_mut() = thinking_rows;
+    *app.tool_header_row_map.borrow_mut() = tool_header_rows;
+    *app.tool_body_row_map.borrow_mut() = tool_body_rows;
+    publish_tool_max_scroll(app);
 
     // No border — messages render directly into the area.
     let mut list = VirtualList::new();
@@ -1864,6 +1881,8 @@ fn push_rendered_items(
             is_header: mark_first_header && index == 0,
             message_index,
             thinking_hash: None,
+            tool_hash: None,
+            tool_is_header: false,
             line,
         });
     }
@@ -1882,6 +1901,31 @@ fn push_rendered_items_tagged(
             is_header: false,
             message_index,
             thinking_hash,
+            tool_hash: None,
+            tool_is_header: false,
+            line,
+        });
+    }
+}
+
+/// Push one tool block's lines, all tagged with the block's hash.
+///
+/// The first line is the header, the one a click opens; the rest carry the
+/// hash so the wheel reaches the block from anywhere over it.
+fn push_rendered_items_tool(
+    items: &mut Vec<RenderedLineItem>,
+    lines: Vec<Line<'static>>,
+    message_index: Option<usize>,
+    tool_hash: u64,
+) {
+    for (index, line) in lines.into_iter().enumerate() {
+        items.push(RenderedLineItem {
+            search_text: flatten_line_text(&line),
+            is_header: false,
+            message_index,
+            thinking_hash: None,
+            tool_hash: Some(tool_hash),
+            tool_is_header: index == 0,
             line,
         });
     }
@@ -1931,6 +1975,8 @@ fn append_turn_items(
     enum SectionContent {
         Plain(Vec<Line<'static>>),
         Tagged(Vec<(Line<'static>, Option<u64>)>),
+        /// One tool block's lines, with the hash the mouse reaches it by.
+        Tool(Vec<Line<'static>>, u64),
     }
 
     let mut sections: Vec<(SectionContent, Option<usize>)> = Vec::new();
@@ -1951,10 +1997,11 @@ fn append_turn_items(
             &ctx.palette,
             ctx.width,
             ctx.show_tool_duration,
+            crate::app::tool_view_of(ctx.expanded_tools, ctx.tool_scroll, &block.id),
         );
         if !lines.is_empty() {
             sections.push((
-                SectionContent::Plain(lines),
+                SectionContent::Tool(lines, crate::app::tool_block_hash(&block.id)),
                 Some(turn.primary_message_index()),
             ));
         }
@@ -2025,6 +2072,9 @@ fn append_turn_items(
                 }
                 SectionContent::Tagged(tagged) => {
                     push_rendered_items_tagged(items, tagged, message_index)
+                }
+                SectionContent::Tool(lines, hash) => {
+                    push_rendered_items_tool(items, lines, message_index, hash)
                 }
             }
             if index + 1 < total_sections {
@@ -2115,6 +2165,8 @@ fn build_all_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
         show_thinking: false,
         tool_names: &tool_names,
         expanded_thinking: &app.thinking_expanded,
+        expanded_tools: &app.tool_expanded,
+        tool_scroll: &app.tool_scroll,
         show_timestamps: app.settings_screen.show_message_timestamps,
         show_tool_duration: app.settings_screen.show_tool_duration,
         tool_durations: &tool_durations,
@@ -2147,8 +2199,14 @@ fn build_all_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
                 &app.palette,
                 width,
                 app.settings_screen.show_tool_duration,
+                app.tool_view(block),
             );
-            push_rendered_items(&mut items, lines, None, false);
+            push_rendered_items_tool(
+                &mut items,
+                lines,
+                None,
+                crate::app::tool_block_hash(&block.id),
+            );
             push_blank_item(&mut items);
         }
     }
@@ -2224,6 +2282,8 @@ fn render_streaming_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
         show_thinking: false,
         tool_names: &tool_names,
         expanded_thinking: &app.thinking_expanded,
+        expanded_tools: &app.tool_expanded,
+        tool_scroll: &app.tool_scroll,
         show_timestamps: app.settings_screen.show_message_timestamps,
         show_tool_duration: app.settings_screen.show_tool_duration,
         tool_durations: &tool_durations,
@@ -2793,8 +2853,7 @@ fn fold_onto_header(normalized: &str, block: &crate::app::ToolUseBlock) -> Optio
     if normalized != "lsp" || block.status != ToolStatus::Done {
         return None;
     }
-    let preview = block.output_preview.as_ref()?;
-    let text = preview.trim();
+    let text = block.output.as_deref()?.trim();
     if text.is_empty() || text.contains('\n') || text.chars().count() > FOLDED_RESULT_LIMIT {
         return None;
     }
@@ -2807,10 +2866,11 @@ fn render_tool_block_lines(
     frame_count: u64,
     advisor_model: Option<&str>,
     palette: &crate::theme_colors::ColorPalette,
-    // The pane's width, for the right-aligned duration. Every other line here
-    // is laid out by a fixed indent and needs none.
+    // The pane's width, for the right-aligned duration and the scrollbar
+    // column. Every other line here is laid out by a fixed indent.
     width: u16,
     show_duration: bool,
+    view: crate::app::ToolBlockView,
 ) {
     let input_val: serde_json::Value =
         serde_json::from_str(&block.input_json).unwrap_or(serde_json::Value::Null);
@@ -2929,8 +2989,8 @@ fn render_tool_block_lines(
         }
     }
 
-    // Output preview (done/error state) — home paths shortened, dimmed.
-    if let Some(ref preview) = block.output_preview {
+    // What the finished call printed — home paths shortened, dimmed.
+    if block.output.is_some() {
         // A rule between the command and what it printed. Without it the
         // header and the first output line read as one wrapped sentence.
         lines.push(Line::from(vec![
@@ -2942,35 +3002,161 @@ fn render_tool_block_lines(
                     .add_modifier(Modifier::DIM),
             ),
         ]));
-
-        let preview_style = match block.status {
-            ToolStatus::Error => Style::default().fg(palette.error),
-            _ => Style::default().fg(Color::DarkGray),
-        };
-        for line_text in preview.lines() {
-            if line_text.starts_with('\u{2026}') {
-                lines.push(Line::from(vec![
-                    Span::raw("     "),
-                    Span::styled(
-                        expand_tabs(line_text),
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::DIM),
-                    ),
-                ]));
-            } else {
-                lines.push(Line::from(vec![
-                    Span::raw("     "),
-                    Span::styled(expand_tabs(&shorten_home_path(line_text)), preview_style),
-                ]));
-            }
-        }
+        render_tool_output_lines(lines, block, palette, width, view);
     }
 
     // Last, so it reads as the block's footer rather than as part of the
     // output. A running block has no duration yet and gets no line.
     if let Some(line) = tool_duration_line(block.duration_ms, width, show_duration) {
         lines.push(line);
+    }
+}
+
+/// What every line of a tool block's output is indented by.
+const TOOL_OUTPUT_INDENT: &str = "     ";
+
+/// What a closed tool block shows of its output.
+const TOOL_PREVIEW_LINES: usize = 3;
+
+/// What an open one shows. Beyond this the block scrolls inside itself rather
+/// than pushing the rest of the transcript off the screen.
+const TOOL_EXPANDED_LINES: usize = 10;
+
+/// Tell the next wheel event how far each open block can scroll.
+///
+/// Only a block that is open and longer than its window gets an entry, so an
+/// absent one reads as "nothing to scroll" and the wheel falls through to the
+/// transcript. Published from the render pass for the same reason
+/// `last_max_scroll` is: the drawn height is known here and nowhere else.
+fn publish_tool_max_scroll(app: &App) {
+    let mut max_by_block = std::collections::HashMap::new();
+    for block in &app.tool_use_blocks {
+        if !app.tool_view(block).expanded {
+            continue;
+        }
+        let kept = block.kept_lines().len();
+        if kept > TOOL_EXPANDED_LINES {
+            max_by_block.insert(
+                crate::app::tool_block_hash(&block.id),
+                kept - TOOL_EXPANDED_LINES,
+            );
+        }
+    }
+    *app.tool_max_scroll.borrow_mut() = max_by_block;
+}
+
+/// One row of a tool block's scrollbar.
+///
+/// The thumb covers the rows the window is showing, scaled to the window's own
+/// height, so a ten-row window on a hundred-line result draws a one-row thumb
+/// that walks down the track as the block scrolls.
+fn scrollbar_glyph(row: usize, window: usize, start: usize, total: usize) -> char {
+    debug_assert!(window > 0 && total > window);
+    let thumb = ((window * window) / total).max(1);
+    // Where the thumb's top sits, in rows, mapped from where the window sits
+    // in the output.
+    let travel = window.saturating_sub(thumb);
+    let top = if total > window {
+        (start * travel).div_ceil(total - window)
+    } else {
+        0
+    };
+    if row >= top && row < top + thumb {
+        '\u{2588}' // full block: the thumb
+    } else {
+        '\u{2502}' // light vertical: the track
+    }
+}
+
+/// The output half of a finished tool block.
+///
+/// Three shapes. Closed, it is the first [`TOOL_PREVIEW_LINES`] and a count of
+/// what is left. Open and short, it is everything. Open and long, it is a
+/// [`TOOL_EXPANDED_LINES`]-line window with a scrollbar down the right and a
+/// footer saying where in the output the window sits.
+fn render_tool_output_lines(
+    lines: &mut Vec<Line<'static>>,
+    block: &crate::app::ToolUseBlock,
+    palette: &crate::theme_colors::ColorPalette,
+    width: u16,
+    view: crate::app::ToolBlockView,
+) {
+    let kept = block.kept_lines();
+    let style = match block.status {
+        ToolStatus::Error => Style::default().fg(palette.error),
+        _ => Style::default().fg(Color::DarkGray),
+    };
+    let dim = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::DIM);
+
+    let window = if view.expanded {
+        TOOL_EXPANDED_LINES
+    } else {
+        TOOL_PREVIEW_LINES
+    };
+    let scrollable = view.expanded && kept.len() > window;
+    let start = if scrollable {
+        view.scroll.min(kept.len() - window)
+    } else {
+        0
+    };
+    let end = (start + window).min(kept.len());
+
+    // A scrolling block is a window on the output, so a long line is cut to
+    // fit rather than wrapped: a wrapped line would push the scrollbar off its
+    // column and make the window taller than the ten rows it promises.
+    let text_width = (width as usize).saturating_sub(TOOL_OUTPUT_INDENT.len() + 2);
+    for (offset, line_text) in kept[start..end].iter().enumerate() {
+        let text = expand_tabs(&shorten_home_path(line_text));
+        if !scrollable {
+            lines.push(Line::from(vec![
+                Span::raw(TOOL_OUTPUT_INDENT),
+                Span::styled(text, style),
+            ]));
+            continue;
+        }
+        let text = truncate_end(&text, text_width);
+        let used = TOOL_OUTPUT_INDENT.len() + UnicodeWidthStr::width(text.as_str());
+        let pad = (width as usize).saturating_sub(used + 1);
+        lines.push(Line::from(vec![
+            Span::raw(TOOL_OUTPUT_INDENT),
+            Span::styled(text, style),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(
+                scrollbar_glyph(offset, window, start, kept.len()).to_string(),
+                dim,
+            ),
+        ]));
+    }
+
+    if scrollable {
+        lines.push(Line::from(vec![
+            Span::raw("     "),
+            Span::styled(format!("└ {}/{} lines", end, block.output_total_lines), dim),
+        ]));
+    } else if !view.expanded {
+        // A closed block says how much it is not showing, so nobody has to
+        // guess whether opening it is worth a click.
+        let hidden = block.output_total_lines.saturating_sub(end);
+        if hidden > 0 {
+            lines.push(Line::from(vec![
+                Span::raw("     "),
+                Span::styled(format!("\u{2026} {} more lines", hidden), dim),
+            ]));
+        }
+    } else if block.output_total_lines > kept.len() {
+        // Open, short enough not to scroll, but capped on the way in.
+        lines.push(Line::from(vec![
+            Span::raw("     "),
+            Span::styled(
+                format!(
+                    "\u{2026} {} more lines, not kept",
+                    block.output_total_lines - kept.len()
+                ),
+                dim,
+            ),
+        ]));
     }
 }
 
@@ -4589,17 +4775,27 @@ mod tool_block_tests {
     use super::*;
     use crate::app::{ToolStatus, ToolUseBlock};
 
+    /// A block nobody has opened, which is how every block starts.
+    fn closed() -> crate::app::ToolBlockView {
+        crate::app::ToolBlockView::default()
+    }
+
     fn block(name: &str, status: ToolStatus, input: &str, preview: Option<&str>) -> ToolUseBlock {
-        ToolUseBlock {
+        let mut block = ToolUseBlock {
             id: "t".into(),
             name: name.into(),
             turn_index: None,
             status,
-            output_preview: preview.map(|s| s.to_string()),
+            output: None,
+            output_total_lines: 0,
             input_json: input.into(),
             live_output: String::new(),
             duration_ms: None,
+        };
+        if let Some(text) = preview {
+            block.set_output(text);
         }
+        block
     }
 
     /// The three bands, and both boundaries, from the one rule every surface
@@ -4654,20 +4850,29 @@ mod tool_block_tests {
 
     fn render(b: &ToolUseBlock) -> Vec<String> {
         let mut lines = Vec::new();
-        render_tool_block_lines(&mut lines, b, 0, None, &palette(), 80, false);
+        render_tool_block_lines(&mut lines, b, 0, None, &palette(), 80, false, closed());
         lines.iter().map(flatten_line_text).collect()
     }
 
     fn render_with_advisor(b: &ToolUseBlock, model: &str) -> Vec<String> {
         let mut lines = Vec::new();
-        render_tool_block_lines(&mut lines, b, 0, Some(model), &palette(), 80, false);
+        render_tool_block_lines(
+            &mut lines,
+            b,
+            0,
+            Some(model),
+            &palette(),
+            80,
+            false,
+            closed(),
+        );
         lines.iter().map(flatten_line_text).collect()
     }
 
     /// Render `b` with `showToolDuration` on, at `width`.
     fn render_timed(b: &ToolUseBlock, width: u16) -> Vec<String> {
         let mut lines = Vec::new();
-        render_tool_block_lines(&mut lines, b, 0, None, &palette(), width, true);
+        render_tool_block_lines(&mut lines, b, 0, None, &palette(), width, true, closed());
         lines.iter().map(flatten_line_text).collect()
     }
 
@@ -4715,7 +4920,8 @@ mod tool_block_tests {
         // would be an empty row that appears and disappears mid-turn.
         let mut running = finished_block(None);
         running.status = ToolStatus::Running;
-        running.output_preview = None;
+        running.output = None;
+        running.output_total_lines = 0;
         let lines = render_timed(&running, 40);
         assert!(
             !lines.iter().any(|line| line.trim().ends_with('s')
@@ -4897,6 +5103,7 @@ mod tool_block_tests {
                 &crate::theme_colors::ColorPalette::for_theme(theme),
                 80,
                 false,
+                closed(),
             );
             lines[0].spans[0].style.fg.expect("the header is coloured")
         }
@@ -6364,6 +6571,277 @@ mod status_line_tests {
     }
 }
 
+#[cfg(test)]
+mod tool_block_expansion_tests {
+    use super::*;
+    use crate::app::{App, ToolBlockView, ToolStatus, ToolUseBlock};
+    use mikmik_core::config::Config;
+    use mikmik_core::cost::CostTracker;
+    use mikmik_query::QueryEvent;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    /// A finished `Read` call that printed `count` numbered lines.
+    fn block_with(count: usize) -> ToolUseBlock {
+        let mut block = ToolUseBlock {
+            id: "tool-1".to_string(),
+            name: "Read".to_string(),
+            turn_index: None,
+            status: ToolStatus::Done,
+            output: None,
+            output_total_lines: 0,
+            input_json: r#"{"file_path":"notes.txt"}"#.to_string(),
+            live_output: String::new(),
+            duration_ms: None,
+        };
+        let text: Vec<String> = (1..=count).map(|n| format!("line {n}")).collect();
+        block.set_output(&text.join("\n"));
+        block
+    }
+
+    fn draw(block: &ToolUseBlock, view: ToolBlockView) -> Vec<String> {
+        let mut lines = Vec::new();
+        render_tool_block_lines(
+            &mut lines,
+            block,
+            0,
+            None,
+            &crate::theme_colors::ColorPalette::for_theme("default"),
+            80,
+            false,
+            view,
+        );
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn open_at(scroll: usize) -> ToolBlockView {
+        ToolBlockView {
+            expanded: true,
+            scroll,
+        }
+    }
+
+    #[test]
+    fn a_closed_block_shows_three_lines_and_says_what_is_left() {
+        let rows = draw(&block_with(128), ToolBlockView::default());
+
+        assert!(rows.iter().any(|r| r.contains("line 3")), "{rows:#?}");
+        assert!(!rows.iter().any(|r| r.contains("line 4")), "{rows:#?}");
+        assert!(
+            rows.iter().any(|r| r.contains("125 more lines")),
+            "{rows:#?}"
+        );
+    }
+
+    #[test]
+    fn an_open_short_block_shows_everything_without_a_scrollbar() {
+        let rows = draw(&block_with(7), open_at(0));
+
+        assert!(rows.iter().any(|r| r.contains("line 7")), "{rows:#?}");
+        assert!(!rows.iter().any(|r| r.contains("more lines")), "{rows:#?}");
+        assert!(!rows.iter().any(|r| r.contains('\u{2588}')), "{rows:#?}");
+    }
+
+    #[test]
+    fn an_open_long_block_shows_ten_lines_and_a_scrollbar() {
+        let rows = draw(&block_with(128), open_at(0));
+
+        assert!(rows.iter().any(|r| r.contains("line 10")), "{rows:#?}");
+        assert!(!rows.iter().any(|r| r.contains("line 11")), "{rows:#?}");
+        assert!(
+            rows.iter().any(|r| r.contains('\u{2588}')),
+            "the thumb was not drawn:\n{rows:#?}"
+        );
+        assert!(rows.iter().any(|r| r.contains("10/128 lines")), "{rows:#?}");
+    }
+
+    #[test]
+    fn scrolling_moves_the_window() {
+        let rows = draw(&block_with(128), open_at(20));
+
+        assert!(rows.iter().any(|r| r.contains("line 21")), "{rows:#?}");
+        assert!(!rows.iter().any(|r| r.contains("line 20 ")), "{rows:#?}");
+        assert!(rows.iter().any(|r| r.contains("30/128 lines")), "{rows:#?}");
+    }
+
+    #[test]
+    fn the_window_cannot_pass_the_end() {
+        // A stale offset from a block that shrank must not index past the end.
+        let rows = draw(&block_with(12), open_at(9_000));
+
+        assert!(rows.iter().any(|r| r.contains("line 12")), "{rows:#?}");
+        assert!(rows.iter().any(|r| r.contains("12/12 lines")), "{rows:#?}");
+    }
+
+    #[test]
+    fn the_thumb_walks_down_as_the_block_scrolls() {
+        let top = draw(&block_with(128), open_at(0));
+        let bottom = draw(&block_with(128), open_at(118));
+
+        let thumb_row = |rows: &[String]| {
+            rows.iter()
+                .position(|r| r.contains('\u{2588}'))
+                .expect("a thumb")
+        };
+        assert!(
+            thumb_row(&top) < thumb_row(&bottom),
+            "top {top:#?}\nbottom {bottom:#?}"
+        );
+    }
+
+    /// An app whose only content is one finished tool call.
+    fn app_with_output(lines: usize) -> App {
+        let mut app = App::new(Config::default(), CostTracker::new());
+        app.handle_query_event(QueryEvent::ToolStart {
+            tool_name: "Read".to_string(),
+            tool_id: "tool-1".to_string(),
+            input_json: r#"{"file_path":"notes.txt"}"#.to_string(),
+        });
+        let text: Vec<String> = (1..=lines).map(|n| format!("line {n}")).collect();
+        app.handle_query_event(QueryEvent::ToolEnd {
+            tool_name: "Read".to_string(),
+            tool_id: "tool-1".to_string(),
+            result: text.join("\n"),
+            is_error: false,
+            duration_ms: Some(12),
+        });
+        app
+    }
+
+    /// Draw the whole app so the row maps the mouse reads are published.
+    fn paint(app: &App) {
+        let mut terminal = match Terminal::new(TestBackend::new(80, 30)) {
+            Ok(terminal) => terminal,
+            Err(err) => panic!("test terminal: {err}"),
+        };
+        if let Err(err) = terminal.draw(|frame| render_app(frame, app)) {
+            panic!("draw: {err}");
+        }
+    }
+
+    fn a_body_row(app: &App) -> u16 {
+        *app.tool_body_row_map
+            .borrow()
+            .keys()
+            .next()
+            .expect("a body row")
+    }
+
+    #[test]
+    fn the_whole_result_survives_the_event() {
+        // The preview used to be built in the event handler and the rest
+        // thrown away, so there was nothing left to open.
+        let app = app_with_output(128);
+        let block = &app.tool_use_blocks[0];
+
+        assert_eq!(block.output_total_lines, 128);
+        assert_eq!(block.kept_lines().len(), 128);
+    }
+
+    #[test]
+    fn a_click_on_the_header_opens_the_block() {
+        let mut app = app_with_output(128);
+        paint(&app);
+        let hash = *app
+            .tool_header_row_map
+            .borrow()
+            .values()
+            .next()
+            .expect("a header row");
+
+        app.toggle_tool_block(hash);
+        assert!(app.tool_expanded.contains(&hash));
+
+        app.toggle_tool_block(hash);
+        assert!(!app.tool_expanded.contains(&hash));
+    }
+
+    #[test]
+    fn the_wheel_scrolls_an_open_block_instead_of_the_transcript() {
+        let mut app = app_with_output(128);
+        let hash = crate::app::tool_block_hash("tool-1");
+        app.tool_expanded.insert(hash);
+        paint(&app);
+        let row = a_body_row(&app);
+        let before = app.scroll_offset;
+
+        assert!(app.scroll_tool_block_at(row, 1), "the wheel was not taken");
+        assert_eq!(app.tool_scroll.get(&hash).copied(), Some(1));
+        assert_eq!(app.scroll_offset, before, "the transcript moved too");
+    }
+
+    #[test]
+    fn the_wheel_leaves_a_closed_block_to_the_transcript() {
+        let mut app = app_with_output(128);
+        paint(&app);
+        let row = a_body_row(&app);
+
+        assert!(!app.scroll_tool_block_at(row, 1));
+        assert!(app.tool_scroll.is_empty());
+    }
+
+    #[test]
+    fn the_wheel_leaves_a_short_open_block_to_the_transcript() {
+        // Open but with nothing hidden: scrolling it would move nothing, so
+        // the transcript should keep the event.
+        let mut app = app_with_output(4);
+        app.tool_expanded
+            .insert(crate::app::tool_block_hash("tool-1"));
+        paint(&app);
+        let row = a_body_row(&app);
+
+        assert!(!app.scroll_tool_block_at(row, 1));
+    }
+
+    #[test]
+    fn the_wheel_stops_at_the_end_of_the_output() {
+        let mut app = app_with_output(128);
+        let hash = crate::app::tool_block_hash("tool-1");
+        app.tool_expanded.insert(hash);
+        paint(&app);
+        let row = a_body_row(&app);
+
+        for _ in 0..500 {
+            app.scroll_tool_block_at(row, 1);
+        }
+
+        assert_eq!(app.tool_scroll.get(&hash).copied(), Some(128 - 10));
+    }
+
+    #[test]
+    fn closing_a_block_forgets_where_it_was_scrolled_to() {
+        let mut app = app_with_output(128);
+        let hash = crate::app::tool_block_hash("tool-1");
+        app.toggle_tool_block(hash);
+        app.tool_scroll.insert(hash, 40);
+
+        app.toggle_tool_block(hash);
+
+        assert!(app.tool_scroll.is_empty());
+    }
+
+    #[test]
+    fn a_capped_result_still_reports_its_true_length() {
+        let mut block = block_with(1);
+        let huge = "x".repeat(crate::app::MAX_KEPT_OUTPUT_BYTES + 5_000);
+        block.set_output(&format!("{huge}\nlast"));
+
+        assert_eq!(block.output_total_lines, 2);
+        assert!(block
+            .output
+            .as_ref()
+            .is_some_and(|kept| kept.len() <= crate::app::MAX_KEPT_OUTPUT_BYTES));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Live execution timeline panel
 // ---------------------------------------------------------------------------
@@ -6689,6 +7167,11 @@ mod tab_expansion_tests {
     use super::*;
     use crate::app::{ToolStatus, ToolUseBlock};
 
+    /// A block nobody has opened, which is how every block starts.
+    fn closed() -> crate::app::ToolBlockView {
+        crate::app::ToolBlockView::default()
+    }
+
     /// Flatten a rendered line to the text a terminal would receive.
     fn flatten(line: &Line<'_>) -> String {
         line.spans
@@ -6714,7 +7197,8 @@ mod tab_expansion_tests {
             input_json: r#"{"file_path":"notes.txt"}"#.to_string(),
             turn_index: None,
             status: ToolStatus::Done,
-            output_preview: Some("1\talpha\n2\tbeta\n3\tgamma".to_string()),
+            output: Some("1\talpha\n2\tbeta\n3\tgamma".to_string()),
+            output_total_lines: 3,
             live_output: String::new(),
             duration_ms: None,
         };
@@ -6728,6 +7212,7 @@ mod tab_expansion_tests {
             &crate::theme_colors::ColorPalette::for_theme("default"),
             80,
             false,
+            closed(),
         );
 
         let rendered: Vec<String> = lines.iter().map(flatten).collect();

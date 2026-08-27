@@ -44,6 +44,12 @@ A `ToolResult` carries the text sent back to the model, an error flag, optional 
 
 The duration is measured around `execute()` alone, so a tool that waits for permission does not count the wait; a call that was blocked or cancelled before it ran reports nothing rather than zero. It is recorded with the transcript, so it survives `--resume`. Turn it on with [`showToolDuration`](configuration.md#transcript-display) to see it at the bottom right of each tool block; it is off by default.
 
+### Reading a tool block
+
+A finished call draws three lines of its output and says how many are left. Click the block's header to open it: it grows to ten lines and, when the output is longer than that, gains a scrollbar down the right edge and a footer reading `└ 10/128 lines`. The mouse wheel over an open block scrolls the block rather than the transcript, and stops at the end of the output instead of carrying on through what is underneath. Clicking the header again closes the block and forgets where it was scrolled to.
+
+The whole result is kept, up to 100 KB per call — the same ceiling `Bash`, `PowerShell` and `WebFetch` already put on their own output, so for those tools nothing is dropped. A larger result keeps its head, and the line count still reports the whole thing.
+
 Tools are loaded at session start. The model receives the names, descriptions and schemas, and chooses which to call. Every call goes through permission resolution first: a tool that forgets to check permission is still caught by the central backstop whenever its level is a gated one.
 
 ### Workspace-root paths

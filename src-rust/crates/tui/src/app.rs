@@ -821,6 +821,15 @@ pub enum ToolStatus {
     Error,
 }
 
+/// How much of one tool block the reader has asked to see.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolBlockView {
+    /// Whether the block is open.
+    pub expanded: bool,
+    /// The first kept line an open block draws.
+    pub scroll: usize,
+}
+
 /// Represents an active or completed tool invocation visible in the UI.
 #[derive(Debug, Clone)]
 pub struct ToolUseBlock {
@@ -828,12 +837,22 @@ pub struct ToolUseBlock {
     pub name: String,
     pub turn_index: Option<usize>,
     pub status: ToolStatus,
-    pub output_preview: Option<String>,
+    /// What the finished call printed, capped at [`MAX_KEPT_OUTPUT_BYTES`].
+    ///
+    /// The whole result rather than a three-line preview: the preview used to
+    /// be built here and the rest thrown away, so opening a block had nothing
+    /// to open. The transcript holds no tool results of its own, so this is
+    /// the only copy the front end keeps.
+    pub output: Option<String>,
+    /// How many lines the call printed, before the cap. The footer reports
+    /// this rather than what was kept, so a capped block still says how much
+    /// there was.
+    pub output_total_lines: usize,
     /// JSON-serialised input for the tool call (populated from the API stream).
     pub input_json: String,
     /// What the tool has printed so far, while it is still running.
     ///
-    /// Only ever filled when the live-output setting is on. `output_preview`
+    /// Only ever filled when the live-output setting is on. [`Self::output`]
     /// replaces it once the call finishes, so the transcript keeps the result
     /// rather than the play-by-play.
     pub live_output: String,
@@ -843,7 +862,72 @@ pub struct ToolUseBlock {
     pub duration_ms: Option<u64>,
 }
 
+/// The hash a tool block is filed under.
+///
+/// The call id itself would work as a key, but the row maps are rebuilt every
+/// frame and a `u64` keeps that cheap.
+pub fn tool_block_hash(id: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// How much of the block with call id `id` to draw.
+///
+/// One function for both render paths, because the transcript builder reads
+/// the sets through its context and the empty-transcript path reads them off
+/// `App`; computing the view twice is how the two would drift.
+pub fn tool_view_of(
+    expanded: &std::collections::HashSet<u64>,
+    scroll: &std::collections::HashMap<u64, usize>,
+    id: &str,
+) -> ToolBlockView {
+    let hash = tool_block_hash(id);
+    ToolBlockView {
+        expanded: expanded.contains(&hash),
+        scroll: scroll.get(&hash).copied().unwrap_or(0),
+    }
+}
+
+/// The largest finished result one block keeps.
+///
+/// The same ceiling `PtyBashTool`, `PowerShellTool` and `WebFetchTool` already
+/// put on their own output, so for those tools nothing is dropped here at all.
+/// A tool that answers with more keeps its head, and `output_total_lines`
+/// still reports the whole thing.
+pub const MAX_KEPT_OUTPUT_BYTES: usize = 100 * 1024;
+
 impl ToolUseBlock {
+    /// Record a finished call's output.
+    ///
+    /// Counts the lines before capping, so the count describes the result
+    /// rather than what survived the cap.
+    pub fn set_output(&mut self, result: &str) {
+        self.output_total_lines = result.lines().count();
+        let kept = if result.len() > MAX_KEPT_OUTPUT_BYTES {
+            let end = (0..=MAX_KEPT_OUTPUT_BYTES)
+                .rev()
+                .find(|i| result.is_char_boundary(*i))
+                .unwrap_or(0);
+            &result[..end]
+        } else {
+            result
+        };
+        self.output = Some(kept.to_string());
+    }
+
+    /// The output lines this block can draw.
+    ///
+    /// Empty for a call that has not finished, and for one that printed
+    /// nothing.
+    pub fn kept_lines(&self) -> Vec<&str> {
+        self.output
+            .as_deref()
+            .map(|text| text.lines().collect())
+            .unwrap_or_default()
+    }
+
     /// The last `max_lines` lines of live output, oldest first.
     ///
     /// A tail rather than the whole thing: a build prints thousands of lines
@@ -1700,6 +1784,17 @@ pub struct App {
     // ---- Thinking block expansion state ----------------------------------
     /// Set of thinking block content hashes that are expanded.
     pub thinking_expanded: std::collections::HashSet<u64>,
+
+    // ---- Tool block expansion state --------------------------------------
+    /// Tool blocks the reader opened, by the hash of their call id.
+    ///
+    /// Keyed by hash rather than by id for the same reason the thinking set
+    /// is: the row map that carries the click has to be cheap to build on
+    /// every frame.
+    pub tool_expanded: std::collections::HashSet<u64>,
+    /// Where each open block is scrolled to, by the same hash. An absent entry
+    /// reads as the top.
+    pub tool_scroll: std::collections::HashMap<u64, usize>,
     /// The message pane area from the last render frame (used for mouse hit testing).
     pub last_msg_area: Cell<ratatui::layout::Rect>,
     /// The frame region that supports text selection.
@@ -1712,6 +1807,17 @@ pub struct App {
     pub focus: FocusTarget,
     /// Maps virtual_row_index → thinking_block_hash for click detection.
     pub thinking_row_map: RefCell<std::collections::HashMap<u16, u64>>,
+    /// Maps screen row → tool block hash, for the header row a click opens.
+    pub tool_header_row_map: RefCell<std::collections::HashMap<u16, u64>>,
+    /// Maps screen row → tool block hash, for every row of the block the wheel
+    /// scrolls. Wider than the header map: the wheel works anywhere over an
+    /// open block, while only the header takes a click.
+    pub tool_body_row_map: RefCell<std::collections::HashMap<u16, u64>>,
+    /// The largest meaningful scroll offset of each open block, by hash.
+    /// Written by the renderer, which is the only place the drawn height is
+    /// known, and read on the next wheel event for the same reason
+    /// `last_max_scroll` exists.
+    pub tool_max_scroll: RefCell<std::collections::HashMap<u64, usize>>,
     /// Maps screen row → transcript message index for right-click hit testing.
     pub message_row_map: RefCell<std::collections::HashMap<u16, usize>>,
     /// Total message lines from the last render (used for virtual row mapping).
@@ -2096,12 +2202,17 @@ impl App {
             active_goal_badge: None,
             goal_completed: false,
             thinking_expanded: std::collections::HashSet::new(),
+            tool_expanded: std::collections::HashSet::new(),
+            tool_scroll: std::collections::HashMap::new(),
             last_msg_area: Cell::new(ratatui::layout::Rect::default()),
             last_selectable_area: Cell::new(ratatui::layout::Rect::default()),
             last_input_area: Cell::new(ratatui::layout::Rect::default()),
             footer_right_column_area: Cell::new(ratatui::layout::Rect::default()),
             focus: FocusTarget::Input,
             thinking_row_map: RefCell::new(std::collections::HashMap::new()),
+            tool_header_row_map: RefCell::new(std::collections::HashMap::new()),
+            tool_body_row_map: RefCell::new(std::collections::HashMap::new()),
+            tool_max_scroll: RefCell::new(std::collections::HashMap::new()),
             message_row_map: RefCell::new(std::collections::HashMap::new()),
             total_message_lines: Cell::new(0),
             last_render_scroll_offset: Cell::new(0),
@@ -3808,6 +3919,49 @@ impl App {
         } else {
             self.new_messages_while_scrolled = self.new_messages_while_scrolled.saturating_add(1);
         }
+    }
+
+    /// Open or close the tool block `hash` names.
+    ///
+    /// Closing drops the block's scroll position: reopening a block at the
+    /// line someone left it on reads as a bug rather than as a memory.
+    pub fn toggle_tool_block(&mut self, hash: u64) {
+        if self.tool_expanded.remove(&hash) {
+            self.tool_scroll.remove(&hash);
+        } else {
+            self.tool_expanded.insert(hash);
+        }
+        self.invalidate_transcript();
+    }
+
+    /// Scroll the open tool block under `row` by `delta` lines.
+    ///
+    /// Answers whether it took the event. A closed block does not, so the
+    /// wheel still moves the transcript everywhere except inside a block the
+    /// reader opened and that has more to show.
+    pub fn scroll_tool_block_at(&mut self, row: u16, delta: isize) -> bool {
+        let Some(hash) = self.tool_body_row_map.borrow().get(&row).copied() else {
+            return false;
+        };
+        // The renderer publishes this only for a block that is scrollable, so
+        // an absent entry means there is nothing to scroll.
+        let Some(max) = self.tool_max_scroll.borrow().get(&hash).copied() else {
+            return false;
+        };
+        let current = self.tool_scroll.get(&hash).copied().unwrap_or(0);
+        let next = current.saturating_add_signed(delta).min(max);
+        if next != current {
+            self.tool_scroll.insert(hash, next);
+            self.invalidate_transcript();
+        }
+        // Taken either way: at the end of a block's output the wheel stops
+        // there rather than carrying on through the transcript underneath.
+        true
+    }
+
+    /// How much of `block` to draw.
+    pub fn tool_view(&self, block: &ToolUseBlock) -> ToolBlockView {
+        tool_view_of(&self.tool_expanded, &self.tool_scroll, &block.id)
     }
 
     pub fn invalidate_transcript(&self) {
@@ -7881,13 +8035,17 @@ impl App {
         match mouse_event.kind {
             MouseEventKind::ScrollUp => {
                 // Don't consume Ctrl+Scroll — let the terminal handle zoom.
-                if !mouse_event.modifiers.contains(KeyModifiers::CONTROL) {
+                if !mouse_event.modifiers.contains(KeyModifiers::CONTROL)
+                    && !self.scroll_tool_block_at(mouse_event.row, -1)
+                {
                     let step = self.scroll_step();
                     self.scroll_up_by(step);
                 }
             }
             MouseEventKind::ScrollDown => {
-                if !mouse_event.modifiers.contains(KeyModifiers::CONTROL) {
+                if !mouse_event.modifiers.contains(KeyModifiers::CONTROL)
+                    && !self.scroll_tool_block_at(mouse_event.row, 1)
+                {
                     let step = self.scroll_step();
                     let new_off = self.scroll_offset.saturating_sub(step);
                     self.scroll_offset = new_off;
@@ -8008,6 +8166,18 @@ impl App {
                         self.thinking_expanded.insert(hash);
                     }
                     self.invalidate_transcript();
+                    return;
+                }
+
+                // Same for a tool block's header row. Only the header takes
+                // the click: an output row is text the reader may select.
+                let tool_header = self
+                    .tool_header_row_map
+                    .borrow()
+                    .get(&mouse_event.row)
+                    .copied();
+                if let Some(hash) = tool_header {
+                    self.toggle_tool_block(hash);
                     return;
                 }
 
@@ -8497,7 +8667,8 @@ impl App {
                 if let Some(existing) = self.tool_use_blocks.iter_mut().find(|b| b.id == tool_id) {
                     existing.turn_index = turn_index;
                     existing.status = ToolStatus::Running;
-                    existing.output_preview = None;
+                    existing.output = None;
+                    existing.output_total_lines = 0;
                     existing.live_output.clear();
                     existing.input_json = input_json;
                 } else {
@@ -8506,7 +8677,8 @@ impl App {
                         name: tool_name,
                         turn_index,
                         status: ToolStatus::Running,
-                        output_preview: None,
+                        output: None,
+                        output_total_lines: 0,
                         input_json,
                         live_output: String::new(),
                         duration_ms: None,
@@ -8523,21 +8695,16 @@ impl App {
                 duration_ms,
             } => {
                 self.timeline_tool_finished(&tool_id, &result, is_error);
-                // Build a multi-line preview: show up to 3 lines, truncate if more.
-                let all_lines: Vec<&str> = result.lines().collect();
-                let preview_lines = all_lines.len().min(3);
-                let mut preview = all_lines[..preview_lines].join("\n");
-                let remaining = all_lines.len().saturating_sub(preview_lines);
-                if remaining > 0 {
-                    preview.push_str(&format!("\n\u{2026} {} more lines", remaining));
-                }
                 if let Some(block) = self.tool_use_blocks.iter_mut().find(|b| b.id == tool_id) {
                     block.status = if is_error {
                         ToolStatus::Error
                     } else {
                         ToolStatus::Done
                     };
-                    block.output_preview = Some(preview);
+                    // The whole result. What the block shows is a drawing
+                    // decision, and the renderer makes it every frame from
+                    // whether the reader opened the block.
+                    block.set_output(&result);
                     block.live_output.clear();
                     block.duration_ms = duration_ms;
                 }

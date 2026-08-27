@@ -608,7 +608,7 @@ and no schema on any turn. All four are off by default and editable from
 | `teamsEnabled`       | boolean | false   | Offer `TeamCreate` and `TeamDelete`. `SendMessage` is unaffected: it also carries messages between the sub-agents `Agent` starts. |
 | `cronEnabled`        | boolean | false   | Offer `CronCreate`, `CronDelete` and `CronList`. A job already scheduled keeps running either way.                 |
 | `replEnabled`        | boolean | false   | Offer the persistent Python and JavaScript `REPL`.                                                                |
-| `computerUseEnabled` | boolean | false   | Offer the desktop control tool. The `computer-use` Cargo feature is a separate axis: with it off the tool is not built at all. |
+| `computerUseEnabled` | boolean | false   | Offer the desktop control tool. The `computer-use` Cargo feature is a separate axis and is on by default; a build made with `--no-default-features` does not carry the tool whatever this says. |
 
 A project's `.mikmik/settings.json` cannot turn any of them on. Each decides
 whether a capability is offered, so a repository able to set one could hand

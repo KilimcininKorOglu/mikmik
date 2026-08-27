@@ -43,14 +43,15 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      # ALSA headers for the voice feature's cpal dependency (same setup as
-      # release.yml). cmake — required by btls-sys/BoringSSL via wreq — is
-      # preinstalled on all GitHub-hosted runners.
+      # ALSA headers for the voice feature's cpal dependency; wayland,
+      # pipewire, EGL and libclang for computer-use's xcap and enigo (same
+      # setup as release.yml). cmake — required by btls-sys/BoringSSL via
+      # wreq — is preinstalled on all GitHub-hosted runners.
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config
+          sudo apt-get install -y libasound2-dev pkg-config libwayland-dev libpipewire-0.3-dev libclang-dev libegl-dev
 
       - name: Cache cargo registry & build
         uses: actions/cache@v4

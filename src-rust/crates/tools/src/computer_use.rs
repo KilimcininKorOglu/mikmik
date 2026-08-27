@@ -195,7 +195,7 @@ async fn execute_action(_params: ComputerUseInput) -> ToolResult {
 
 #[cfg(feature = "computer-use")]
 async fn execute_action(params: ComputerUseInput) -> ToolResult {
-    use enigo::{Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
+    use enigo::{Button, Coordinate, Direction, Enigo, Keyboard, Mouse, Settings};
 
     match params.action.as_str() {
         // ── Screenshot ───────────────────────────────────────────────────
@@ -515,7 +515,7 @@ fn press_key_sequence(
     enigo: &mut enigo::Enigo,
     sequence: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use enigo::{Direction, Key, Keyboard};
+    use enigo::{Direction, Keyboard};
 
     let parts: Vec<&str> = sequence
         .split('+')
@@ -594,7 +594,13 @@ fn parse_key(s: &str) -> Result<enigo::Key, Box<dyn std::error::Error + Send + S
         "tab" => Key::Tab,
         "backspace" => Key::Backspace,
         "delete" | "del" => Key::Delete,
+        // enigo gates `Insert` to Windows and non-macOS Unix, because a Mac
+        // keyboard has no Insert key. Say so rather than pressing something
+        // else in its place.
+        #[cfg(any(target_os = "windows", all(unix, not(target_os = "macos"))))]
         "insert" => Key::Insert,
+        #[cfg(target_os = "macos")]
+        "insert" => return Err("macOS has no Insert key".into()),
         "home" => Key::Home,
         "end" => Key::End,
         "pageup" | "page_up" => Key::PageUp,
@@ -683,6 +689,34 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(input.text, Some("ctrl+c".to_string()));
+    }
+
+    /// enigo offers `Key::Insert` only where a keyboard has that key, so the
+    /// name has to resolve on the platforms that do and refuse on macOS
+    /// rather than pressing something else in its place.
+    #[cfg(feature = "computer-use")]
+    #[test]
+    fn an_insert_key_resolves_only_where_the_platform_has_one() {
+        let parsed = super::parse_key("insert");
+
+        if cfg!(target_os = "macos") {
+            let Err(error) = parsed else {
+                panic!("macOS has no Insert key, so the name must be refused");
+            };
+            assert!(error.to_string().contains("Insert"), "{error}");
+        } else {
+            assert!(parsed.is_ok(), "the platform has an Insert key");
+        }
+    }
+
+    /// Every other name in the table still resolves, so the `cfg` above did
+    /// not take its neighbours with it.
+    #[cfg(feature = "computer-use")]
+    #[test]
+    fn the_ordinary_key_names_still_resolve() {
+        for name in ["ctrl", "enter", "delete", "home", "f5", "space", "a"] {
+            assert!(super::parse_key(name).is_ok(), "{name}");
+        }
     }
 
     #[test]

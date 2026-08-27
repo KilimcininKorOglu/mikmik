@@ -128,7 +128,7 @@ jobs:
         if: runner.os == 'Linux' && !matrix.cross
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libssl-dev pkg-config
+          sudo apt-get install -y libasound2-dev libssl-dev pkg-config libwayland-dev libpipewire-0.3-dev libclang-dev libegl-dev
 
       - name: Install cross (aarch64-linux)
         if: matrix.cross
@@ -158,7 +158,7 @@ jobs:
           pre-build = [
             "dpkg --add-architecture $CROSS_DEB_ARCH",
             "apt-get update",
-            "apt-get install -y pkg-config libssl-dev:$CROSS_DEB_ARCH libasound2-dev:$CROSS_DEB_ARCH"
+            "apt-get install -y pkg-config libclang-dev libssl-dev:$CROSS_DEB_ARCH libasound2-dev:$CROSS_DEB_ARCH libwayland-dev:$CROSS_DEB_ARCH libpipewire-0.3-dev:$CROSS_DEB_ARCH libegl-dev:$CROSS_DEB_ARCH"
           ]
           EOF
 

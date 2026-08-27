@@ -312,17 +312,29 @@ sudo pacman -S alsa-lib openssl
 
 ### Cargo features
 
-The `mikmik` package has one feature, `voice`, and it is on by default. Turn it
-off to build without the microphone support, which is what drops the ALSA
-dependency on Linux:
+The `mikmik` package has two features, `voice` and `computer-use`, and both are
+on by default. Turn them off to build without microphone support and without
+desktop control, which is what drops the Linux system libraries below:
 
 ```bash
 cargo build --release --package mikmik --no-default-features
 ```
 
-`mikmik-tools` carries `computer-use` (screenshot capture and mouse/keyboard
-control) and `mikmik-core` carries `dev_full`. Neither is reachable from the
-`mikmik` package: naming one there is an error.
+`voice` needs ALSA. `computer-use` (screenshot capture and mouse/keyboard
+control) reaches `xcap` and `enigo`, which on Linux need wayland, pipewire, EGL
+and libclang. On Debian and Ubuntu that is:
+
+```bash
+sudo apt-get install -y pkg-config libasound2-dev \
+  libwayland-dev libpipewire-0.3-dev libclang-dev libegl-dev
+```
+
+Turning `computer-use` off in the build is not the same as turning it off for
+the model. `computerUseEnabled` decides whether the tool is offered, and it is
+off by default; the Cargo feature decides whether the tool exists to offer.
+
+`mikmik-core` carries `dev_full`, which the `mikmik` package does not reach:
+naming it there is an error.
 
 ### Cross-compiling for Linux aarch64
 

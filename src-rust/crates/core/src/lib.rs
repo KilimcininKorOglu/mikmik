@@ -1823,6 +1823,20 @@ pub mod config {
         /// this setting decides nothing.
         #[serde(default, rename = "computerUseEnabled")]
         pub computer_use_enabled: bool,
+        /// Whether a turn carries only the core tools plus what `ToolSearch`
+        /// has found.
+        ///
+        /// Off by default, which is the tree's behaviour: every tool in the
+        /// roster is declared on every turn. On, a turn declares
+        /// [`CORE_TOOLS`](crate::constants::CORE_TOOLS) and whatever
+        /// `ToolSearch` has answered so far, which cuts the schema a long
+        /// session repeats.
+        ///
+        /// Withholding a schema does not withhold the tool: the dispatcher
+        /// looks a call up in the roster, so a model that names an undeclared
+        /// tool correctly still runs it.
+        #[serde(default, rename = "schemaDeferral")]
+        pub schema_deferral: bool,
         /// Base address of the SearXNG instance WebSearch prefers, for example
         /// `http://localhost:8080`. `None` means no instance is configured, and
         /// the tool then falls back to the `SEARXNG_URL` environment variable.
@@ -4192,6 +4206,9 @@ pub mod config {
                 cron_enabled: base.config.cron_enabled,
                 repl_enabled: base.config.repl_enabled,
                 computer_use_enabled: base.config.computer_use_enabled,
+                // How many schemas a turn carries is the user's own
+                // preference, so it follows `timeline_enabled` above.
+                schema_deferral: base.config.schema_deferral,
                 // SECURITY: a search endpoint receives whatever the model
                 // searches for, so pointing it at a host of the repository's
                 // choosing hands that stream away.
@@ -6214,6 +6231,31 @@ pub mod constants {
     pub const HISTORY_FILENAME: &str = "conversations";
 
     // Tool names
+    /// The tools every turn carries while schema deferral is on.
+    ///
+    /// A model that cannot read, search, edit, run a command or keep a list
+    /// cannot start any task, so withholding one of these would cost a
+    /// `ToolSearch` call on the first turn of every session. `ToolSearch`
+    /// itself is here because it is how the rest are reached, and the planning
+    /// and question tools because the model has to be able to stop and ask
+    /// before it knows what else it needs.
+    ///
+    /// Everything outside this list is sent only after `ToolSearch` finds it.
+    pub const CORE_TOOLS: &[&str] = &[
+        TOOL_NAME_BASH,
+        TOOL_NAME_FILE_READ,
+        TOOL_NAME_FILE_WRITE,
+        TOOL_NAME_FILE_EDIT,
+        TOOL_NAME_GLOB,
+        TOOL_NAME_GREP,
+        TOOL_NAME_AGENT,
+        TOOL_NAME_TODO_WRITE,
+        TOOL_NAME_ASK_USER,
+        TOOL_NAME_ENTER_PLAN_MODE,
+        TOOL_NAME_EXIT_PLAN_MODE,
+        "ToolSearch",
+    ];
+
     pub const TOOL_NAME_BASH: &str = "Bash";
     pub const TOOL_NAME_FILE_EDIT: &str = "Edit";
     pub const TOOL_NAME_FILE_READ: &str = "Read";

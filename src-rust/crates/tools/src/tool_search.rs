@@ -205,11 +205,13 @@ impl Tool for ToolSearchTool {
                 .filter(|s| !s.is_empty())
                 .collect();
             let mut found = Vec::new();
+            let mut found_names = Vec::new();
             let mut missing = Vec::new();
 
             for name in requested {
                 if let Some(entry) = catalog.iter().find(|e| e.name.eq_ignore_ascii_case(name)) {
                     found.push(format!("{}: {}", entry.name, entry.description));
+                    found_names.push(entry.name.to_string());
                 } else {
                     missing.push(name.to_string());
                 }
@@ -226,7 +228,7 @@ impl Tool for ToolSearchTool {
             if !missing.is_empty() {
                 out.push_str(&format!("\n\nNot found: {}", missing.join(", ")));
             }
-            return ToolResult::success(out);
+            return found_result(out, &found_names);
         }
 
         // ---- keyword search with scoring ------------------------------------
@@ -273,15 +275,33 @@ impl Tool for ToolSearchTool {
             .iter()
             .map(|(_, e)| format!("{}: {}", e.name, e.description))
             .collect();
+        let found_names: Vec<String> = scored.iter().map(|(_, e)| e.name.to_string()).collect();
 
-        ToolResult::success(format!(
-            "Tools matching '{}' (use one of these for the task):\n\n{}\n\n{} of {} tools shown.",
-            query,
-            lines.join("\n"),
-            scored.len(),
-            catalog.len()
-        ))
+        found_result(
+            format!(
+                "Tools matching '{}' (use one of these for the task):\n\n{}\n\n{} of {} tools shown.",
+                query,
+                lines.join("\n"),
+                scored.len(),
+                catalog.len()
+            ),
+            &found_names,
+        )
     }
+}
+
+/// The key `metadata` carries the names this search turned up under.
+pub const FOUND_TOOLS_KEY: &str = "found_tools";
+
+/// An answer that also names what it found, for the turn loop to declare next.
+///
+/// The names ride in `metadata` rather than being parsed back out of the text,
+/// because the text is written for the model and changing its wording would
+/// silently stop the schemas from being sent.
+fn found_result(content: String, names: &[String]) -> ToolResult {
+    let mut result = ToolResult::success(content);
+    result.metadata = Some(json!({ FOUND_TOOLS_KEY: names }));
+    result
 }
 
 #[cfg(test)]
@@ -296,6 +316,51 @@ mod tests {
         let tool = ToolSearchTool;
         let out = tool.execute(json!({ "query": query }), &ctx()).await;
         out.content
+    }
+
+    /// The names an answer reports in `metadata`, which is what the turn loop
+    /// reads to decide which schemas to declare next.
+    async fn found_names(query: &str) -> Vec<String> {
+        let out = ToolSearchTool
+            .execute(json!({ "query": query }), &ctx())
+            .await;
+        out.metadata
+            .as_ref()
+            .and_then(|m| m.get(FOUND_TOOLS_KEY))
+            .and_then(|v| v.as_array())
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn a_selected_tool_is_named_in_the_metadata() {
+        // Without this the turn loop never learns what to declare, and a
+        // session with schema deferral on could reach nothing but the core
+        // tools no matter how often it searched.
+        let names = found_names("select:LSP,CronList").await;
+
+        assert!(names.contains(&"LSP".to_string()), "{names:?}");
+        assert!(names.contains(&"CronList".to_string()), "{names:?}");
+    }
+
+    #[tokio::test]
+    async fn a_keyword_search_names_what_it_listed() {
+        let names = found_names("search the web").await;
+
+        assert!(names.contains(&"WebSearch".to_string()), "{names:?}");
+    }
+
+    #[tokio::test]
+    async fn a_name_that_matches_nothing_is_not_reported_as_found() {
+        let names = found_names("select:NoSuchTool").await;
+
+        assert!(names.is_empty(), "{names:?}");
     }
 
     #[tokio::test]

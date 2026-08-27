@@ -147,6 +147,7 @@ pub struct SettingsScreen {
     pub cron_enabled: bool,
     pub repl_enabled: bool,
     pub computer_use_enabled: bool,
+    pub schema_deferral: bool,
     pub live_tool_output: bool,
     /// Empty when no SearXNG instance is configured.
     pub searxng_url: String,
@@ -224,6 +225,7 @@ impl SettingsScreen {
             cron_enabled: false,
             repl_enabled: false,
             computer_use_enabled: false,
+            schema_deferral: false,
             live_tool_output: false,
             searxng_url: String::new(),
             compact_model: String::new(),
@@ -312,6 +314,7 @@ impl SettingsScreen {
         self.cron_enabled = self.settings_snapshot.config.cron_enabled;
         self.repl_enabled = self.settings_snapshot.config.repl_enabled;
         self.computer_use_enabled = self.settings_snapshot.config.computer_use_enabled;
+        self.schema_deferral = self.settings_snapshot.config.schema_deferral;
         self.live_tool_output = self.settings_snapshot.config.live_tool_output;
         self.searxng_url = self
             .settings_snapshot
@@ -1046,6 +1049,20 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
                 "Offer the desktop control tool: screenshots, keyboard and pointer input.".into(),
             kind: SettingKind::Bool,
             value: if screen.computer_use_enabled {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
+        },
+        SettingsEntry {
+            key: "schema_deferral".into(),
+            label: "Deferred tool schemas".into(),
+            description:
+                "Send only the core tools each turn, plus whatever ToolSearch has found. Cuts what a long session repeats."
+                    .into(),
+            kind: SettingKind::Bool,
+            value: if screen.schema_deferral {
                 "true"
             } else {
                 "false"
@@ -1788,6 +1805,11 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                         screen.settings_snapshot.config.computer_use_enabled = new_value;
                         config.computer_use_enabled = new_value;
                     }
+                    "schema_deferral" => {
+                        screen.schema_deferral = new_value;
+                        screen.settings_snapshot.config.schema_deferral = new_value;
+                        config.schema_deferral = new_value;
+                    }
                     "timeline_enabled" => {
                         screen.timeline_enabled = new_value;
                         screen.settings_snapshot.config.timeline_enabled = new_value;
@@ -2435,6 +2457,7 @@ mod tests {
             ("Cron tools", |config| config.cron_enabled),
             ("REPL tool", |config| config.repl_enabled),
             ("Computer use", |config| config.computer_use_enabled),
+            ("Deferred tool schemas", |config| config.schema_deferral),
             ("Live tool output", |config| config.live_tool_output),
             ("File injection (@)", |config| {
                 config.file_injection_enabled.is_some()

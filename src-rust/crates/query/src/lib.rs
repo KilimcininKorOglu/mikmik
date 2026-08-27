@@ -635,6 +635,43 @@ fn render_inbox(messages: &[mikmik_tools::AgentMessage]) -> String {
     out
 }
 
+/// Whether this turn declares `name` to the model.
+///
+/// With schema deferral off every tool in the roster is declared, which is what
+/// the tree has always done. With it on a turn declares the core set and
+/// whatever `ToolSearch` has found so far, so a long session stops repeating
+/// the schema of tools it never calls.
+fn declares_this_turn(
+    name: &str,
+    config: &mikmik_core::Config,
+    found: &std::collections::HashSet<String>,
+) -> bool {
+    if !config.schema_deferral {
+        return true;
+    }
+    mikmik_core::constants::CORE_TOOLS.contains(&name) || found.contains(name)
+}
+
+/// Remember the tools a `ToolSearch` answer named.
+///
+/// Reads `metadata` rather than the result text, because the text is written
+/// for the model and rewording it must not quietly stop the schemas from being
+/// sent. Any other tool's result carries no such key and is ignored.
+fn collect_found_tools(
+    result: &mikmik_tools::ToolResult,
+    found: &mut std::collections::HashSet<String>,
+) {
+    let Some(names) = result
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get(mikmik_tools::tool_search::FOUND_TOOLS_KEY))
+        .and_then(|v| v.as_array())
+    else {
+        return;
+    };
+    found.extend(names.iter().filter_map(|v| v.as_str()).map(str::to_string));
+}
+
 async fn run_query_loop_inner(
     client: &mikmik_api::AnthropicClient,
     messages: &mut Vec<Message>,
@@ -733,6 +770,13 @@ async fn run_query_loop_inner(
     } else {
         None
     };
+
+    // Tools `ToolSearch` has found for this session, which are sent alongside
+    // the core set while schema deferral is on. It lives outside the turn loop
+    // because a tool found in one turn is called in the next, and stays for the
+    // rest of the session: a model that had to search again for a tool it just
+    // used would spend a turn re-learning what it already knows.
+    let mut found_tools: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     loop {
         turn += 1;
@@ -1048,6 +1092,7 @@ async fn run_query_loop_inner(
         } else {
             tools
                 .iter()
+                .filter(|t| declares_this_turn(t.name(), &tool_ctx.config, &found_tools))
                 .map(|t| ApiToolDefinition::from(&t.to_definition()))
                 .collect()
         };
@@ -1768,6 +1813,7 @@ async fn run_query_loop_inner(
                             if let Some(took) = result.duration_ms {
                                 tool_durations.push((tool_id.clone(), took));
                             }
+                            collect_found_tools(&result, &mut found_tools);
                             tool_results.push(ContentBlock::ToolResult {
                                 tool_use_id: tool_id,
                                 content: mikmik_core::types::ToolResultContent::Text(
@@ -2239,6 +2285,8 @@ async fn run_query_loop_inner(
                         result.content = format!("{reminder}\n\n{}", result.content);
                     }
 
+                    collect_found_tools(&result, &mut found_tools);
+
                     if let Some(ref tx) = event_tx {
                         let _ = tx.send(QueryEvent::ToolEnd {
                             tool_name: p.name.clone(),
@@ -2326,6 +2374,96 @@ impl StreamHandler for ChannelStreamHandler {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod schema_deferral_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn ctx_with(deferral: bool) -> mikmik_core::Config {
+        mikmik_core::Config {
+            schema_deferral: deferral,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn everything_is_declared_while_the_setting_is_off() {
+        let ctx = ctx_with(false);
+        let found = HashSet::new();
+
+        for name in ["Read", "LSP", "REPL", "CronCreate", "NoSuchTool"] {
+            assert!(declares_this_turn(name, &ctx, &found), "{name}");
+        }
+    }
+
+    #[test]
+    fn only_the_core_set_is_declared_before_a_search() {
+        let ctx = ctx_with(true);
+        let found = HashSet::new();
+
+        assert!(declares_this_turn("Read", &ctx, &found));
+        assert!(declares_this_turn("ToolSearch", &ctx, &found));
+        assert!(!declares_this_turn("LSP", &ctx, &found), "LSP");
+        assert!(!declares_this_turn("CronCreate", &ctx, &found));
+    }
+
+    #[test]
+    fn a_found_tool_is_declared_from_then_on() {
+        let ctx = ctx_with(true);
+        let found: HashSet<String> = ["LSP".to_string()].into_iter().collect();
+
+        assert!(declares_this_turn("LSP", &ctx, &found));
+        assert!(!declares_this_turn("CronCreate", &ctx, &found));
+    }
+
+    #[test]
+    fn a_search_answer_names_what_it_found() {
+        // Read from `metadata`, so rewording the text the model reads cannot
+        // quietly stop the schemas from being sent.
+        let mut result = mikmik_tools::ToolResult::success("whatever the model reads");
+        result.metadata = Some(serde_json::json!({
+            mikmik_tools::tool_search::FOUND_TOOLS_KEY: ["LSP", "REPL"],
+        }));
+        let mut found = HashSet::new();
+
+        collect_found_tools(&result, &mut found);
+
+        assert!(found.contains("LSP"));
+        assert!(found.contains("REPL"));
+    }
+
+    #[test]
+    fn another_tools_result_adds_nothing() {
+        let mut result = mikmik_tools::ToolResult::success("a file");
+        result.metadata = Some(serde_json::json!({ "path": "/tmp/x" }));
+        let mut found = HashSet::new();
+
+        collect_found_tools(&result, &mut found);
+
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn the_core_set_can_start_a_task_on_its_own() {
+        // A model that cannot read, search, edit or run a command would have
+        // to spend the first turn of every session on a ToolSearch call.
+        for name in [
+            "Read",
+            "Write",
+            "Edit",
+            "Bash",
+            "Grep",
+            "Glob",
+            "ToolSearch",
+        ] {
+            assert!(
+                mikmik_core::constants::CORE_TOOLS.contains(&name),
+                "{name} is not in the core set"
+            );
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

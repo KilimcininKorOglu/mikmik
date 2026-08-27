@@ -507,6 +507,18 @@ fn split_tool_names(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// Tells the model that the tools it can see are not all the tools there are.
+///
+/// Added only while `schemaDeferral` is on.
+const DEFERRED_SCHEMA_NOTE: &str = "\
+## Finding a tool
+The tools declared to you are the ones this session starts with, not all of \
+them. When a task needs a capability you cannot see (a language server, a \
+scheduled job, a notebook cell, an MCP resource, a REPL, a team of agents), \
+call `ToolSearch` with a phrase describing it, or `select:ToolName` when you \
+know the name. What it finds is declared to you from the next turn on and \
+stays for the rest of the session.";
+
 /// Tells the model that GitHub is reached through `gh`, not through a fetch.
 ///
 /// Only added to a run on a machine where `gh` is on the PATH.
@@ -841,6 +853,12 @@ async fn main() -> anyhow::Result<()> {
         // call at startup, and it would make the prompt depend on a network
         // condition. `gh` reports its own auth failure well enough.
         system_parts.insert(1, GH_SYSTEM_PROMPT_NOTE.to_string());
+    }
+    // Only while the setting is on: with it off every tool is declared and a
+    // note telling the model to search for one would send it looking for
+    // something already in front of it.
+    if config.schema_deferral {
+        system_parts.push(DEFERRED_SCHEMA_NOTE.to_string());
     }
     if let Some(ref append) = config.append_system_prompt {
         system_parts.push(append.clone());

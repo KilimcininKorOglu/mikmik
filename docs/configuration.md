@@ -618,6 +618,29 @@ is not offered.
 Measured in this repository: the roster went from 44 tools and 30,246
 characters of tool definitions to 35 and 25,730 with nothing configured.
 
+### Deferred tool schemas
+
+| Key              | Type    | Default | Description                                                                                         |
+|------------------|---------|---------|-------------------------------------------------------------------------------------------------------|
+| `schemaDeferral` | boolean | false   | Declare only the core tools each turn, plus whatever `ToolSearch` has found so far in this session. |
+
+Off by default, which is what MikMik has always done: every tool in the roster
+is declared on every turn. On, a turn declares a fixed core set (`Read`,
+`Write`, `Edit`, `Bash`, `Grep`, `Glob`, `Agent`, `TodoWrite`,
+`AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`, `ToolSearch`) and anything
+`ToolSearch` has answered. A found tool stays declared for the rest of the
+session, so the model never searches twice for the same one.
+
+Measured in this repository with nothing else configured: 35 tools and 25,730
+characters with the setting off, 12 and 11,483 on the first turn with it on,
+and 14 and 14,663 after a search that found two more.
+
+Withholding a schema does not withhold the tool. A call is looked up in the
+roster, so a model that names an undeclared tool correctly still runs it; the
+setting decides only what is advertised. Turning it on also adds a short
+section to the system prompt telling the model that the tools it can see are
+not all the tools there are.
+
 While MikMik captures the mouse, the terminal no longer sees it, so its own
 selection and its right-click paste stop working. That matters most over SSH,
 where the remote host often has no `wl-copy` or `xclip` for `Ctrl+V` to reach:

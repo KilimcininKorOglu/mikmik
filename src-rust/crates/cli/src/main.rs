@@ -494,6 +494,17 @@ fn bypass_gate_for(mode: PermissionMode, gate_cleared: bool, dialog_visible: boo
     BypassGate::Warn
 }
 
+/// Tells the model that GitHub is reached through `gh`, not through a fetch.
+///
+/// Only added to a run on a machine where `gh` is on the PATH.
+const GH_SYSTEM_PROMPT_NOTE: &str = "\
+## GitHub
+The `gh` CLI is installed on this machine. Reach GitHub through it with Bash: \
+`gh pr view`, `gh pr diff`, `gh issue view`, `gh api`. It reads and it writes. \
+Do not fetch a github.com page to read a pull request, an issue or a diff; the \
+page carries navigation chrome and no comment thread. If `gh` reports an \
+authentication error, tell the user to run `gh auth login`.";
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Fast-path: handle --version before parsing everything
@@ -792,6 +803,21 @@ async fn main() -> anyhow::Result<()> {
     if let Some(ref custom) = config.custom_system_prompt {
         // replace base system prompt
         system_parts[0] = custom.clone();
+    } else if which::which("gh").is_ok() {
+        // Held out of `system_prompt.txt` because that file is a static
+        // `include_str!` and this is only true on a machine that has `gh`.
+        // Telling a model to run a missing binary costs it a turn on the
+        // failure, which is why `PowerShellTool` also stays out of the roster
+        // where `pwsh` is absent. Nothing else names GitHub, so without this
+        // the model reaches for WebFetch and reads a rendered page.
+        //
+        // Skipped when `--system-prompt` replaced the base, because that flag
+        // means the caller supplies the guidance.
+        //
+        // `gh auth status` is not run: it costs a subprocess and a network
+        // call at startup, and it would make the prompt depend on a network
+        // condition. `gh` reports its own auth failure well enough.
+        system_parts.insert(1, GH_SYSTEM_PROMPT_NOTE.to_string());
     }
     if let Some(ref append) = config.append_system_prompt {
         system_parts.push(append.clone());
@@ -9070,6 +9096,30 @@ mod permission_mode_tests {
 
     /// The base prompt as a run would send it.
     const BASE_SYSTEM_PROMPT: &str = include_str!("system_prompt.txt");
+
+    #[test]
+    fn only_the_conditional_note_claims_gh_is_installed() {
+        // `system_prompt.txt` reaches every run, including one on a machine
+        // with no `gh`. A mention there would promise a binary that is not
+        // present, and the model would spend a turn finding that out.
+        assert!(
+            !BASE_SYSTEM_PROMPT.contains("gh "),
+            "the base prompt names gh, which is only true on some machines"
+        );
+        for needle in ["gh pr view", "gh pr diff", "gh issue view", "gh api"] {
+            assert!(
+                GH_SYSTEM_PROMPT_NOTE.contains(needle),
+                "the note never mentions {needle}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_note_steers_the_model_off_the_rendered_page() {
+        // Without this sentence the model still reaches for WebFetch, which is
+        // the behaviour the note exists to replace.
+        assert!(GH_SYSTEM_PROMPT_NOTE.contains("Do not fetch a github.com page"));
+    }
 
     #[test]
     fn the_base_prompt_says_when_to_plan_and_how_to_finish() {

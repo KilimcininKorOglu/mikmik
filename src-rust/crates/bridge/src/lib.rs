@@ -438,6 +438,11 @@ pub enum BridgeEvent {
         tool_id: String,
         result: String,
         is_error: bool,
+        /// How long the tool's own work took, in milliseconds. Absent for a
+        /// call that was blocked or cancelled before it ran, and for one
+        /// recorded before the field existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
     },
     /// The CLI needs the web UI to approve a tool use.
     PermissionRequest {
@@ -1634,6 +1639,9 @@ pub enum BridgeOutbound {
         id: String,
         output: String,
         is_error: bool,
+        /// How long the tool's own work took, in milliseconds. `None` for a
+        /// call that was blocked or cancelled before it ran.
+        duration_ms: Option<u64>,
     },
     TurnComplete {
         message_id: String,
@@ -1997,13 +2005,19 @@ pub async fn run_bridge_loop(
                             })
                             .await;
                     }
-                    Some(BridgeOutbound::ToolEnd { id, output, is_error }) => {
+                    Some(BridgeOutbound::ToolEnd {
+                        id,
+                        output,
+                        is_error,
+                        duration_ms,
+                    }) => {
                         let _ = bridge_ev_tx
                             .send(BridgeEvent::ToolEnd {
                                 tool_name: String::new(),
                                 tool_id: id,
                                 result: output,
                                 is_error,
+                                duration_ms,
                             })
                             .await;
                     }
@@ -2661,5 +2675,54 @@ mod timeline_event_tests {
             json["row"]["finished_at_ms"], 1_450,
             "a client must not have to time the step itself"
         );
+    }
+
+    fn tool_end(duration_ms: Option<u64>) -> BridgeEvent {
+        BridgeEvent::ToolEnd {
+            tool_name: "Bash".to_string(),
+            tool_id: "tool-1".to_string(),
+            result: "ok".to_string(),
+            is_error: false,
+            duration_ms,
+        }
+    }
+
+    #[test]
+    fn a_finished_call_carries_how_long_it_took() {
+        // The mapping used to drop it, so a remote client could only time the
+        // transport, never the tool.
+        let json = match serde_json::to_value(tool_end(Some(240))) {
+            Ok(json) => json,
+            Err(error) => panic!("the event should serialise: {error}"),
+        };
+
+        assert_eq!(json["type"], "tool_end");
+        assert_eq!(json["duration_ms"], 240);
+    }
+
+    #[test]
+    fn an_untimed_call_names_no_duration_at_all() {
+        // Rather than zero: a call that was blocked or cancelled before it ran
+        // took no time, and reporting `0ms` would read as an instant success.
+        let json = match serde_json::to_value(tool_end(None)) {
+            Ok(json) => json,
+            Err(error) => panic!("the event should serialise: {error}"),
+        };
+
+        assert!(json.get("duration_ms").is_none(), "{json}");
+    }
+
+    #[test]
+    fn a_client_written_before_the_field_still_decodes() {
+        let json = r#"{"type":"tool_end","tool_name":"Bash","tool_id":"t","result":"ok","is_error":false}"#;
+        let decoded: BridgeEvent = match serde_json::from_str(json) {
+            Ok(decoded) => decoded,
+            Err(error) => panic!("the event should decode: {error}"),
+        };
+
+        match decoded {
+            BridgeEvent::ToolEnd { duration_ms, .. } => assert_eq!(duration_ms, None),
+            other => panic!("expected a tool_end, got {other:?}"),
+        }
     }
 }

@@ -172,6 +172,8 @@ The timings are the machine's, not the browser's. A long poll can hold a batch o
 
 A client that attaches mid-session gets the recent rows in the same backfill as the transcript, after the `history` event that clears them. The backfill is bounded at 40 rows; older steps stay on the terminal only.
 
+Each `tool_end` event also carries `duration_ms`, how long that one call took, and the web client prints it beside the tool's name. The field is absent for a call that was blocked or cancelled before it ran, so a client should treat a missing value as "no time to report" rather than as zero. It travels whatever the terminal's own `showToolDuration` setting says: that setting decides what the terminal draws, and a remote client is a front end of its own.
+
 ---
 
 ## Questions

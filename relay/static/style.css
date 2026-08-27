@@ -433,6 +433,13 @@ input, textarea {
 
 .timeline-title { min-width: 0; }
 
+/* How long a tool call took, beside the name that ran. Dimmed, because it is
+   a figure to glance at rather than the point of the line. */
+.tool-duration {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.6;
+}
+
 .timeline-metrics {
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;

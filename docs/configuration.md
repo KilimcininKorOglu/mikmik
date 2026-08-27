@@ -156,10 +156,11 @@ either duration option existed carry no time and render without one.
 message wins: a session that is reconnecting says so rather than reporting how
 long the last turn took.
 
-`showToolDuration` measures the tool's own work. A tool that waits for
-permission does not count the wait, because that is how long you took to
-answer rather than what the call cost. A call that was blocked or cancelled
-before it ran reports nothing at all rather than zero.
+`showToolDuration` measures the tool's own work. The wait for a permission
+prompt the central gate raises is not counted, because that is how long you
+took to answer rather than what the call cost; a tool that prompts inside its
+own `execute()`, as `Bash` does, still counts it. A call that was blocked or
+cancelled before it ran reports nothing at all rather than zero.
 
 Durations of tools that ran at the same time overlap, so a turn's tool
 durations can add up to more than the turn took.

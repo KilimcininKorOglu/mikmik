@@ -5585,11 +5585,13 @@ async fn run_interactive(
                         tool_id,
                         result,
                         is_error,
+                        duration_ms,
                         ..
                     } => Some(BridgeOutbound::ToolEnd {
                         id: tool_id.clone(),
                         output: result.clone(),
                         is_error: *is_error,
+                        duration_ms: *duration_ms,
                     }),
                     QueryEvent::TurnComplete {
                         stop_reason,
@@ -5689,10 +5691,7 @@ async fn run_interactive(
                         tool_id,
                         result,
                         is_error,
-                        // Not forwarded: the relay's web client has nowhere to
-                        // put it, and inventing a field it ignores would date
-                        // the protocol for nothing.
-                        ..
+                        duration_ms,
                     } => Some(
                         serde_json::json!({
                             "type": "tool_end",
@@ -5700,6 +5699,7 @@ async fn run_interactive(
                             "tool_id": tool_id,
                             "result": result,
                             "is_error": is_error,
+                            "duration_ms": duration_ms,
                         })
                         .to_string(),
                     ),

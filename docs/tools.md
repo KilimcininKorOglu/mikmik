@@ -42,7 +42,7 @@ Every tool in MikMik implements the `Tool` trait. It defines:
 
 A `ToolResult` carries the text sent back to the model, an error flag, optional structured metadata the TUI uses to render diffs, and how long the call took.
 
-The duration is measured around `execute()` alone, so a tool that waits for permission does not count the wait; a call that was blocked or cancelled before it ran reports nothing rather than zero. It is recorded with the transcript, so it survives `--resume`. Turn it on with [`showToolDuration`](configuration.md#transcript-display) to see it at the bottom right of each tool block; it is off by default.
+The duration is measured around `execute()` alone, so the wait for a permission prompt the central gate raises is not counted; a tool that prompts inside its own `execute()` (`self_gates()`, which `Bash` does) still counts that wait. A call that was blocked or cancelled before it ran reports nothing rather than zero. It is recorded with the transcript, so it survives `--resume`. Turn it on with [`showToolDuration`](configuration.md#transcript-display) to see it at the bottom right of each tool block; it is off by default.
 
 ### Reading a tool block
 

@@ -628,21 +628,26 @@ function resetTimeline() {
   el.timelineSummary.textContent = 'Timeline';
 }
 
-/** Render a duration the same way the terminal panel does. */
-function timelineDuration(row) {
-  if (typeof row.finished_at_ms !== 'number') {
-    return null;
+/** Render a span of milliseconds the same way the terminal does. */
+function formatMs(ms) {
+  const clamped = Math.max(0, ms);
+  if (clamped < 1000) {
+    return `${clamped}ms`;
   }
-  const ms = Math.max(0, row.finished_at_ms - row.started_at_ms);
-  if (ms < 1000) {
-    return `${ms}ms`;
-  }
-  const seconds = ms / 1000;
+  const seconds = clamped / 1000;
   if (seconds < 60) {
     return `${seconds.toFixed(1)}s`;
   }
   const whole = Math.floor(seconds);
   return `${Math.floor(whole / 60)}m${String(whole % 60).padStart(2, '0')}s`;
+}
+
+/** Render a duration the same way the terminal panel does. */
+function timelineDuration(row) {
+  if (typeof row.finished_at_ms !== 'number') {
+    return null;
+  }
+  return formatMs(row.finished_at_ms - row.started_at_ms);
 }
 
 /** The trailing figures for a row: how long it took and what it spent. */
@@ -820,6 +825,18 @@ function render(event) {
         break;
       }
       node.className = event.is_error ? 'tool failed' : 'tool done';
+
+      // How long the call took, on the line that names it. Absent for a call
+      // that was blocked or cancelled before it ran.
+      if (typeof event.duration_ms === 'number') {
+        const summary = node.querySelector('summary');
+        if (summary) {
+          const took = document.createElement('span');
+          took.className = 'tool-duration';
+          took.textContent = ` · ${formatMs(event.duration_ms)}`;
+          summary.append(took);
+        }
+      }
 
       const output = document.createElement('pre');
       output.className = 'tool-output';

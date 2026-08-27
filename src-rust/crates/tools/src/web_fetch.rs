@@ -19,6 +19,48 @@ struct WebFetchInput {
     prompt: Option<String>,
 }
 
+/// Rewrite a GitHub file page into the address that serves the file itself.
+///
+/// `github.com/o/r/blob/main/src/lib.rs` answers an HTML page that wraps the
+/// file in navigation chrome, and this tool's tag stripping then hands the
+/// model the chrome along with the code. `raw.githubusercontent.com` answers
+/// the bytes.
+///
+/// Everything after `blob` moves across untouched, because a ref may itself
+/// hold slashes (`refs/heads/feature/x`) and both hosts lay the ref and the
+/// path out the same way, so nothing has to decide where one ends.
+///
+/// The query and the fragment are dropped: `?plain=1` and `#L10-L20` mean
+/// something to the page and nothing to the raw host.
+///
+/// Returns `None` for every other address, including a host that merely ends
+/// in `github.com`, because the host is compared whole rather than by suffix.
+fn github_blob_to_raw(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    if !matches!(parsed.host_str()?, "github.com" | "www.github.com") {
+        return None;
+    }
+
+    let segments: Vec<&str> = parsed.path_segments()?.collect();
+    // owner / repo / blob / ref-and-path...
+    if segments.len() < 5 || segments[2] != "blob" {
+        return None;
+    }
+    if segments[3..].iter().any(|s| s.is_empty()) {
+        return None;
+    }
+
+    Some(format!(
+        "https://raw.githubusercontent.com/{}/{}/{}",
+        segments[0],
+        segments[1],
+        segments[3..].join("/")
+    ))
+}
+
 /// Compute a simple hash of the URL for cache purposes.
 fn url_hash(url: &str) -> String {
     use std::collections::hash_map::DefaultHasher;
@@ -311,10 +353,17 @@ impl Tool for WebFetchTool {
     }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
-        let params: WebFetchInput = match serde_json::from_value(input) {
+        let mut params: WebFetchInput = match serde_json::from_value(input) {
             Ok(p) => p,
             Err(e) => return ToolResult::error(format!("Invalid input: {}", e)),
         };
+
+        // Rewritten once, here, so the permission prompt, the cache key and
+        // every error message name the address that is actually fetched.
+        if let Some(raw) = github_blob_to_raw(&params.url) {
+            debug!(from = %params.url, to = %raw, "Rewrote a GitHub file page to its raw address");
+            params.url = raw;
+        }
 
         // Permission check
         if let Err(e) = ctx.check_permission(
@@ -402,5 +451,95 @@ impl Tool for WebFetchTool {
         save_cached_extraction(&params.url, &text);
 
         ToolResult::success(text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::github_blob_to_raw;
+
+    #[test]
+    fn a_file_page_becomes_the_address_that_serves_the_file() {
+        assert_eq!(
+            github_blob_to_raw("https://github.com/can1357/oh-my-pi/blob/main/README.md"),
+            Some("https://raw.githubusercontent.com/can1357/oh-my-pi/main/README.md".to_string())
+        );
+    }
+
+    #[test]
+    fn a_ref_that_holds_slashes_crosses_untouched() {
+        assert_eq!(
+            github_blob_to_raw("https://github.com/o/r/blob/refs/heads/feature/x/src/lib.rs"),
+            Some(
+                "https://raw.githubusercontent.com/o/r/refs/heads/feature/x/src/lib.rs".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn the_query_and_the_fragment_are_dropped() {
+        // `?plain=1` and `#L10-L20` address the rendered page. The raw host
+        // serves bytes and would answer the same file either way, so carrying
+        // them across only makes two cache keys for one file.
+        assert_eq!(
+            github_blob_to_raw("https://github.com/o/r/blob/main/a.rs?plain=1#L10-L20"),
+            Some("https://raw.githubusercontent.com/o/r/main/a.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn a_host_that_only_ends_in_github_com_is_left_alone() {
+        // A suffix comparison would hand this attacker-controlled host the
+        // rewrite and send the fetch somewhere the user never named.
+        assert_eq!(
+            github_blob_to_raw("https://evil-github.com/o/r/blob/main/a.rs"),
+            None
+        );
+        assert_eq!(
+            github_blob_to_raw("https://github.com.evil.example/o/r/blob/main/a.rs"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_directory_listing_and_a_repo_root_are_left_alone() {
+        assert_eq!(
+            github_blob_to_raw("https://github.com/o/r/tree/main/src"),
+            None
+        );
+        assert_eq!(github_blob_to_raw("https://github.com/o/r"), None);
+        assert_eq!(github_blob_to_raw("https://github.com/o/r/pull/1428"), None);
+    }
+
+    #[test]
+    fn a_blob_deeper_in_the_tree_is_not_mistaken_for_the_marker() {
+        // Only the third segment names the page kind. A directory called
+        // `blob` inside the repository must not trigger the rewrite.
+        assert_eq!(
+            github_blob_to_raw("https://github.com/o/r/tree/main/blob/x.rs"),
+            None
+        );
+        // ...and a file that really does live under `blob/` still rewrites.
+        assert_eq!(
+            github_blob_to_raw("https://github.com/o/r/blob/main/blob/x.rs"),
+            Some("https://raw.githubusercontent.com/o/r/main/blob/x.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn a_trailing_slash_leaves_no_empty_segment_behind() {
+        assert_eq!(
+            github_blob_to_raw("https://github.com/o/r/blob/main/"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_non_http_scheme_is_left_alone() {
+        assert_eq!(
+            github_blob_to_raw("ftp://github.com/o/r/blob/main/a.rs"),
+            None
+        );
+        assert_eq!(github_blob_to_raw("not a url at all"), None);
     }
 }

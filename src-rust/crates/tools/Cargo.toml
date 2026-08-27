@@ -38,6 +38,7 @@ dashmap = { workspace = true }
 which = { workspace = true }
 dirs = { workspace = true }
 reqwest = { workspace = true }
+url = { workspace = true }
 base64 = { workspace = true }
 open = { workspace = true }
 enigo = { workspace = true, optional = true }

@@ -3379,14 +3379,26 @@ fn should_render_status_row(app: &App) -> bool {
         })
         .unwrap_or(false);
 
-    // Note: a completed turn's "Worked for Xs" summary (`last_turn_elapsed`) is
-    // intentionally NOT a reason to keep the status row on — it stays set until
-    // the next submit, so gating on it pinned the idle spinner glyph on screen
-    // permanently after the first turn. The row now shows only while actually
-    // active (voice, streaming, or an idle status message).
+    // A completed turn's "Worked for Xs" summary keeps the row on only while
+    // `showTurnDuration` asks for it. `last_turn_elapsed` stays set until the
+    // next submit, so keeping the row on for it unconditionally pinned an idle
+    // row on screen permanently after the first turn; behind the setting that
+    // is what the user asked for.
     app.voice_recording
         || (!app.is_streaming && app.status_message.is_some())
         || (app.is_streaming && interesting_stream_status)
+        || (!app.is_streaming && turn_duration_line(app).is_some())
+}
+
+/// The finished turn's verb and elapsed time, when the setting asks for them.
+///
+/// `None` while `showTurnDuration` is off, so the status row falls through to
+/// the status message instead of being taken by a summary nobody asked for.
+fn turn_duration_line(app: &App) -> Option<(&'static str, &str)> {
+    if !app.settings_screen.show_turn_duration {
+        return None;
+    }
+    Some((app.last_turn_verb?, app.last_turn_elapsed.as_deref()?))
 }
 
 fn render_status_row(frame: &mut Frame, app: &App, area: Rect) {
@@ -3429,9 +3441,7 @@ fn render_status_row(frame: &mut Frame, app: &App, area: Rect) {
         s.push(Span::raw(" "));
         s.extend(shimmer_spans(&label, app.frame_count));
         s
-    } else if let (Some(verb), Some(elapsed)) =
-        (app.last_turn_verb, app.last_turn_elapsed.as_deref())
-    {
+    } else if let Some((verb, elapsed)) = turn_duration_line(app) {
         // "✽ Worked for 2m 5s" — mirrors TS TeammateSpinnerLine idle state
         vec![Span::styled(
             format!("{} {} for {}", figures::TEARDROP_ASTERISK, verb, elapsed),
@@ -6402,6 +6412,78 @@ mod timeline_panel_tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    /// A session that has just finished a turn, as the status row sees it.
+    fn app_after_a_turn(show_turn_duration: bool) -> App {
+        let mut app = App::new(Config::default(), CostTracker::new());
+        app.settings_screen.show_turn_duration = show_turn_duration;
+        app.is_streaming = false;
+        app.last_turn_verb = Some("Worked");
+        app.last_turn_elapsed = Some("2m 5s".to_string());
+        app
+    }
+
+    #[test]
+    fn the_finished_turns_duration_reaches_the_drawn_screen() {
+        let app = app_after_a_turn(true);
+        let rows = screen(&app, 80, 24);
+
+        assert!(
+            rows.iter().any(|row| row.contains("Worked for 2m 5s")),
+            "the elapsed time never reached the screen:\n{}",
+            rows.join("\n")
+        );
+    }
+
+    #[test]
+    fn the_duration_is_absent_while_the_setting_is_off() {
+        let app = app_after_a_turn(false);
+        let rows = screen(&app, 80, 24);
+
+        assert!(
+            !rows.iter().any(|row| row.contains("Worked for")),
+            "the elapsed time was drawn with the setting off:\n{}",
+            rows.join("\n")
+        );
+    }
+
+    #[test]
+    fn a_status_message_keeps_the_row_while_the_setting_is_off() {
+        // The summary used to take the row from the status message whenever
+        // both were set, which is what made the toggle look like it did
+        // nothing: the line appeared on its own schedule either way.
+        let mut app = app_after_a_turn(false);
+        app.status_message = Some("Reconnecting".to_string());
+        let rows = screen(&app, 80, 24);
+
+        assert!(
+            rows.iter().any(|row| row.contains("Reconnecting")),
+            "{}",
+            rows.join("\n")
+        );
+    }
+
+    #[test]
+    fn the_row_stays_off_before_the_first_turn() {
+        // Nothing has finished yet, so there is no duration to keep it on.
+        let mut app = App::new(Config::default(), CostTracker::new());
+        app.settings_screen.show_turn_duration = true;
+
+        assert!(!should_render_status_row(&app));
+    }
+
+    #[test]
+    fn a_streaming_turn_shows_the_spinner_rather_than_the_last_duration() {
+        let mut app = app_after_a_turn(true);
+        app.is_streaming = true;
+        let rows = screen(&app, 80, 24);
+
+        assert!(
+            !rows.iter().any(|row| row.contains("Worked for")),
+            "a finished turn's summary was drawn over a running one:\n{}",
+            rows.join("\n")
+        );
     }
 
     #[test]

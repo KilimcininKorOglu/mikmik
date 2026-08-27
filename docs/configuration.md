@@ -81,6 +81,7 @@ than dropping them silently.
   "hasCompletedOnboarding": false,
   "showMessageTimestamps": false,
   "showToolDuration": false,
+  "showTurnDuration": false,
   "advisorModel": "claude-opus-4-6",
   "advisorMode": "tool",
   "memoryModel": "claude-haiku-4-5",
@@ -144,10 +145,16 @@ all with `/skills`.
 |-------------------------|---------|---------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `showMessageTimestamps` | boolean | false   | Print the local time beneath each message. Times are stored in UTC and converted using the machine's time zone. Messages from an earlier day also show their date (`13 Aug 14:32`). |
 | `showToolDuration`      | boolean | false   | Print how long each tool call took, at the bottom right of the tool block. Reads `240ms`, `1.4s` or `2m05s`. |
+| `showTurnDuration`      | boolean | false   | Keep a line under the input box after a turn finishes, reading `✻ Worked for 2m 5s`. It stays until the next message is sent. |
 
-Toggle them from the TUI with `/config` → **Show message timestamps** and
-**Show tool duration**. Turns restored from a transcript recorded before either
-option existed carry no time and render without one.
+Toggle them from the TUI with `/config` → **Show message timestamps**, **Show
+tool duration** and **Show turn duration**. All three take effect on the next
+draw; none needs a restart. Turns restored from a transcript recorded before
+either duration option existed carry no time and render without one.
+
+`showTurnDuration` shares its line with the status message, and the status
+message wins: a session that is reconnecting says so rather than reporting how
+long the last turn took.
 
 `showToolDuration` measures the tool's own work. A tool that waits for
 permission does not count the wait, because that is how long you took to

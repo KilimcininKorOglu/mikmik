@@ -4805,6 +4805,19 @@ async fn run_interactive(
                                     app.config = applied_cfg.clone();
                                     // Same sync the `Config` arm above does.
                                     app.plan_mode = plan_badge_for(applied_cfg.permission_mode);
+                                    // `/permissions allow|deny` writes a rule to
+                                    // settings.json and holds no manager, so the
+                                    // running turn would keep deciding by the
+                                    // rules it started with. Same problem
+                                    // `sync_permission_mode` solves for the mode.
+                                    if let (Some(manager), Ok(settings)) = (
+                                        tool_ctx.permission_manager.as_ref(),
+                                        mikmik_core::Settings::load_sync(),
+                                    ) {
+                                        if let Ok(mut manager) = manager.lock() {
+                                            manager.reload_persistent_rules(&settings);
+                                        }
+                                    }
                                     app.reload_companion();
                                     session.model =
                                         session_model_string(&cmd_ctx.config, &model_registry);

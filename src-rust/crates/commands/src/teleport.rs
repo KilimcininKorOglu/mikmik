@@ -188,33 +188,25 @@ impl SlashCommand for TeleportCommand {
                     .filter(|(k, _)| !redacted_env_vars.contains(k))
                     .collect();
 
-                // ---- build permissions snapshot from config ----------------
-                // The config holds allowed_tools / disallowed_tools as plain
-                // tool-name strings; we also pull any serialized permission rules
-                // from the settings if accessible.
+                // ---- build permissions snapshot from the rules --------------
+                // `permission_rules` is what decides a call, so that is what
+                // travels. `allowed` and `denied` stay in the bundle for a peer
+                // running an older build, and carry the tool-only rules.
                 let permissions = {
-                    let allowed: Vec<String> = ctx.config.allowed_tools.clone();
-                    let denied: Vec<String> = ctx.config.disallowed_tools.clone();
-                    // Build minimal SerializedPermissionRule list from config lists.
-                    let mut rules = Vec::new();
-                    use mikmik_core::permissions::{PermissionAction, SerializedPermissionRule};
-                    for name in &allowed {
-                        rules.push(SerializedPermissionRule {
-                            tool_name: Some(name.clone()),
-                            path_pattern: None,
-                            action: PermissionAction::Allow,
-                        });
-                    }
-                    for name in &denied {
-                        rules.push(SerializedPermissionRule {
-                            tool_name: Some(name.clone()),
-                            path_pattern: None,
-                            action: PermissionAction::Deny,
-                        });
-                    }
+                    use mikmik_core::permissions::PermissionAction;
+                    let rules = mikmik_core::Settings::load_sync()
+                        .map(|s| s.permission_rules)
+                        .unwrap_or_default();
+                    let names_for = |action: PermissionAction| -> Vec<String> {
+                        rules
+                            .iter()
+                            .filter(|rule| rule.action == action && rule.path_pattern.is_none())
+                            .filter_map(|rule| rule.tool_name.clone())
+                            .collect()
+                    };
                     TeleportPermissions {
-                        allowed,
-                        denied,
+                        allowed: names_for(PermissionAction::Allow),
+                        denied: names_for(PermissionAction::Deny),
                         rules,
                     }
                 };
@@ -310,9 +302,34 @@ impl SlashCommand for TeleportCommand {
                 }
 
                 // ---- restore tool permissions ----------------------------
+                // Into `permission_rules`, because that is the list a call is
+                // decided by. A bundle from an older build carries only the two
+                // name lists, so those are converted when `rules` is empty.
+                let restored_rules = if bundle.permissions.rules.is_empty() {
+                    use mikmik_core::permissions::{PermissionAction, SerializedPermissionRule};
+                    let build = |names: &[String], action: PermissionAction| {
+                        names
+                            .iter()
+                            .map(|tool| SerializedPermissionRule {
+                                tool_name: Some(tool.clone()),
+                                path_pattern: None,
+                                action: action.clone(),
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    let mut rules = build(&bundle.permissions.allowed, PermissionAction::Allow);
+                    rules.extend(build(&bundle.permissions.denied, PermissionAction::Deny));
+                    rules
+                } else {
+                    bundle.permissions.rules.clone()
+                };
+                if let Err(e) = save_settings_mutation(|s| {
+                    s.permission_rules = restored_rules.clone();
+                }) {
+                    return CommandResult::Error(format!("Failed to restore permissions: {}", e));
+                }
+
                 let mut new_config = ctx.config.clone();
-                new_config.allowed_tools = bundle.permissions.allowed.clone();
-                new_config.disallowed_tools = bundle.permissions.denied.clone();
                 if let Some(ref model) = bundle.model {
                     new_config.model = Some(model.clone());
                 }

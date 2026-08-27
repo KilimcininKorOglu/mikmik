@@ -533,6 +533,18 @@ without prompting, which are blocked, and which always ask.
 /permissions reset              — clear the overrides
 ```
 
+`allow` and `deny` write a rule into `permissionRules` in `settings.json`, which
+is the list a tool call is decided against. Each is a single verdict per tool:
+`allow` after `deny` on the same tool replaces the denial rather than adding a
+second rule. A rule that names a path, which the permission dialog writes when
+you approve a tool for one file, is left alone by both. `reset` clears every
+rule and returns the mode to `default`.
+
+A settings file written before this carried the verdicts in `allowed_tools` and
+`disallowed_tools`, where nothing read them. Those entries move into
+`permissionRules` the first time the file is loaded, so a tool you denied then
+is denied now.
+
 `/permissions set bypass-permissions` raises the bypass warning first. See
 [Permission Modes](configuration.md#permission-modes).
 

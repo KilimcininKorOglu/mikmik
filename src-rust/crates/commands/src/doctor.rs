@@ -302,14 +302,26 @@ impl SlashCommand for DoctorCommand {
             .map(|t| t.name().to_string())
             .collect();
         let total_tools = all_tool_names.len();
-        let allowed_count = ctx.config.allowed_tools.len();
-        let denied_count = ctx.config.disallowed_tools.len();
-        // Tools not in allowed or denied lists require user confirmation
-        let explicit_tools: std::collections::HashSet<&str> = ctx
-            .config
-            .allowed_tools
+        // Read from disk: the rules live on `Settings`, and this report is
+        // meant to say what the permission decision will actually be.
+        let rules = mikmik_core::Settings::load_sync()
+            .map(|s| s.permission_rules)
+            .unwrap_or_default();
+        let named_by = |action: mikmik_core::permissions::PermissionAction| -> Vec<String> {
+            rules
+                .iter()
+                .filter(|rule| rule.action == action && rule.path_pattern.is_none())
+                .filter_map(|rule| rule.tool_name.clone())
+                .collect()
+        };
+        let allowed_tools = named_by(mikmik_core::permissions::PermissionAction::Allow);
+        let denied_tools = named_by(mikmik_core::permissions::PermissionAction::Deny);
+        let allowed_count = allowed_tools.len();
+        let denied_count = denied_tools.len();
+        // Tools with no rule of their own require user confirmation
+        let explicit_tools: std::collections::HashSet<&str> = allowed_tools
             .iter()
-            .chain(ctx.config.disallowed_tools.iter())
+            .chain(denied_tools.iter())
             .map(|s| s.as_str())
             .collect();
         let confirm_count = all_tool_names
@@ -330,14 +342,14 @@ impl SlashCommand for DoctorCommand {
             lines.push(format!(
                 "  ✓ Always allowed: {} tool(s) — {}",
                 allowed_count,
-                ctx.config.allowed_tools.join(", ")
+                allowed_tools.join(", ")
             ));
         }
         if denied_count > 0 {
             lines.push(format!(
                 "  ✗ Always denied: {} tool(s) — {}",
                 denied_count,
-                ctx.config.disallowed_tools.join(", ")
+                denied_tools.join(", ")
             ));
         }
         if ctx.config.permission_mode == mikmik_core::PermissionMode::Default {

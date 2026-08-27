@@ -3372,10 +3372,59 @@ pub mod config {
             })
         }
 
+        /// Move `allowedTools` and `disallowedTools` into `permissionRules`.
+        ///
+        /// `/permissions allow|deny` wrote those two lists and nothing ever
+        /// read them to decide anything: `PermissionManager::evaluate` only
+        /// consults `permissionRules`. A user who denied a tool was told it was
+        /// denied and it kept running. Moving the entries is what makes the
+        /// answer they already gave take effect.
+        ///
+        /// The lists mean something else from now on, so they are emptied here
+        /// rather than left behind: they became the roster filter, and a stale
+        /// permission entry would silently withhold a tool instead.
+        ///
+        /// Returns whether anything moved, so a load that has nothing to do
+        /// writes nothing. Running it twice changes nothing the second time.
+        fn migrate_permission_lists(&mut self) -> bool {
+            if self.config.allowed_tools.is_empty() && self.config.disallowed_tools.is_empty() {
+                return false;
+            }
+
+            let moved: Vec<crate::permissions::SerializedPermissionRule> =
+                std::mem::take(&mut self.config.allowed_tools)
+                    .into_iter()
+                    .map(|tool| (tool, crate::permissions::PermissionAction::Allow))
+                    .chain(
+                        std::mem::take(&mut self.config.disallowed_tools)
+                            .into_iter()
+                            .map(|tool| (tool, crate::permissions::PermissionAction::Deny)),
+                    )
+                    .map(
+                        |(tool, action)| crate::permissions::SerializedPermissionRule {
+                            tool_name: Some(tool),
+                            path_pattern: None,
+                            action,
+                        },
+                    )
+                    .collect();
+
+            for rule in moved {
+                if !self.permission_rules.contains(&rule) {
+                    self.permission_rules.push(rule);
+                }
+            }
+            true
+        }
+
         async fn load_from_path(path: &Path) -> anyhow::Result<Self> {
             if path.exists() {
                 let content = tokio::fs::read_to_string(path).await?;
-                Self::parse_file(&content, path)
+                let mut settings = Self::parse_file(&content, path)?;
+                if settings.migrate_permission_lists() {
+                    settings.save_to_path(path).await?;
+                }
+                Ok(settings)
             } else {
                 Ok(Self::default())
             }
@@ -3384,7 +3433,11 @@ pub mod config {
         fn load_from_path_sync(path: &Path) -> anyhow::Result<Self> {
             if path.exists() {
                 let content = std::fs::read_to_string(path)?;
-                Self::parse_file(&content, path)
+                let mut settings = Self::parse_file(&content, path)?;
+                if settings.migrate_permission_lists() {
+                    settings.save_to_path_sync(path)?;
+                }
+                Ok(settings)
             } else {
                 Ok(Self::default())
             }
@@ -3454,6 +3507,34 @@ pub mod config {
         pub fn save_sync(&self) -> anyhow::Result<()> {
             let path = Self::global_settings_path();
             self.save_to_path_sync(&path)
+        }
+
+        /// Give `tool_name` one persistent verdict in `permission_rules`.
+        ///
+        /// Replaces every rule that names this tool and no path, because
+        /// `/permissions allow X` after `/permissions deny X` has to leave one
+        /// answer rather than two that contradict each other, and
+        /// `PermissionManager::evaluate` resolves a contradiction as a deny.
+        ///
+        /// A rule carrying a path pattern is left alone: it answers a narrower
+        /// question than this one, and the permission dialog is what writes it.
+        ///
+        /// Saving is the caller's job, because a slash command writes through
+        /// `save_settings_mutation` and the manager writes through `save_sync`.
+        pub fn set_tool_rule(
+            &mut self,
+            tool_name: &str,
+            action: crate::permissions::PermissionAction,
+        ) {
+            self.permission_rules.retain(|rule| {
+                rule.path_pattern.is_some() || rule.tool_name.as_deref() != Some(tool_name)
+            });
+            self.permission_rules
+                .push(crate::permissions::SerializedPermissionRule {
+                    tool_name: Some(tool_name.to_string()),
+                    path_pattern: None,
+                    action,
+                });
         }
 
         /// Whether the context is compacted automatically. Unset means on.
@@ -5750,6 +5831,89 @@ pub mod config {
             assert_eq!(std::fs::read_to_string(path).unwrap(), MALFORMED_SETTINGS);
         }
 
+        /// A settings file from before the lists were enforced anywhere.
+        const OLD_LISTS: &str =
+            r#"{"config":{"allowed_tools":["Bash"],"disallowed_tools":["Write"]}}"#;
+
+        #[test]
+        fn loading_moves_the_old_lists_into_the_rules() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("settings.json");
+            std::fs::write(&path, OLD_LISTS).unwrap();
+
+            let settings = Settings::load_from_path_sync(&path).unwrap();
+
+            assert!(settings.config.allowed_tools.is_empty());
+            assert!(settings.config.disallowed_tools.is_empty());
+            let bash = settings
+                .permission_rules
+                .iter()
+                .find(|r| r.tool_name.as_deref() == Some("Bash"))
+                .expect("Bash rule");
+            assert_eq!(bash.action, crate::permissions::PermissionAction::Allow);
+            let write = settings
+                .permission_rules
+                .iter()
+                .find(|r| r.tool_name.as_deref() == Some("Write"))
+                .expect("Write rule");
+            assert_eq!(write.action, crate::permissions::PermissionAction::Deny);
+
+            // The move reached the file, not just the value in hand.
+            let on_disk = Settings::load_from_path_sync(&path).unwrap();
+            assert_eq!(on_disk.permission_rules.len(), 2);
+            assert!(on_disk.config.allowed_tools.is_empty());
+        }
+
+        #[test]
+        fn a_second_load_moves_nothing_and_rewrites_nothing() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("settings.json");
+            std::fs::write(&path, OLD_LISTS).unwrap();
+
+            Settings::load_from_path_sync(&path).unwrap();
+            let after_first = std::fs::read_to_string(&path).unwrap();
+            Settings::load_from_path_sync(&path).unwrap();
+
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), after_first);
+        }
+
+        #[test]
+        fn one_tool_keeps_one_verdict() {
+            // `/permissions allow X` after `/permissions deny X` must leave one
+            // answer: `evaluate` reads a contradiction as a deny, so a stale
+            // rule would outvote the newer one.
+            let mut settings = Settings::default();
+            settings.set_tool_rule("Write", crate::permissions::PermissionAction::Deny);
+            settings.set_tool_rule("Write", crate::permissions::PermissionAction::Allow);
+
+            assert_eq!(settings.permission_rules.len(), 1);
+            assert_eq!(
+                settings.permission_rules[0].action,
+                crate::permissions::PermissionAction::Allow
+            );
+        }
+
+        #[test]
+        fn a_rule_with_a_path_survives_a_tool_wide_verdict() {
+            // The permission dialog writes the path rules, and they answer a
+            // narrower question than `/permissions deny <tool>` asks.
+            let mut settings = Settings::default();
+            settings
+                .permission_rules
+                .push(crate::permissions::SerializedPermissionRule {
+                    tool_name: Some("Write".to_string()),
+                    path_pattern: Some("/tmp/*".to_string()),
+                    action: crate::permissions::PermissionAction::Allow,
+                });
+            settings.set_tool_rule("Write", crate::permissions::PermissionAction::Deny);
+
+            assert_eq!(settings.permission_rules.len(), 2);
+            assert!(settings
+                .permission_rules
+                .iter()
+                .any(|r| r.path_pattern.as_deref() == Some("/tmp/*")));
+        }
+
         #[test]
         fn sync_save_refuses_to_overwrite_malformed_settings() {
             let dir = tempfile::tempdir().unwrap();
@@ -6675,6 +6839,56 @@ pub mod permissions {
             Ok(())
         }
 
+        /// Give `tool_name` one persistent verdict and save it.
+        ///
+        /// Replaces every persistent rule that names this tool and no path,
+        /// because `/permissions allow X` after `/permissions deny X` has to
+        /// leave one answer rather than two rules that contradict each other,
+        /// and `evaluate` resolves a contradiction in favour of the deny.
+        ///
+        /// A rule carrying a path pattern is left alone: it answers a narrower
+        /// question than this one, and the permission dialog is what writes it.
+        pub fn set_persistent_tool_rule(
+            &mut self,
+            tool_name: &str,
+            action: PermissionAction,
+            settings: &mut crate::config::Settings,
+        ) -> crate::error::Result<()> {
+            settings.set_tool_rule(tool_name, action);
+            settings
+                .save_sync()
+                .map_err(|e| crate::error::ClaudeError::Config(e.to_string()))?;
+            self.reload_persistent_rules(settings);
+            Ok(())
+        }
+
+        /// Drop every persistent rule and save settings.
+        pub fn clear_persistent_rules(
+            &mut self,
+            settings: &mut crate::config::Settings,
+        ) -> crate::error::Result<()> {
+            settings.permission_rules.clear();
+            settings
+                .save_sync()
+                .map_err(|e| crate::error::ClaudeError::Config(e.to_string()))?;
+            self.reload_persistent_rules(settings);
+            Ok(())
+        }
+
+        /// Rebuild `persistent_rules` from what is on disk.
+        ///
+        /// A slash command writes `settings.json` and holds no manager, so the
+        /// running turn keeps deciding by the rules it started with until this
+        /// runs. `sync_permission_mode` in the CLI solves the same problem for
+        /// `mode`.
+        pub fn reload_persistent_rules(&mut self, settings: &crate::config::Settings) {
+            self.persistent_rules = settings
+                .permission_rules
+                .iter()
+                .map(PermissionRule::from)
+                .collect();
+        }
+
         /// Remove a persistent rule by index and save settings.
         pub fn remove_rule(
             &mut self,
@@ -6691,12 +6905,7 @@ pub mod permissions {
             settings
                 .save_sync()
                 .map_err(|e| crate::error::ClaudeError::Config(e.to_string()))?;
-            // Rebuild persistent_rules from the updated settings
-            self.persistent_rules = settings
-                .permission_rules
-                .iter()
-                .map(PermissionRule::from)
-                .collect();
+            self.reload_persistent_rules(settings);
             Ok(())
         }
 

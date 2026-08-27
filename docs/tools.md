@@ -360,6 +360,10 @@ Fetch the content of a URL. Returns the page content, typically converted to Mar
 
 Network requests are subject to the host's firewall and proxy settings.
 
+A GitHub file page is rewritten before the fetch. `https://github.com/{owner}/{repo}/blob/{ref}/{path}` becomes `https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}`, so the answer is the file rather than the file wrapped in navigation chrome. Any `?plain=1` query and any `#L10-L20` fragment are dropped, because the raw host serves the same bytes either way. The host must be exactly `github.com` or `www.github.com`; a host that merely ends in `github.com` is fetched as given. Only a `blob` page is rewritten, so a `tree` listing, a repository root and a pull request URL are fetched as given.
+
+Reading a pull request, an issue or a diff is not this tool's job. Where the `gh` CLI is on the PATH, the system prompt names it and the model runs `gh pr view`, `gh pr diff`, `gh issue view` or `gh api` through Bash instead. Those return the comment thread and the review state, which the rendered page does not carry, and `gh` also writes.
+
 ---
 
 ### WebSearch

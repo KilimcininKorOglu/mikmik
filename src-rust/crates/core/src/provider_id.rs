@@ -125,6 +125,10 @@ impl ProviderId {
     /// direct-access token exchange against the OpenAI-compatible AI-gateway
     /// proxy. Repairs the dead `gitlab` id.
     pub const GITLAB_DUO: &'static str = "gitlab-duo";
+    /// Devin / Windsurf Cascade — PKCE loopback login for a session token,
+    /// exchanged per turn for a user JWT; chat runs over the Connect protobuf
+    /// wire at `server.codeium.com`.
+    pub const DEVIN: &'static str = "devin";
     /// Google Antigravity — Google OAuth loopback login, then the internal
     /// Cloud Code Assist control plane (`daily-cloudcode-pa.googleapis.com`).
     /// Inference is the Gemini `generateContent` wire wrapped in a Cloud Code
@@ -217,6 +221,7 @@ impl ProviderId {
         Self::XAI_OAUTH,
         Self::GITLAB_DUO,
         Self::GOOGLE_ANTIGRAVITY,
+        Self::DEVIN,
         // Spelling aliases accepted on the wire but not canonical ids.
         "openai-codex",
         "lmstudio",

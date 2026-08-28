@@ -6947,6 +6947,77 @@ async fn run_interactive(
                         let _ = tx2.send(event).await;
                     });
                 }
+                "devin" => {
+                    let tx2 = device_auth_tx.clone();
+                    // Devin PKCE loopback flow: bind the fixed callback port the
+                    // CLI sign-in page redirects to, open the browser, capture the
+                    // code, exchange it for a session token, and register it.
+                    tokio::spawn(async move {
+                        let verifier = match mikmik_core::oauth::generate_code_verifier() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                let _ = tx2
+                                    .send(DeviceAuthEvent::Error(format!(
+                                        "Devin PKCE setup failed: {e}"
+                                    )))
+                                    .await;
+                                return;
+                            }
+                        };
+                        let challenge = mikmik_core::oauth::generate_code_challenge(&verifier);
+                        let state = uuid::Uuid::new_v4().to_string();
+                        let port = mikmik_core::devin_oauth::CALLBACK_PORT;
+                        let listener =
+                            match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+                                Ok(l) => l,
+                                Err(e) => {
+                                    let _ = tx2
+                                        .send(DeviceAuthEvent::Error(format!(
+                                            "Devin callback server could not bind port {port}: {e}"
+                                        )))
+                                        .await;
+                                    return;
+                                }
+                            };
+                        let auth_url = mikmik_core::devin_oauth::authorize_url(&challenge, &state);
+                        let _ = tx2
+                            .send(DeviceAuthEvent::GotBrowserUrl { url: auth_url })
+                            .await;
+
+                        let code = match oauth_flow::run_callback_server(listener, &state).await {
+                            Ok(code) => code,
+                            Err(e) => {
+                                let _ = tx2
+                                    .send(DeviceAuthEvent::Error(format!(
+                                        "Devin callback failed: {e}"
+                                    )))
+                                    .await;
+                                return;
+                            }
+                        };
+
+                        match mikmik_core::devin_oauth::exchange_code(&code, &verifier).await {
+                            Ok(tokens) => {
+                                let event =
+                                    match mikmik_core::devin_oauth::save_devin_tokens_and_register(
+                                        &tokens,
+                                    ) {
+                                        Ok(account_id) => DeviceAuthEvent::TokenReceivedFor {
+                                            token: "connected".to_string(),
+                                            account_id,
+                                        },
+                                        Err(e) => DeviceAuthEvent::Error(format!(
+                                            "Devin login could not be saved: {e}"
+                                        )),
+                                    };
+                                let _ = tx2.send(event).await;
+                            }
+                            Err(e) => {
+                                let _ = tx2.send(DeviceAuthEvent::Error(e)).await;
+                            }
+                        }
+                    });
+                }
                 _ => {
                     // Unknown provider for device auth — should not happen
                     app.device_auth_dialog
@@ -7640,6 +7711,9 @@ fn print_account_list(provider: &str, display_name: &str) {
             Some(mikmik_core::StoredCredential::AntigravityOAuth(tokens)) => {
                 format!("  {}", tokens.account_id.as_deref().unwrap_or(""))
             }
+            Some(mikmik_core::StoredCredential::DevinOAuth(tokens)) => {
+                format!("  {}", tokens.account_id.as_deref().unwrap_or(""))
+            }
             // GitLab Duo tokens carry no readable identity; the account name is
             // all the listing shows, so they fall through to the empty detail.
             _ => String::new(),
@@ -7965,6 +8039,12 @@ async fn auth_status(json_output: bool) {
             Some(mikmik_core::StoredCredential::AntigravityOAuth(tokens))
                 if active_provider == mikmik_core::provider_id::ProviderId::GOOGLE_ANTIGRAVITY
                     && !tokens.access_token.is_empty() =>
+            {
+                Some("stored token".to_string())
+            }
+            Some(mikmik_core::StoredCredential::DevinOAuth(tokens))
+                if active_provider == mikmik_core::provider_id::ProviderId::DEVIN
+                    && !tokens.session_token.is_empty() =>
             {
                 Some("stored token".to_string())
             }

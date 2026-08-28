@@ -403,6 +403,16 @@ The inference wire is the ordinary Gemini `generateContent` body wrapped in a Cl
 
 ---
 
+### Devin / Windsurf Cascade
+
+Devin (Windsurf Cascade) subscribers sign in with a PKCE browser flow instead of an API key. Chat runs over the Connect protocol on `server.codeium.com`: a gzip-compressed protobuf request in a single Connect frame, answered by a stream of protobuf response frames.
+
+Pick "Devin / Windsurf" under "Other" in [`/connect`](commands.md#connect). MikMik opens `app.devin.ai` in the browser on a loopback callback (`127.0.0.1:59653/callback`); approve the sign-in and the session switches to the new account. The captured code is exchanged at `api.devin.ai` for a long-lived session token; before each turn that token is exchanged for a short-lived user JWT via the Cascade auth RPC.
+
+Devin emits tool calls that MikMik's own tool loop dispatches, feeding the results back on the next turn. The reverse-engineered protobuf wire has no public contract and may change without notice.
+
+---
+
 ### Custom endpoints
 
 Two slots exist for endpoints MikMik does not ship a provider for, one per wire format:

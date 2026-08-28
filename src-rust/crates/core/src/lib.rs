@@ -8994,6 +8994,7 @@ pub mod accounts;
 pub mod antigravity_oauth;
 pub mod bash_classifier;
 pub mod codex_oauth;
+pub mod devin_oauth;
 pub mod effort;
 pub mod feature_gates;
 pub mod gitlab_duo;

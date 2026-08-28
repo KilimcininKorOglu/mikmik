@@ -848,6 +848,13 @@ fn provider_picker_items() -> Vec<SelectItem> {
             category: "Other".into(),
             badge: None,
         },
+        SelectItem {
+            id: "devin".into(),
+            title: "Devin / Windsurf".into(),
+            description: "Cascade coding plan (browser login)".into(),
+            category: "Other".into(),
+            badge: None,
+        },
     ];
 
     // MLX runs on Apple Silicon, so offering it elsewhere would put an entry in
@@ -4940,6 +4947,7 @@ impl App {
                             || provider_id == "xai-oauth"
                             || provider_id == "gitlab-duo"
                             || provider_id == "google-antigravity"
+                            || provider_id == "devin"
                         {
                             // These OAuth flows persist their own tokens (via
                             // save_*_tokens_and_register); switch to the account
@@ -5375,6 +5383,12 @@ impl App {
                                 self.device_auth_dialog
                                     .open("google-antigravity".into(), "Google Antigravity".into());
                                 self.device_auth_pending = Some("google-antigravity".to_string());
+                            }
+                            "devin" => {
+                                // Devin: PKCE loopback (browser) flow. The flow
+                                // persists its own session token.
+                                self.device_auth_dialog.open("devin".into(), "Devin".into());
+                                self.device_auth_pending = Some("devin".to_string());
                             }
                             "gitlab-duo" => {
                                 // GitLab Duo: PKCE loopback (browser) flow. The

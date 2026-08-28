@@ -46,6 +46,9 @@ pub enum StoredCredential {
     /// Google Antigravity OAuth tokens plus the resolved Cloud Code project.
     #[serde(rename = "antigravity-oauth")]
     AntigravityOAuth(crate::antigravity_oauth::AntigravityTokens),
+    /// Devin / Windsurf Cascade session token (PKCE loopback).
+    #[serde(rename = "devin-oauth")]
+    DevinOAuth(crate::devin_oauth::DevinTokens),
     /// A session on an organisation's configuration server.
     ///
     /// Held here rather than in `settings.json` beside `workspace.url`: this
@@ -124,6 +127,7 @@ fn implied_protocol(credential: &StoredCredential) -> Option<&'static str> {
         StoredCredential::AntigravityOAuth(_) => {
             Some(crate::provider_id::ProviderId::GOOGLE_ANTIGRAVITY)
         }
+        StoredCredential::DevinOAuth(_) => Some(crate::provider_id::ProviderId::DEVIN),
         StoredCredential::OAuthToken { .. } => Some("github-copilot"),
         StoredCredential::ApiKey { .. } => None,
         // Not a model provider at all: it authenticates against the
@@ -379,6 +383,19 @@ impl AuthStore {
         tokens: crate::antigravity_oauth::AntigravityTokens,
     ) {
         self.set(account_id, StoredCredential::AntigravityOAuth(tokens));
+    }
+
+    /// The Devin session token stored under `account_id`, if any.
+    pub fn devin_tokens(&self, account_id: &str) -> Option<&crate::devin_oauth::DevinTokens> {
+        match self.get(account_id) {
+            Some(StoredCredential::DevinOAuth(tokens)) => Some(tokens),
+            _ => None,
+        }
+    }
+
+    /// Store Devin session token for `account_id` (persists immediately).
+    pub fn set_devin_tokens(&mut self, account_id: &str, tokens: crate::devin_oauth::DevinTokens) {
+        self.set(account_id, StoredCredential::DevinOAuth(tokens));
     }
 
     /// The live workspace session for `url`, if there is one.

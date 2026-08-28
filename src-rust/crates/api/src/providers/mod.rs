@@ -52,4 +52,7 @@ pub mod gitlab_duo;
 
 pub mod antigravity;
 pub use antigravity::AntigravityProvider;
+
+pub mod devin;
+pub use devin::DevinProvider;
 pub use gitlab_duo::GitlabDuoProvider;

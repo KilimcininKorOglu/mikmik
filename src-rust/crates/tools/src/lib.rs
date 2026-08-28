@@ -26,6 +26,7 @@ pub mod apply_patch;
 pub mod ask_user;
 pub mod batch_edit;
 pub mod brief;
+pub mod browser;
 pub(crate) mod brush_background;
 pub(crate) mod brush_bash;
 pub mod bundled_skills;
@@ -81,6 +82,7 @@ pub use apply_patch::ApplyPatchTool;
 pub use ask_user::AskUserQuestionTool;
 pub use batch_edit::BatchEditTool;
 pub use brief::BriefTool;
+pub use browser::BrowserTool;
 pub use computer_script::ComputerScriptTool;
 pub use computer_use::ComputerUseTool;
 pub use config_tool::ConfigTool;
@@ -1011,6 +1013,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(McpAuthTool),
         Box::new(MonitorTool),
         Box::new(GoalTool),
+        Box::new(BrowserTool),
         // Both desktop tools need the feature; the roster then decides which
         // of them a session actually offers.
         #[cfg(feature = "computer-use")]

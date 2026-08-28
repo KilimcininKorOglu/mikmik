@@ -1360,6 +1360,27 @@ Requires a display server (X11, Wayland, or Windows Desktop). Not available in h
 
 ---
 
+### browser
+
+**Permission level:** Dangerous
+
+Drive a real browser over the Chrome DevTools Protocol. One browser, many named tabs; a tab persists between calls, so it is referred to by the name it was opened with.
+
+| Parameter  | Type    | Required | Description                                                            |
+|------------|---------|----------|------------------------------------------------------------------------|
+| `action`   | string  | yes      | `open`, `run`, `screenshot`, or `close`                                |
+| `name`     | string  | no       | The tab this action targets (default `default`)                        |
+| `url`      | string  | no       | `open`: the URL to load                                                |
+| `viewport` | array   | no       | `open`: viewport size as `[width, height]` in CSS pixels               |
+| `code`     | string  | no       | `run`: JavaScript to evaluate in the page; top-level `await` is allowed |
+| `all`      | boolean | no       | `close`: close every tab instead of the named one                      |
+
+Actions: `open` (create a named tab and load a URL), `run` (evaluate JavaScript and return the value), `screenshot` (capture the tab as a JPEG), `close` (drop a tab, or all tabs).
+
+Enabled by `browserEnabled`, and offered only when a browser is reachable: a `browserCdpUrl` endpoint, a `browserExecutable`, or a Chrome or Chromium on the PATH. With a `browserCdpUrl` set the tool attaches to that browser; otherwise it launches one headless.
+
+---
+
 ### StructuredOutput
 
 **Permission level:** None

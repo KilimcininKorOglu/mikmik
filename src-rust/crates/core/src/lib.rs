@@ -1833,6 +1833,35 @@ pub mod config {
         /// feature, and this one also needs `node` on the PATH.
         #[serde(default, rename = "computerScriptEnabled")]
         pub computer_script_enabled: bool,
+        /// Whether the `browser` tool is offered.
+        ///
+        /// Off by default, for the same reason as
+        /// [`teams_enabled`](Self::teams_enabled). The tool drives a real
+        /// browser over CDP, so it also needs one reachable: a
+        /// [`browser_cdp_url`](Self::browser_cdp_url), a
+        /// [`browser_executable`](Self::browser_executable), or a Chrome found
+        /// on the PATH. With none of those the tool stays out of the roster
+        /// even when this is on, because it could only report its own absence.
+        #[serde(default, rename = "browserEnabled")]
+        pub browser_enabled: bool,
+        /// A running browser's CDP endpoint, for example
+        /// `http://127.0.0.1:9222`. When set, the `browser` tool attaches to it
+        /// instead of launching one of its own.
+        #[serde(
+            default,
+            rename = "browserCdpUrl",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub browser_cdp_url: Option<String>,
+        /// Path to a Chrome or Chromium binary the `browser` tool launches
+        /// headless when no [`browser_cdp_url`](Self::browser_cdp_url) is set.
+        /// `None` falls back to a Chrome found on the PATH.
+        #[serde(
+            default,
+            rename = "browserExecutable",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub browser_executable: Option<String>,
         /// Whether a turn carries only the core tools plus what `ToolSearch`
         /// has found.
         ///
@@ -4218,6 +4247,13 @@ pub mod config {
                 repl_enabled: base.config.repl_enabled,
                 computer_use_enabled: base.config.computer_use_enabled,
                 computer_script_enabled: base.config.computer_script_enabled,
+                // SECURITY: the browser tool drives a real browser, so a
+                // project settings file must not turn it on or point it at a
+                // browser of its choosing. All three follow the user's own
+                // settings, never the project's.
+                browser_enabled: base.config.browser_enabled,
+                browser_cdp_url: base.config.browser_cdp_url.clone(),
+                browser_executable: base.config.browser_executable.clone(),
                 // How many schemas a turn carries is the user's own
                 // preference, so it follows `timeline_enabled` above.
                 schema_deferral: base.config.schema_deferral,

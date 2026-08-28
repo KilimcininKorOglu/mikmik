@@ -49,7 +49,28 @@ pub fn unusable_tools(has_mcp: bool, config: &Config, cwd: &Path) -> Vec<&'stati
     if !config.computer_script_enabled || which::which("node").is_err() {
         withheld.push("computer_script");
     }
+    // Two conditions again: the setting, and a browser the tool can actually
+    // reach. With the setting on but no CDP url, no configured binary and no
+    // Chrome on the PATH, the tool could only report that it found nothing to
+    // drive, so it is withheld instead.
+    if !config.browser_enabled || !browser_is_reachable(config) {
+        withheld.push("browser");
+    }
     withheld
+}
+
+/// Whether the `browser` tool has a browser to drive.
+///
+/// A configured endpoint or binary counts without probing: the user named it,
+/// and a wrong value is their own report to read. Otherwise a Chrome or
+/// Chromium on the PATH is what the tool would launch.
+fn browser_is_reachable(config: &Config) -> bool {
+    if config.browser_cdp_url.is_some() || config.browser_executable.is_some() {
+        return true;
+    }
+    ["google-chrome", "chromium", "chromium-browser", "chrome"]
+        .iter()
+        .any(|name| which::which(name).is_ok())
 }
 
 /// Whether `name` survives `--allowed-tools` and `--disallowed-tools`.
@@ -118,6 +139,37 @@ mod tests {
         let withheld = unusable_tools(false, &config, &cwd());
 
         assert!(!withheld.contains(&"CronList"));
+    }
+
+    #[test]
+    fn the_browser_stays_out_until_it_is_both_enabled_and_reachable() {
+        // Off by default.
+        assert!(unusable_tools(false, &Config::default(), &cwd()).contains(&"browser"));
+
+        // On, but with nothing to drive: still withheld, so it never has to
+        // report its own absence.
+        let enabled_only = Config {
+            browser_enabled: true,
+            ..Default::default()
+        };
+        let reachable = enabled_only.browser_cdp_url.is_some()
+            || enabled_only.browser_executable.is_some()
+            || ["google-chrome", "chromium", "chromium-browser", "chrome"]
+                .iter()
+                .any(|name| which::which(name).is_ok());
+        assert_eq!(
+            !unusable_tools(false, &enabled_only, &cwd()).contains(&"browser"),
+            reachable,
+            "browser offering must track whether a browser is reachable"
+        );
+
+        // On and reachable through a configured endpoint: offered.
+        let ready = Config {
+            browser_enabled: true,
+            browser_cdp_url: Some("http://127.0.0.1:9222".to_string()),
+            ..Default::default()
+        };
+        assert!(!unusable_tools(false, &ready, &cwd()).contains(&"browser"));
     }
 
     #[test]

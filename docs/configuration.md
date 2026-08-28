@@ -609,6 +609,9 @@ and no schema on any turn. All four are off by default and editable from
 | `cronEnabled`        | boolean | false   | Offer `CronCreate`, `CronDelete` and `CronList`. A job already scheduled keeps running either way.                 |
 | `replEnabled`        | boolean | false   | Offer the persistent Python and JavaScript `REPL`.                                                                |
 | `computerUseEnabled` | boolean | false   | Offer the desktop control tool. The `computer-use` Cargo feature is a separate axis and is on by default; a build made with `--no-default-features` does not carry the tool whatever this says. |
+| `browserEnabled`     | boolean | false   | Offer the `browser` tool. Also needs a browser to drive (see below), or it stays out of the roster even when this is on. |
+| `browserCdpUrl`      | string  | unset   | A running browser's CDP endpoint, e.g. `http://127.0.0.1:9222`. When set, `browser` attaches to it instead of launching one. |
+| `browserExecutable`  | string  | unset   | Path to a Chrome or Chromium binary the `browser` tool launches headless when no `browserCdpUrl` is set. Unset falls back to a Chrome found on the PATH. |
 
 A project's `.mikmik/settings.json` cannot turn any of them on. Each decides
 whether a capability is offered, so a repository able to set one could hand
@@ -622,6 +625,7 @@ is not offered.
 - `EnterWorktree` and `ExitWorktree` need the session to be inside a git repository.
 - `LSP` needs a configured language server, or one that auto-detection finds installed for this tree.
 - `PowerShell` needs `pwsh` on the PATH, or Windows.
+- `browser` needs a browser to drive: a `browserCdpUrl`, a `browserExecutable`, or a Chrome or Chromium on the PATH.
 
 Measured in this repository: the roster went from 44 tools and 30,246
 characters of tool definitions to 35 and 25,730 with nothing configured.

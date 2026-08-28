@@ -45,6 +45,7 @@ pub mod formatter;
 pub mod glob_tool;
 pub mod goal_tool;
 pub mod grep_tool;
+pub mod hub;
 pub mod image_tools;
 pub mod learn_tool;
 pub mod line_endings;
@@ -100,6 +101,7 @@ pub use formatter::try_format_file;
 pub use glob_tool::GlobTool;
 pub use goal_tool::GoalTool;
 pub use grep_tool::GrepTool;
+pub use hub::HubTool;
 pub use image_tools::{GenerateImageTool, InspectImageTool};
 pub use learn_tool::LearnTool;
 pub use lsp_tool::LspTool;
@@ -1018,6 +1020,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(BrowserTool),
         Box::new(GenerateImageTool),
         Box::new(InspectImageTool),
+        Box::new(HubTool),
         // Both desktop tools need the feature; the roster then decides which
         // of them a session actually offers.
         #[cfg(feature = "computer-use")]

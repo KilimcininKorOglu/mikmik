@@ -1423,6 +1423,32 @@ Ask a vision-capable model a question about a local image. Unlike `Read`, which 
 
 ---
 
+### hub
+
+**Permission level:** Execute
+
+Supervise long-lived processes by name. The name is the handle: it persists for the process's life and maps to a background-task entry the rest of the app can see. Output is streamed into a bounded buffer, so `logs` never blocks on the process.
+
+| Parameter     | Type   | Required | Description                                                       |
+|---------------|--------|----------|-------------------------------------------------------------------|
+| `op`          | string | yes      | `start`, `ps`, `logs`, `stop`, `restart`, or `send`               |
+| `name`        | string | for most | The process name the op acts on                                   |
+| `application` | string | for `start` | The program to run                                             |
+| `args`        | array  | no       | `start`: its arguments                                            |
+| `env`         | array  | no       | `start`: env additions as `KEY=value`                            |
+| `cwd`         | string | no       | `start`: the working directory                                   |
+| `ready`       | string | no       | `start`: wait for this substring in the output before returning  |
+| `lines`       | number | no       | `logs`: return only the last N lines                             |
+| `head`        | number | no       | `logs`: return the first N lines instead of the last             |
+| `grep`        | string | no       | `logs`: only lines containing this substring                     |
+| `cursor`      | number | no       | `logs`: skip this many lines from the start of the window        |
+| `input`       | string | no       | `send`: a line to write to the process's stdin                   |
+| `signal`      | string | no       | `send`: a signal name such as `TERM` or `HUP` (unix)             |
+
+`restart` reuses the spec the process was started with and gives a new pid. `stop` kills the process tree.
+
+---
+
 ### StructuredOutput
 
 **Permission level:** None

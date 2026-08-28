@@ -4,7 +4,11 @@
 //! `xcap`. The whole module is feature-gated: without `computer-use` there is
 //! no backend to answer with, and the tool is not registered either.
 
-use serde_json::{json, Value};
+use serde_json::Value;
+// `json!` and the argument readers below serve the desktop ops, which only
+// exist with the backend; without the feature they would be dead.
+#[cfg(feature = "computer-use")]
+use serde_json::json;
 
 /// The ops that change the machine rather than reading it.
 ///
@@ -28,6 +32,7 @@ pub fn writes(op: &str) -> bool {
 }
 
 /// Read an integer argument, or say which one was missing.
+#[cfg(feature = "computer-use")]
 fn number(args: &Value, name: &str) -> Result<i32, String> {
     args.get(name)
         .and_then(Value::as_i64)
@@ -36,6 +41,7 @@ fn number(args: &Value, name: &str) -> Result<i32, String> {
 }
 
 /// Read a string argument, or say which one was missing.
+#[cfg(feature = "computer-use")]
 fn text(args: &Value, name: &str) -> Result<String, String> {
     args.get(name)
         .and_then(Value::as_str)
@@ -349,6 +355,8 @@ mod tests {
         }
     }
 
+    // Guards `number`, which only exists with the backend.
+    #[cfg(feature = "computer-use")]
     #[test]
     fn a_missing_argument_names_itself() {
         let error = number(&json!({}), "x").expect_err("x is required");

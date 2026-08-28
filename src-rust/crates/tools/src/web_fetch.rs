@@ -376,6 +376,22 @@ impl Tool for WebFetchTool {
 
         debug!(url = %params.url, "Fetching web page");
 
+        // Site-aware handlers first: a recognized host (npm, package registries,
+        // security DBs, …) renders structured markdown from its API instead of
+        // the generic HTML strip. An unclaimed URL falls through unchanged.
+        if let Some(result) =
+            crate::web::scrapers::dispatch(&params.url, std::time::Duration::from_secs(30)).await
+        {
+            let mut body = result.content;
+            for note in &result.notes {
+                debug!(note = %note, url = %params.url, "scraper note");
+            }
+            if result.truncated {
+                body.push_str("\n\n... (truncated)");
+            }
+            return ToolResult::success(body);
+        }
+
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::limited(10))

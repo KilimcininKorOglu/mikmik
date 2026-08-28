@@ -5,4 +5,5 @@
 // that parses Google-style directives, and (later) a registry of site-aware
 // content scrapers for `web_fetch`.
 
+pub mod scrapers;
 pub mod search;

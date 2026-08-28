@@ -190,7 +190,9 @@ async fn pi_read(a: &proto::PiReadArgs, h: &dyn CursorExecHandlers) -> (u32, Vec
 }
 
 async fn pi_bash(a: &proto::PiBashArgs, h: &dyn CursorExecHandlers) -> (u32, Vec<u8>) {
-    let timeout = a.timeout.map(|t| t as i64);
+    // `pi_bash` carries its timeout in seconds; the shell bridge expects
+    // milliseconds, so a supplied value is scaled here.
+    let timeout = a.timeout.map(|t| (t * 1000.0) as i64);
     let out = h.shell(&a.command, "", timeout).await;
     (F_PI_BASH, proto::encode_pi_result(&out.text, out.is_error))
 }

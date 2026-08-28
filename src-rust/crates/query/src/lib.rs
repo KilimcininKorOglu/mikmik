@@ -28,6 +28,7 @@ pub mod session_memory;
 pub mod skill_prefetch;
 pub mod vibe;
 
+mod cursor_agent;
 mod runner;
 pub use agent_tool::{init_team_swarm_runner, AgentTool};
 pub use command_queue::{drain_command_queue, CommandPriority, CommandQueue, QueuedCommand};
@@ -1312,6 +1313,89 @@ async fn run_query_loop_inner(
             let vendor = tool_ctx.config.vendor_id_for_account(&provider_id_str);
             let use_provider_dispatch =
                 runner::dispatches_through_provider(&provider_id_str, &tool_ctx.config, client);
+
+            // Cursor is an agent-executor, not an ordinary provider: it runs its
+            // own tool loop over one bidirectional stream, so it is driven here
+            // and never enters the provider-registry dispatch below.
+            if use_provider_dispatch
+                && vendor.as_str() == mikmik_core::provider_id::ProviderId::CURSOR
+            {
+                if let Some(ref tx) = event_tx {
+                    let _ = tx.send(QueryEvent::Status("✳ Cursor…".to_string()));
+                }
+                let cursor_tools: Vec<mikmik_core::types::ToolDefinition> =
+                    declared.iter().map(|t| t.to_definition()).collect();
+                let cursor_request = mikmik_api::ProviderRequest {
+                    model: model_id_str.clone(),
+                    messages: messages.clone(),
+                    system_prompt: Some(system_for_provider.clone()),
+                    tools: cursor_tools,
+                    max_tokens: config.max_tokens,
+                    temperature: None,
+                    top_p: None,
+                    top_k: None,
+                    stop_sequences: vec![],
+                    thinking: None,
+                    provider_options: serde_json::Value::Null,
+                };
+                let outcome = match crate::cursor_agent::drive_turn(
+                    &provider_id_str,
+                    cursor_request,
+                    tools,
+                    tool_ctx,
+                    event_tx.as_ref(),
+                    &cancel_token,
+                )
+                .await
+                {
+                    None => return QueryOutcome::Cancelled,
+                    Some(Err(e)) => {
+                        error!(error = %e, "Cursor turn failed");
+                        return QueryOutcome::Error(ClaudeError::Api(e));
+                    }
+                    Some(Ok(outcome)) => outcome,
+                };
+
+                let content_blocks = mikmik_api::providers::cursor::outcome_blocks(&outcome);
+                let mut assistant_msg = Message {
+                    role: mikmik_core::types::Role::Assistant,
+                    content: mikmik_core::types::MessageContent::Blocks(content_blocks),
+                    uuid: Some(uuid::Uuid::new_v4().to_string()),
+                    cost: None,
+                    snapshot_patch: None,
+                    timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                    tool_durations: None,
+                };
+                runner::record_turn_usage(
+                    &mut assistant_msg,
+                    &effective_model,
+                    runner::pricing_for_turn(config, &tool_ctx.config, &route),
+                    &outcome.usage,
+                    cost_tracker.as_ref(),
+                    &tool_ctx.session_id,
+                );
+                messages.push(assistant_msg.clone());
+                if runner::apply_post_model_turn(
+                    &assistant_msg,
+                    tool_ctx,
+                    messages,
+                    event_tx.as_ref(),
+                ) == runner::PostModelTurn::Veto
+                {
+                    let last = messages
+                        .last()
+                        .cloned()
+                        .unwrap_or_else(|| Message::assistant("Hook blocked continuation."));
+                    return QueryOutcome::EndTurn {
+                        message: last,
+                        usage: outcome.usage,
+                    };
+                }
+                return QueryOutcome::EndTurn {
+                    message: assistant_msg,
+                    usage: outcome.usage,
+                };
+            }
 
             if use_provider_dispatch {
                 let provider =

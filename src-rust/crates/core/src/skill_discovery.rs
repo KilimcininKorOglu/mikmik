@@ -181,6 +181,28 @@ fn scan_skill_package(dir: &Path) -> Option<DiscoveredSkill> {
 // Top-level discovery
 // ---------------------------------------------------------------------------
 
+/// Resolve one configured skill path.
+///
+/// A leading `~/` expands to the home directory, so a path like
+/// `~/.agents/skills` reaches the user's home instead of being joined onto
+/// `cwd`. An absolute path is kept as it is; anything else is taken relative to
+/// `cwd`. `home` is `None` only when the home directory cannot be found, and
+/// then a `~/` path is left untouched rather than resolved wrongly.
+fn resolve_skill_path(path_str: &str, cwd: &Path, home: Option<&Path>) -> PathBuf {
+    if let Some(rest) = path_str.strip_prefix("~/") {
+        return match home {
+            Some(home) => home.join(rest),
+            None => PathBuf::from(path_str),
+        };
+    }
+    let path = Path::new(path_str);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    }
+}
+
 /// Discover all skills from all configured sources.
 ///
 /// Returns a `HashMap` of `skill_name → DiscoveredSkill` (first match wins;
@@ -228,12 +250,7 @@ pub fn discover_skills(
 
     // ---- 3. Configured extra paths ------------------------------------------
     for path_str in &config_skills.paths {
-        let path = Path::new(path_str);
-        let path = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            cwd.join(path)
-        };
+        let path = resolve_skill_path(path_str, cwd, dirs::home_dir().as_deref());
         add(scan_dir(&path));
     }
 
@@ -525,5 +542,38 @@ mod tests {
         let discovered = discover_skills(tmp.path(), &config);
         // Project-level wins over extra path.
         assert_eq!(discovered["dup"].description, "project");
+    }
+
+    #[test]
+    fn a_configured_skill_path_expands_a_leading_tilde() {
+        // `~/.agents/skills` must reach home, not `cwd/~/.agents/skills`, or a
+        // configured global skills directory would never be found.
+        let home = PathBuf::from("/home/user");
+        let cwd = PathBuf::from("/work");
+
+        assert_eq!(
+            resolve_skill_path("~/.agents/skills", &cwd, Some(&home)),
+            PathBuf::from("/home/user/.agents/skills")
+        );
+        // An absolute path is left as it is.
+        assert_eq!(
+            resolve_skill_path("/abs/skills", &cwd, Some(&home)),
+            PathBuf::from("/abs/skills")
+        );
+        // Anything else is taken relative to cwd.
+        assert_eq!(
+            resolve_skill_path("rel/skills", &cwd, Some(&home)),
+            PathBuf::from("/work/rel/skills")
+        );
+    }
+
+    #[test]
+    fn a_tilde_path_is_left_untouched_when_home_is_unknown() {
+        // Resolving `~/x` against `cwd` would be wrong, so with no home the path
+        // stays literal rather than pointing somewhere it does not belong.
+        assert_eq!(
+            resolve_skill_path("~/x", &PathBuf::from("/work"), None),
+            PathBuf::from("~/x")
+        );
     }
 }

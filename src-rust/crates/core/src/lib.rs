@@ -9011,6 +9011,7 @@ pub mod system_prompt;
 pub mod tips;
 pub mod tool_gates;
 pub mod voice;
+pub mod xai_oauth;
 
 // ---------------------------------------------------------------------------
 // tasks module — background task registry

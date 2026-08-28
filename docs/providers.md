@@ -373,6 +373,16 @@ Regional Token Plan bases: `token-plan-sgp` (Singapore), `token-plan-ams` (Europ
 
 ---
 
+### xAI Grok (SuperGrok OAuth)
+
+SuperGrok and X Premium+ subscribers can sign in with the OAuth 2.0 device authorization grant instead of an API key. It is a separate provider (`xai-oauth`) from the API-key `xai` route, but both serve the same OpenAI-compatible `https://api.x.ai/v1` endpoint.
+
+Pick "xAI Grok (SuperGrok)" under "Other" in [`/connect`](commands.md#connect). MikMik requests a device code, opens `auth.x.ai` in the browser, and shows a user code; approve it there and the session switches to the new account. The access token is refreshed automatically (the token endpoint is discovered from xAI's OIDC document). `XAI_OAUTH_BASE_URL` overrides the inference base if needed.
+
+The subscription bills through xAI directly; this is the same account you use with the official Grok CLI.
+
+---
+
 ### Custom endpoints
 
 Two slots exist for endpoints MikMik does not ship a provider for, one per wire format:

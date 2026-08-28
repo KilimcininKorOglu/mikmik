@@ -243,6 +243,8 @@ fn get_env_var_for_provider(id: &str) -> &'static str {
         // Kimi Code authenticates by device-flow OAuth, not an env key. The
         // token store answers for it; this maps only for display parity.
         "kimi-code" => "KIMI_CODE_OAUTH_HOST",
+        // xAI OAuth is device-flow too; the token store answers for it.
+        "xai-oauth" => "XAI_OAUTH_BASE_URL",
         _ => "API_KEY",
     }
 }
@@ -820,6 +822,13 @@ fn provider_picker_items() -> Vec<SelectItem> {
             id: "xiaomi".into(),
             title: "Xiaomi MiMo".into(),
             description: "OpenAI-compatible (api.xiaomimimo.com)".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "xai-oauth".into(),
+            title: "xAI Grok (SuperGrok)".into(),
+            description: "SuperGrok / X Premium+ (device login)".into(),
             category: "Other".into(),
             badge: None,
         },
@@ -4911,10 +4920,10 @@ impl App {
                             self.pending_provider_reload = true;
                             return false;
                         }
-                        if provider_id == "kimi-code" {
-                            // The device flow persisted the tokens itself via
-                            // save_kimi_tokens_and_register; switch to the account
-                            // it registered without re-storing anything.
+                        if provider_id == "kimi-code" || provider_id == "xai-oauth" {
+                            // These device flows persist their own tokens (via
+                            // save_*_tokens_and_register); switch to the account
+                            // they registered without re-storing anything.
                             let account_id = self
                                 .device_auth_dialog
                                 .resolved_account
@@ -5332,6 +5341,13 @@ impl App {
                                 self.device_auth_dialog
                                     .open("kimi-code".into(), "Kimi Code".into());
                                 self.device_auth_pending = Some("kimi-code".to_string());
+                            }
+                            "xai-oauth" => {
+                                // xAI Grok: device authorization grant. Same shape
+                                // as Kimi — the flow persists its own tokens.
+                                self.device_auth_dialog
+                                    .open("xai-oauth".into(), "xAI Grok (OAuth)".into());
+                                self.device_auth_pending = Some("xai-oauth".to_string());
                             }
                             // AWS Bedrock — accept a bearer token via key input dialog
                             "amazon-bedrock" => {

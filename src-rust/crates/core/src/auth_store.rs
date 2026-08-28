@@ -37,6 +37,9 @@ pub enum StoredCredential {
     /// Kimi Code device-flow OAuth tokens.
     #[serde(rename = "kimi-oauth")]
     KimiOAuth(crate::kimi_oauth::KimiTokens),
+    /// xAI Grok device-flow OAuth tokens.
+    #[serde(rename = "xai-oauth")]
+    XaiOAuth(crate::xai_oauth::XaiTokens),
     /// A session on an organisation's configuration server.
     ///
     /// Held here rather than in `settings.json` beside `workspace.url`: this
@@ -110,6 +113,7 @@ fn implied_protocol(credential: &StoredCredential) -> Option<&'static str> {
         StoredCredential::AnthropicOAuth(_) => Some(crate::provider_id::ProviderId::ANTHROPIC),
         StoredCredential::CodexOAuth(_) => Some(crate::provider_id::ProviderId::CODEX),
         StoredCredential::KimiOAuth(_) => Some(crate::provider_id::ProviderId::KIMI_CODE),
+        StoredCredential::XaiOAuth(_) => Some(crate::provider_id::ProviderId::XAI_OAUTH),
         StoredCredential::OAuthToken { .. } => Some("github-copilot"),
         StoredCredential::ApiKey { .. } => None,
         // Not a model provider at all: it authenticates against the
@@ -319,6 +323,19 @@ impl AuthStore {
     /// Store Kimi OAuth tokens for `account_id` (persists immediately).
     pub fn set_kimi_tokens(&mut self, account_id: &str, tokens: crate::kimi_oauth::KimiTokens) {
         self.set(account_id, StoredCredential::KimiOAuth(tokens));
+    }
+
+    /// The xAI OAuth tokens stored under `account_id`, if any.
+    pub fn xai_tokens(&self, account_id: &str) -> Option<&crate::xai_oauth::XaiTokens> {
+        match self.get(account_id) {
+            Some(StoredCredential::XaiOAuth(tokens)) => Some(tokens),
+            _ => None,
+        }
+    }
+
+    /// Store xAI OAuth tokens for `account_id` (persists immediately).
+    pub fn set_xai_tokens(&mut self, account_id: &str, tokens: crate::xai_oauth::XaiTokens) {
+        self.set(account_id, StoredCredential::XaiOAuth(tokens));
     }
 
     /// The live workspace session for `url`, if there is one.

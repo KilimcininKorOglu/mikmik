@@ -6741,6 +6741,63 @@ async fn run_interactive(
                         }
                     });
                 }
+                "xai-oauth" => {
+                    let tx2 = device_auth_tx.clone();
+                    // xAI Grok device authorization grant. The token endpoint is
+                    // discovered from xAI's OIDC document before polling. On
+                    // success the task persists and registers the tokens itself.
+                    tokio::spawn(async move {
+                        let discovery = mikmik_core::xai_oauth::discover_token_endpoint().await;
+                        let token_endpoint = match discovery {
+                            Ok(endpoint) => endpoint,
+                            Err(e) => {
+                                let _ = tx2.send(DeviceAuthEvent::Error(e)).await;
+                                return;
+                            }
+                        };
+                        match mikmik_core::xai_oauth::request_device_authorization().await {
+                            Ok(device) => {
+                                let _ = tx2
+                                    .send(DeviceAuthEvent::GotCode {
+                                        user_code: device.user_code,
+                                        verification_uri: device.verification_uri_complete,
+                                        device_code: device.device_code.clone(),
+                                        interval: device.interval,
+                                    })
+                                    .await;
+                                match mikmik_core::xai_oauth::poll_for_token(
+                                    &token_endpoint,
+                                    &device.device_code,
+                                    device.interval,
+                                    device.expires_in,
+                                )
+                                .await
+                                {
+                                    Ok(tokens) => {
+                                        let event = match mikmik_core::xai_oauth::save_xai_tokens_and_register(
+                                            &tokens,
+                                        ) {
+                                            Ok(account_id) => DeviceAuthEvent::TokenReceivedFor {
+                                                token: "connected".to_string(),
+                                                account_id,
+                                            },
+                                            Err(e) => DeviceAuthEvent::Error(format!(
+                                                "xAI login could not be saved: {e}"
+                                            )),
+                                        };
+                                        let _ = tx2.send(event).await;
+                                    }
+                                    Err(e) => {
+                                        let _ = tx2.send(DeviceAuthEvent::Error(e)).await;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx2.send(DeviceAuthEvent::Error(e)).await;
+                            }
+                        }
+                    });
+                }
                 _ => {
                     // Unknown provider for device auth — should not happen
                     app.device_auth_dialog
@@ -7428,6 +7485,9 @@ fn print_account_list(provider: &str, display_name: &str) {
             Some(mikmik_core::StoredCredential::KimiOAuth(tokens)) => {
                 format!("  {}", tokens.account_id.as_deref().unwrap_or(""))
             }
+            Some(mikmik_core::StoredCredential::XaiOAuth(tokens)) => {
+                format!("  {}", tokens.account_id.as_deref().unwrap_or(""))
+            }
             _ => String::new(),
         };
         println!("  {} {}{}", marker, id, detail.trim_end());
@@ -7732,6 +7792,12 @@ async fn auth_status(json_output: bool) {
             }
             Some(mikmik_core::StoredCredential::KimiOAuth(tokens))
                 if active_provider == mikmik_core::provider_id::ProviderId::KIMI_CODE
+                    && !tokens.access_token.is_empty() =>
+            {
+                Some("stored token".to_string())
+            }
+            Some(mikmik_core::StoredCredential::XaiOAuth(tokens))
+                if active_provider == mikmik_core::provider_id::ProviderId::XAI_OAUTH
                     && !tokens.access_token.is_empty() =>
             {
                 Some("stored token".to_string())

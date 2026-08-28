@@ -44,3 +44,6 @@ pub use codex::CodexProvider;
 
 pub mod kimi_code;
 pub use kimi_code::KimiCodeProvider;
+
+pub mod xai_oauth;
+pub use xai_oauth::XaiOAuthProvider;

@@ -117,6 +117,10 @@ impl ProviderId {
     /// login (standard `sk-` or Token Plan `tp-` keys); the regional Token Plan
     /// bases are reached with an `api_base` override.
     pub const XIAOMI: &'static str = "xiaomi";
+    /// xAI Grok OAuth (SuperGrok / X Premium+), device-flow login against
+    /// `auth.x.ai`, OpenAI-compatible inference at `api.x.ai/v1`. Separate from
+    /// [`XAI`](Self::XAI), which is the API-key route.
+    pub const XAI_OAUTH: &'static str = "xai-oauth";
 
     /// Every provider id mikmik ships with, including the spelling aliases
     /// users type (`lmstudio` for `lm-studio`, `zhipu` for `zhipuai`, …).
@@ -199,6 +203,7 @@ impl ProviderId {
         Self::MINIMAX_CODE_CN,
         Self::KIMI_CODE,
         Self::XIAOMI,
+        Self::XAI_OAUTH,
         // Spelling aliases accepted on the wire but not canonical ids.
         "openai-codex",
         "lmstudio",

@@ -14,7 +14,7 @@ use crate::provider_types::ProviderStatus;
 use crate::providers::{
     AnthropicProvider, AzureProvider, BedrockProvider, CodexProvider, CohereProvider,
     CopilotProvider, FreeEntry, FreeProvider, GoogleProvider, KimiCodeProvider, MinimaxProvider,
-    OpenAiProvider, FREE_CATALOG,
+    OpenAiProvider, XaiOAuthProvider, FREE_CATALOG,
 };
 
 fn normalize_openai_compat_base(override_base: &str) -> String {
@@ -100,6 +100,10 @@ fn provider_from_key(provider_id: &str, key: String) -> Option<Arc<dyn LlmProvid
             // Device-flow OAuth; the `key` field is unused. Load the stored
             // token and refresh it on demand inside the provider.
             KimiCodeProvider::from_stored().map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
+        }
+        "xai-oauth" => {
+            // Device-flow OAuth against api.x.ai; the `key` field is unused.
+            XaiOAuthProvider::from_stored().map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
         }
         "cohere" => Some(Arc::new(CohereProvider::new(key))),
         "custom-openai" => Some(Arc::new(p::custom_openai().with_api_key(key))),
@@ -406,6 +410,8 @@ pub fn provider_from_config(
         "codex" | "openai-codex" => CodexProvider::from_account(provider_id)
             .map(|provider| Arc::new(provider) as Arc<dyn LlmProvider>),
         "kimi-code" => KimiCodeProvider::from_account(provider_id)
+            .map(|provider| Arc::new(provider) as Arc<dyn LlmProvider>),
+        "xai-oauth" => XaiOAuthProvider::from_account(provider_id)
             .map(|provider| Arc::new(provider) as Arc<dyn LlmProvider>),
         _ => api_key.and_then(|key| provider_from_key(provider_id, key)),
     }

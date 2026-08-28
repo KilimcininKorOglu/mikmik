@@ -296,6 +296,13 @@ struct AgentInput {
     /// Optional: model override for this sub-agent.
     #[serde(default)]
     model: Option<String>,
+    /// Optional: reasoning effort for this sub-agent (low, medium, high, ...).
+    #[serde(default)]
+    effort: Option<String>,
+    /// Optional: shared preamble prepended to `prompt`, so several agents can
+    /// be given the same background without repeating it in each prompt.
+    #[serde(default)]
+    context: Option<String>,
     /// Set to "worktree" to run the agent in an isolated git worktree.
     /// Omit (or set to null) for shared working directory.
     #[serde(default)]
@@ -304,6 +311,28 @@ struct AgentInput {
     /// Default: false (wait for completion).
     #[serde(default)]
     run_in_background: bool,
+}
+
+/// A batch spawn: one shared `context` and a list of task inputs.
+///
+/// Each task is a raw single-agent input object; it is validated and turned
+/// into an `AgentInput` by the same `execute` path, so the batch never
+/// duplicates the spawn logic.
+#[derive(Debug, Deserialize)]
+struct BatchInput {
+    /// Prepended to every task's prompt, so the agents share one background.
+    #[serde(default)]
+    context: Option<String>,
+    /// The tasks to spawn, each a single-agent input object.
+    tasks: Vec<Value>,
+}
+
+/// Put the shared `context` above a task's prompt, when one was given.
+fn with_context(context: Option<&str>, prompt: &str) -> String {
+    match context.map(str::trim).filter(|c| !c.is_empty()) {
+        Some(context) => format!("{context}\n\n{prompt}"),
+        None => prompt.to_string(),
+    }
 }
 
 #[async_trait]
@@ -360,6 +389,33 @@ impl Tool for AgentTool {
                     "type": "string",
                     "description": "Optional model to use for this agent"
                 },
+                "effort": {
+                    "type": "string",
+                    "description": "Optional reasoning effort for this agent: low, medium, high, xhigh, max."
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Optional shared preamble prepended to the prompt. With batch tasks, it is prepended to every task's prompt."
+                },
+                "tasks": {
+                    "type": "array",
+                    "description": "Spawn several agents at once. Each item is a task with its own description, prompt, and optional name, tools, model, effort and isolation. The top-level context, when given, is prepended to every task's prompt. Names must not collide within the batch.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "description": { "type": "string" },
+                            "name": { "type": "string" },
+                            "prompt": { "type": "string" },
+                            "tools": { "type": "array", "items": { "type": "string" } },
+                            "system_prompt": { "type": "string" },
+                            "max_turns": { "type": "number" },
+                            "model": { "type": "string" },
+                            "effort": { "type": "string" },
+                            "isolation": { "type": "string", "enum": ["worktree"] }
+                        },
+                        "required": ["description", "prompt"]
+                    }
+                },
                 "isolation": {
                     "type": "string",
                     "enum": ["worktree"],
@@ -378,10 +434,33 @@ impl Tool for AgentTool {
     }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
+        // A batch call carries `tasks`; each task is spawned as its own single
+        // agent, so the whole spawn path below is reused rather than copied.
+        if input.get("tasks").is_some() {
+            return self.spawn_batch(input, ctx).await;
+        }
+
         let params: AgentInput = match serde_json::from_value(input) {
             Ok(p) => p,
             Err(e) => return ToolResult::error(format!("Invalid input: {}", e)),
         };
+
+        // The reasoning effort this agent runs at, if one was named. An
+        // unknown word is refused rather than silently ignored.
+        let effort_level = match params.effort.as_deref() {
+            Some(word) => match mikmik_core::effort::EffortLevel::from_str(word) {
+                Some(level) => Some(level),
+                None => {
+                    return ToolResult::error(format!(
+                        "unknown effort {word:?}; use low, medium, high, xhigh or max"
+                    ))
+                }
+            },
+            None => None,
+        };
+        // The shared context sits above the prompt, so a batch's agents can
+        // carry the same background without repeating it.
+        let effective_prompt = with_context(params.context.as_deref(), &params.prompt);
 
         info!(description = %params.description, "Spawning sub-agent");
 
@@ -535,7 +614,7 @@ impl Tool for AgentTool {
             thinking_budget: None,
             temperature: None,
             tool_result_budget: 50_000,
-            effort_level: None,
+            effort_level,
             command_queue: None,
             skill_index: None,
             max_budget_usd: None,
@@ -584,7 +663,7 @@ impl Tool for AgentTool {
             let config_bg = query_config.clone();
             let cost_tracker_bg = ctx.cost_tracker.clone();
             let description_bg = params.description.clone();
-            let prompt_bg = params.prompt.clone();
+            let prompt_bg = effective_prompt.clone();
             let agent_id_bg = agent_id.clone();
 
             tokio::spawn(async move {
@@ -654,7 +733,7 @@ impl Tool for AgentTool {
         // -----------------------------------------------------------------------
         // Synchronous mode: run the sub-agent loop and wait for completion.
         // -----------------------------------------------------------------------
-        let mut messages = vec![Message::user(params.prompt)];
+        let mut messages = vec![Message::user(effective_prompt)];
         // Derive the sub-agent's token as a CHILD of the parent's so a parent
         // cancel propagates into this sub-agent's own run_query_loop (issue #218).
         let cancel = ctx.cancel_token.child_token();
@@ -737,6 +816,97 @@ impl Tool for AgentTool {
                 "Sub-agent stopped: budget ${:.4} exceeded (limit ${:.4})",
                 cost_usd, limit_usd
             )),
+        }
+    }
+}
+
+/// Validate a batch and turn each task into a labelled single-agent input.
+///
+/// The shared `context` is written onto every task, so the spawn path reads it
+/// the same way it reads a single spawn's context. A name given twice is an
+/// error, and a task that is not an object is an error, both reported before
+/// any agent starts. Each task is returned with the label the result block
+/// carries: its name, or its description when it has no name.
+fn prepare_batch_tasks(
+    context: Option<&str>,
+    tasks: Vec<Value>,
+) -> Result<Vec<(String, Value)>, String> {
+    if tasks.is_empty() {
+        return Err("tasks must name at least one agent".to_string());
+    }
+
+    // Refuse a name two tasks share, before preparing anything.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for task in &tasks {
+        if let Some(name) = task.get("name").and_then(Value::as_str) {
+            if !seen.insert(name) {
+                return Err(format!(
+                    "two tasks share the name {name:?}; names must be unique within a batch"
+                ));
+            }
+        }
+    }
+
+    let shared = context.map(str::trim).filter(|context| !context.is_empty());
+    let mut prepared: Vec<(String, Value)> = Vec::with_capacity(tasks.len());
+    for (index, mut task) in tasks.into_iter().enumerate() {
+        let Some(object) = task.as_object_mut() else {
+            return Err(format!("task {index} is not an object"));
+        };
+        // A batch task never nests another batch.
+        object.remove("tasks");
+        if let Some(shared) = shared {
+            object.insert("context".to_string(), Value::String(shared.to_string()));
+        }
+        let label = object
+            .get("name")
+            .and_then(Value::as_str)
+            .or_else(|| object.get("description").and_then(Value::as_str))
+            .unwrap_or("agent")
+            .to_string();
+        prepared.push((label, task));
+    }
+    Ok(prepared)
+}
+
+impl AgentTool {
+    /// Spawn a batch of agents from a single `tasks` array.
+    ///
+    /// A batch is exactly N single spawns: every task is turned into its own
+    /// single-agent input and run through `execute`, with the shared `context`
+    /// prepended to each prompt. A name given twice in the batch is refused
+    /// before any agent starts, so the caller learns of the collision instead
+    /// of getting two agents fighting over one address.
+    async fn spawn_batch(&self, input: Value, ctx: &ToolContext) -> ToolResult {
+        let batch: BatchInput = match serde_json::from_value(input) {
+            Ok(batch) => batch,
+            Err(error) => return ToolResult::error(format!("Invalid batch input: {error}")),
+        };
+        let prepared = match prepare_batch_tasks(batch.context.as_deref(), batch.tasks) {
+            Ok(prepared) => prepared,
+            Err(error) => return ToolResult::error(error),
+        };
+
+        // Fan out; each task runs the same single-spawn path concurrently.
+        let running = prepared.into_iter().map(|(label, task)| async move {
+            let result = self.execute(task, ctx).await;
+            (label, result)
+        });
+        let results = futures::future::join_all(running).await;
+
+        // One block per agent, in task order, labelled by name or description.
+        let any_error = results.iter().any(|(_, result)| result.is_error);
+        let mut body = String::new();
+        for (label, result) in &results {
+            if !body.is_empty() {
+                body.push_str("\n\n");
+            }
+            body.push_str(&format!("=== {label} ===\n{}", result.content));
+        }
+        if any_error {
+            ToolResult::error(body)
+        } else {
+            ToolResult::success(body)
         }
     }
 }
@@ -838,6 +1008,8 @@ pub fn init_team_swarm_runner() {
                         system_prompt: system.clone(),
                         max_turns,
                         model: None,
+                        effort: None,
+                        context: None,
                         isolation: None,
                         run_in_background: false,
                     },
@@ -1231,5 +1403,78 @@ pub(crate) mod tests {
             subagent_model_for(&config, None),
             "openrouter/anthropic/claude-sonnet-4"
         );
+    }
+
+    /// The shared context is the whole point of a batch: it must sit above
+    /// each task's prompt without the caller repeating it in every task.
+    #[test]
+    fn a_shared_context_prefixes_the_prompt() {
+        assert_eq!(
+            with_context(Some("background"), "do the thing"),
+            "background\n\ndo the thing"
+        );
+    }
+
+    /// No context, or a blank one, leaves the prompt exactly as it was, so an
+    /// empty preamble does not push a stray blank line above the task.
+    #[test]
+    fn no_context_leaves_the_prompt_alone() {
+        assert_eq!(with_context(None, "do the thing"), "do the thing");
+        assert_eq!(with_context(Some("   "), "do the thing"), "do the thing");
+    }
+
+    /// The batch writes the shared context onto every task, so the spawn path
+    /// reads it the same way it reads a single spawn's own context.
+    #[test]
+    fn a_batch_injects_the_shared_context_into_each_task() {
+        let tasks = vec![
+            json!({ "description": "one", "prompt": "first" }),
+            json!({ "description": "two", "prompt": "second" }),
+        ];
+        let prepared =
+            prepare_batch_tasks(Some("shared background"), tasks).expect("batch is valid");
+
+        assert_eq!(prepared.len(), 2);
+        for (_, task) in &prepared {
+            assert_eq!(
+                task.get("context").and_then(Value::as_str),
+                Some("shared background")
+            );
+        }
+    }
+
+    /// The label a result block carries is the task's name, or its description
+    /// when no name was given, so the caller can tell the agents apart.
+    #[test]
+    fn a_batch_labels_each_task_by_name_then_description() {
+        let tasks = vec![
+            json!({ "name": "scout", "description": "one", "prompt": "first" }),
+            json!({ "description": "the second job", "prompt": "second" }),
+        ];
+        let prepared = prepare_batch_tasks(None, tasks).expect("batch is valid");
+
+        assert_eq!(prepared[0].0, "scout");
+        assert_eq!(prepared[1].0, "the second job");
+    }
+
+    /// Two agents at one address would fight over every message sent to it, so
+    /// a name given twice fails the whole batch before any agent starts.
+    #[test]
+    fn a_batch_refuses_a_repeated_name() {
+        let tasks = vec![
+            json!({ "name": "scout", "description": "one", "prompt": "first" }),
+            json!({ "name": "scout", "description": "two", "prompt": "second" }),
+        ];
+        let error = prepare_batch_tasks(None, tasks).expect_err("the clash must be refused");
+
+        assert!(error.contains("unique within a batch"), "{error}");
+    }
+
+    /// An empty task list is a caller mistake, not an empty success, so it is
+    /// reported rather than fanning out to nothing.
+    #[test]
+    fn a_batch_refuses_an_empty_task_list() {
+        let error = prepare_batch_tasks(Some("ctx"), vec![]).expect_err("empty must be refused");
+        assert!(error.contains("at least one agent"), "{error}");
     }
 }

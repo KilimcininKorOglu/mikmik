@@ -11,6 +11,7 @@ pub mod brew;
 pub mod cisa_kev;
 pub mod clojars;
 pub mod crates_io;
+pub mod devto;
 pub mod dockerhub;
 pub mod hackernews;
 pub mod hex;
@@ -61,6 +62,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(hackernews::HackerNewsHandler),
         Box::new(reddit::RedditHandler),
         Box::new(terraform::TerraformHandler),
+        Box::new(devto::DevToHandler),
         Box::new(cisa_kev::CisaKevHandler),
         Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),

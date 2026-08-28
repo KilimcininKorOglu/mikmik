@@ -7,9 +7,11 @@
 // web-fetch path.
 
 pub mod cisa_kev;
+pub mod clojars;
 pub mod crates_io;
 pub mod hex;
 pub mod maven;
+pub mod metacpan;
 pub mod npm;
 pub mod nuget;
 pub mod nvd;
@@ -45,6 +47,8 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(nuget::NuGetHandler),
         Box::new(packagist::PackagistHandler),
         Box::new(pub_dev::PubDevHandler),
+        Box::new(metacpan::MetaCpanHandler),
+        Box::new(clojars::ClojarsHandler),
         Box::new(cisa_kev::CisaKevHandler),
         Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),

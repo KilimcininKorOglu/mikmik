@@ -10,6 +10,7 @@ pub mod aur;
 pub mod brew;
 pub mod cisa_kev;
 pub mod clojars;
+pub mod coingecko;
 pub mod crates_io;
 pub mod devto;
 pub mod dockerhub;
@@ -69,6 +70,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(devto::DevToHandler),
         Box::new(huggingface::HuggingFaceHandler),
         Box::new(openlibrary::OpenLibraryHandler),
+        Box::new(coingecko::CoinGeckoHandler),
         Box::new(cisa_kev::CisaKevHandler),
         Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),

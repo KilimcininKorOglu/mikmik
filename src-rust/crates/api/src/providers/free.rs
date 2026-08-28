@@ -39,6 +39,14 @@ use crate::provider_types::{
 // Catalog
 // ---------------------------------------------------------------------------
 
+/// Limits reported for a free upstream the models.dev catalogue does not cover.
+///
+/// Last resort only: an upstream the catalogue knows reports its own figures,
+/// because these two were once sent for every model and understated a
+/// 204 800-token window as 128 000.
+const DEFAULT_CONTEXT_WINDOW: u32 = 128_000;
+const DEFAULT_MAX_OUTPUT: u32 = 8_192;
+
 /// One upstream provider in the free-mode chain.
 ///
 /// `id` is the canonical mikmik `ProviderId` string — the auth store key the
@@ -367,30 +375,50 @@ impl LlmProvider for FreeProvider {
 
     async fn discover_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
         let provider_id = self.id.clone();
-        let mk = |id: &str, name: &str, ctx: u32| ModelInfo {
+        let mk = |id: &str, name: &str, ctx: u32, max_out: u32| ModelInfo {
             id: ModelId::new(id),
             provider_id: provider_id.clone(),
             name: name.to_string(),
             context_window: ctx,
-            max_output_tokens: 8_192,
+            max_output_tokens: max_out,
             ..Default::default()
         };
 
+        // `free/auto` names no single model — it round-robins the whole chain —
+        // so it keeps a fixed window rather than borrowing one upstream's.
         let mut models = vec![mk(
             "free/auto",
             "Free \u{2014} Auto (round-robin across configured providers)",
             200_000,
+            DEFAULT_MAX_OUTPUT,
         )];
+
+        // Each pinned entry names one real upstream model, so its limits come
+        // from the catalogue. Reporting the same 128k/8k for every upstream sent
+        // the wrong denominator to the /model picker, which shows this figure.
+        let registry = crate::ModelRegistry::new();
 
         for entry in &self.chain {
             let label = format!(
                 "{} \u{2014} {}",
                 entry.upstream.title, entry.upstream.default_model
             );
+            let known = registry.get(entry.upstream.id, entry.upstream.default_model);
+            // A zero limit is the catalogue saying it does not know, so the
+            // fallback stands in for it.
+            let ctx = known
+                .map(|e| e.info.context_window)
+                .filter(|w| *w > 0)
+                .unwrap_or(DEFAULT_CONTEXT_WINDOW);
+            let max_out = known
+                .map(|e| e.info.max_output_tokens)
+                .filter(|m| *m > 0)
+                .unwrap_or(DEFAULT_MAX_OUTPUT);
             models.push(mk(
                 &format!("{}/{}", entry.upstream.id, entry.upstream.default_model),
                 &label,
-                128_000,
+                ctx,
+                max_out,
             ));
         }
 
@@ -673,5 +701,58 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ProviderError::AuthFailed { .. }));
+    }
+
+    /// The /model picker prints this window, so a pinned upstream has to report
+    /// the catalogue's figure rather than one constant for every model.
+    #[tokio::test]
+    async fn a_pinned_upstream_reports_the_catalogues_limits() {
+        let registry = crate::ModelRegistry::new();
+        // Pick an upstream the catalogue actually covers with a window that is
+        // not the fallback, so the assertion can tell the two apart.
+        let Some((upstream_id, expected_ctx, expected_out)) = FREE_CATALOG.iter().find_map(|u| {
+            let e = registry.get(u.id, u.default_model)?;
+            let ctx = e.info.context_window;
+            let out = e.info.max_output_tokens;
+            (ctx > 0 && ctx != DEFAULT_CONTEXT_WINDOW && out > 0).then_some((u.id, ctx, out))
+        }) else {
+            // Nothing to measure against; the fallback test below still applies.
+            return;
+        };
+
+        let provider = FreeProvider::new(vec![entry(upstream_id, true)]);
+        let models = provider.discover_models().await.expect("models");
+        let pinned = models
+            .iter()
+            .find(|m| m.id.to_string().starts_with(&format!("{upstream_id}/")))
+            .expect("the pinned entry is listed");
+
+        assert_eq!(
+            pinned.context_window, expected_ctx,
+            "{upstream_id} must report the catalogue window, not the fallback"
+        );
+        assert_eq!(pinned.max_output_tokens, expected_out);
+    }
+
+    #[tokio::test]
+    async fn an_upstream_the_catalogue_misses_keeps_the_fallback() {
+        let registry = crate::ModelRegistry::new();
+        let Some(upstream_id) = FREE_CATALOG
+            .iter()
+            .find(|u| registry.get(u.id, u.default_model).is_none())
+            .map(|u| u.id)
+        else {
+            return;
+        };
+
+        let provider = FreeProvider::new(vec![entry(upstream_id, true)]);
+        let models = provider.discover_models().await.expect("models");
+        let pinned = models
+            .iter()
+            .find(|m| m.id.to_string().starts_with(&format!("{upstream_id}/")))
+            .expect("the pinned entry is listed");
+
+        assert_eq!(pinned.context_window, DEFAULT_CONTEXT_WINDOW);
+        assert_eq!(pinned.max_output_tokens, DEFAULT_MAX_OUTPUT);
     }
 }

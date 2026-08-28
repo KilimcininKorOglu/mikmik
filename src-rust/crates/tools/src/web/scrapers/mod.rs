@@ -6,7 +6,9 @@
 // non-`None` result; a URL no handler claims falls through to the generic
 // web-fetch path.
 
+pub mod crates_io;
 pub mod npm;
+pub mod pypi;
 pub mod util;
 
 use async_trait::async_trait;
@@ -23,8 +25,13 @@ pub trait SpecialHandler: Send + Sync {
 
 /// The registered handlers, tried in order. Ordering mirrors omp's
 /// `specialHandlers[]`: more specific hosts precede broader ones.
-static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> =
-    Lazy::new(|| vec![Box::new(npm::NpmHandler) as Box<dyn SpecialHandler>]);
+static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
+    vec![
+        Box::new(npm::NpmHandler) as Box<dyn SpecialHandler>,
+        Box::new(pypi::PypiHandler),
+        Box::new(crates_io::CratesIoHandler),
+    ]
+});
 
 /// Try each handler in turn; the first to claim `url` wins.
 pub async fn dispatch(url: &str, timeout: Duration) -> Option<RenderResult> {

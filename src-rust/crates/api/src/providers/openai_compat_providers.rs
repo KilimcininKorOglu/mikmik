@@ -51,8 +51,122 @@ pub fn provider_for_id(provider_id: &str) -> Option<OpenAiCompatProvider> {
         "synthetic" => Some(synthetic()),
         "routing" => Some(routing()),
         "neuralwatt" => Some(neuralwatt()),
+        "meta" => Some(meta()),
+        "coreweave" => Some(coreweave()),
+        "sakana" => Some(sakana()),
+        "gmi-cloud" => Some(gmi_cloud()),
+        "nanogpt" => Some(nanogpt()),
+        "zenmux" => Some(zenmux()),
+        "vercel-ai-gateway" => Some(vercel_ai_gateway()),
+        "umans" => Some(umans()),
+        "qianfan" => Some(qianfan()),
+        "wafer-serverless" => Some(wafer_serverless()),
         _ => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// omp-parity API-key providers (OpenAI-compatible)
+// ---------------------------------------------------------------------------
+
+/// Meta Model API.  Reads `META_API_KEY`.
+pub fn meta() -> OpenAiCompatProvider {
+    let key = std::env::var("META_API_KEY").unwrap_or_default();
+    OpenAiCompatProvider::new(ProviderId::META, "Meta Model API", "https://api.meta.ai/v1")
+        .with_api_key(key)
+}
+
+/// CoreWeave Serverless Inference (Weights & Biases).  Reads `WANDB_API_KEY`.
+pub fn coreweave() -> OpenAiCompatProvider {
+    let key = std::env::var("WANDB_API_KEY").unwrap_or_default();
+    OpenAiCompatProvider::new(
+        ProviderId::COREWEAVE,
+        "CoreWeave Serverless Inference",
+        "https://api.inference.wandb.ai/v1",
+    )
+    .with_api_key(key)
+}
+
+/// Sakana AI.  Reads `SAKANA_API_KEY`.
+pub fn sakana() -> OpenAiCompatProvider {
+    let key = std::env::var("SAKANA_API_KEY").unwrap_or_default();
+    OpenAiCompatProvider::new(ProviderId::SAKANA, "Sakana AI", "https://api.sakana.ai/v1")
+        .with_api_key(key)
+}
+
+/// GMI Cloud Serverless Inference.  Reads `GMI_CLOUD_API_KEY`.
+pub fn gmi_cloud() -> OpenAiCompatProvider {
+    let key = std::env::var("GMI_CLOUD_API_KEY").unwrap_or_default();
+    OpenAiCompatProvider::new(
+        ProviderId::GMI_CLOUD,
+        "GMI Cloud",
+        "https://api.gmi-serving.com/v1",
+    )
+    .with_api_key(key)
+}
+
+/// NanoGPT.  Reads `NANOGPT_API_KEY`.
+pub fn nanogpt() -> OpenAiCompatProvider {
+    let key = std::env::var("NANOGPT_API_KEY").unwrap_or_default();
+    OpenAiCompatProvider::new(
+        ProviderId::NANOGPT,
+        "NanoGPT",
+        "https://nano-gpt.com/api/v1",
+    )
+    .with_api_key(key)
+}
+
+/// ZenMux.  Reads `ZENMUX_API_KEY`.
+pub fn zenmux() -> OpenAiCompatProvider {
+    let key = std::env::var("ZENMUX_API_KEY").unwrap_or_default();
+    OpenAiCompatProvider::new(ProviderId::ZENMUX, "ZenMux", "https://zenmux.ai/api/v1")
+        .with_api_key(key)
+}
+
+/// Vercel AI Gateway.  Reads `AI_GATEWAY_API_KEY`.
+pub fn vercel_ai_gateway() -> OpenAiCompatProvider {
+    let key = std::env::var("AI_GATEWAY_API_KEY").unwrap_or_default();
+    OpenAiCompatProvider::new(
+        ProviderId::VERCEL_AI_GATEWAY,
+        "Vercel AI Gateway",
+        "https://ai-gateway.vercel.sh/v1",
+    )
+    .with_api_key(key)
+}
+
+/// Umans AI Coding Plan.  Reads `UMANS_API_KEY`.
+pub fn umans() -> OpenAiCompatProvider {
+    let key = std::env::var("UMANS_API_KEY").unwrap_or_default();
+    OpenAiCompatProvider::new(
+        ProviderId::UMANS,
+        "Umans AI Coding Plan",
+        "https://api.code.umans.ai",
+    )
+    .with_api_key(key)
+}
+
+/// Baidu Qianfan.  Reads `QIANFAN_API_KEY`.
+pub fn qianfan() -> OpenAiCompatProvider {
+    let key = std::env::var("QIANFAN_API_KEY").unwrap_or_default();
+    OpenAiCompatProvider::new(
+        ProviderId::QIANFAN,
+        "Qianfan",
+        "https://qianfan.baidubce.com/v2",
+    )
+    .with_api_key(key)
+}
+
+/// Wafer Serverless (pay-as-you-go).  Reads `WAFER_API_KEY` (keys use a
+/// `wfr_` prefix).  Its login is interactive upstream, but the endpoint is a
+/// plain OpenAI-compatible SKU, so a pasted key is enough.
+pub fn wafer_serverless() -> OpenAiCompatProvider {
+    let key = std::env::var("WAFER_API_KEY").unwrap_or_default();
+    OpenAiCompatProvider::new(
+        ProviderId::WAFER_SERVERLESS,
+        "Wafer Serverless",
+        "https://pass.wafer.ai/v1",
+    )
+    .with_api_key(key)
 }
 
 // ---------------------------------------------------------------------------
@@ -690,5 +804,80 @@ mod tests {
         let _host = HostGuard::set(Some("http://mac.local:9000/"));
 
         assert_eq!(mlx_lm().base_url(), "http://mac.local:9000/v1");
+    }
+
+    /// Every omp-parity API-key provider must resolve through `provider_for_id`
+    /// and carry its own id and base URL, or the connect dialog offers an entry
+    /// no request can reach.
+    #[test]
+    fn omp_parity_api_key_providers_resolve_with_their_own_base_urls() {
+        let cases = [
+            ("meta", ProviderId::META, "https://api.meta.ai/v1"),
+            (
+                "coreweave",
+                ProviderId::COREWEAVE,
+                "https://api.inference.wandb.ai/v1",
+            ),
+            ("sakana", ProviderId::SAKANA, "https://api.sakana.ai/v1"),
+            (
+                "gmi-cloud",
+                ProviderId::GMI_CLOUD,
+                "https://api.gmi-serving.com/v1",
+            ),
+            (
+                "nanogpt",
+                ProviderId::NANOGPT,
+                "https://nano-gpt.com/api/v1",
+            ),
+            ("zenmux", ProviderId::ZENMUX, "https://zenmux.ai/api/v1"),
+            (
+                "vercel-ai-gateway",
+                ProviderId::VERCEL_AI_GATEWAY,
+                "https://ai-gateway.vercel.sh/v1",
+            ),
+            ("umans", ProviderId::UMANS, "https://api.code.umans.ai"),
+            (
+                "qianfan",
+                ProviderId::QIANFAN,
+                "https://qianfan.baidubce.com/v2",
+            ),
+            (
+                "wafer-serverless",
+                ProviderId::WAFER_SERVERLESS,
+                "https://pass.wafer.ai/v1",
+            ),
+        ];
+        for (id, expected_id, expected_base) in cases {
+            let provider = provider_for_id(id).unwrap_or_else(|| panic!("{id} should resolve"));
+            assert_eq!(&**provider.id(), expected_id, "{id} carries the wrong id");
+            assert_eq!(
+                provider.base_url(),
+                expected_base,
+                "{id} carries the wrong base URL"
+            );
+        }
+    }
+
+    /// Each new provider id must be in `WELL_KNOWN`, or `Config::resolve_route`
+    /// reads `<id>/model` as a model name rather than an account prefix.
+    #[test]
+    fn omp_parity_ids_are_well_known_account_prefixes() {
+        for id in [
+            ProviderId::META,
+            ProviderId::COREWEAVE,
+            ProviderId::SAKANA,
+            ProviderId::GMI_CLOUD,
+            ProviderId::NANOGPT,
+            ProviderId::ZENMUX,
+            ProviderId::VERCEL_AI_GATEWAY,
+            ProviderId::UMANS,
+            ProviderId::QIANFAN,
+            ProviderId::WAFER_SERVERLESS,
+        ] {
+            assert!(
+                ProviderId::is_well_known(id),
+                "{id} must be a well-known account prefix"
+            );
+        }
     }
 }

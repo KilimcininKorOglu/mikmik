@@ -88,6 +88,17 @@ impl ProviderId {
     pub const ROUTING: &'static str = "routing";
     pub const NEURALWATT: &'static str = "neuralwatt";
     pub const FREE: &'static str = "free";
+    // omp-parity API-key providers.
+    pub const META: &'static str = "meta";
+    pub const COREWEAVE: &'static str = "coreweave";
+    pub const SAKANA: &'static str = "sakana";
+    pub const GMI_CLOUD: &'static str = "gmi-cloud";
+    pub const NANOGPT: &'static str = "nanogpt";
+    pub const ZENMUX: &'static str = "zenmux";
+    pub const VERCEL_AI_GATEWAY: &'static str = "vercel-ai-gateway";
+    pub const UMANS: &'static str = "umans";
+    pub const QIANFAN: &'static str = "qianfan";
+    pub const WAFER_SERVERLESS: &'static str = "wafer-serverless";
 
     /// Every provider id mikmik ships with, including the spelling aliases
     /// users type (`lmstudio` for `lm-studio`, `zhipu` for `zhipuai`, …).
@@ -151,6 +162,16 @@ impl ProviderId {
         Self::ROUTING,
         Self::NEURALWATT,
         Self::FREE,
+        Self::META,
+        Self::COREWEAVE,
+        Self::SAKANA,
+        Self::GMI_CLOUD,
+        Self::NANOGPT,
+        Self::ZENMUX,
+        Self::VERCEL_AI_GATEWAY,
+        Self::UMANS,
+        Self::QIANFAN,
+        Self::WAFER_SERVERLESS,
         // Spelling aliases accepted on the wire but not canonical ids.
         "openai-codex",
         "lmstudio",

@@ -4533,6 +4533,8 @@ dependencies = [
  "which",
  "windows 0.62.2",
  "xcap",
+ "zbus",
+ "zvariant",
 ]
 
 [[package]]

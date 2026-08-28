@@ -77,5 +77,13 @@ windows = { version = "0.62", features = [
     "Win32_UI_Accessibility",
 ] }
 
+# The accessibility backend in `computer_script/ax/linux.rs` reaches AT-SPI2
+# over D-Bus. `zbus` blocking is used directly rather than the async `atspi`
+# crate, because the backend trait is synchronous and the bridge already runs
+# it on a blocking thread. Both crates are already in the tree via `xcap`.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", features = ["blocking"] }
+zvariant = "5"
+
 [features]
 computer-use = ["dep:enigo", "dep:xcap", "dep:image"]

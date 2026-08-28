@@ -26,10 +26,60 @@ struct WebSearchInput {
     query: String,
     #[serde(default = "default_num_results")]
     num_results: usize,
+    /// How recent a result has to be, as `day`, `week`, `month` or `year`.
+    #[serde(default)]
+    recency: Option<String>,
 }
 
 fn default_num_results() -> usize {
     5
+}
+
+/// How far back a search may reach.
+///
+/// One shape the tool understands, mapped to each backend's own parameter, so
+/// the model names a window once and every backend that has one honours it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Recency {
+    Day,
+    Week,
+    Month,
+    Year,
+}
+
+impl Recency {
+    /// Parse the model's word, or say which words are allowed.
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "day" => Ok(Self::Day),
+            "week" => Ok(Self::Week),
+            "month" => Ok(Self::Month),
+            "year" => Ok(Self::Year),
+            other => Err(format!(
+                "recency must be one of day, week, month or year, not {other:?}"
+            )),
+        }
+    }
+
+    /// Brave's `freshness` code.
+    fn brave_freshness(self) -> &'static str {
+        match self {
+            Self::Day => "pd",
+            Self::Week => "pw",
+            Self::Month => "pm",
+            Self::Year => "py",
+        }
+    }
+
+    /// SearXNG's `time_range` value, which is the same word the model gave.
+    fn searxng_time_range(self) -> &'static str {
+        match self {
+            Self::Day => "day",
+            Self::Week => "week",
+            Self::Month => "month",
+            Self::Year => "year",
+        }
+    }
 }
 
 #[async_trait]
@@ -60,6 +110,11 @@ impl Tool for WebSearchTool {
                 "num_results": {
                     "type": "number",
                     "description": "Number of results to return (default: 5, max: 20)"
+                },
+                "recency": {
+                    "type": "string",
+                    "enum": ["day", "week", "month", "year"],
+                    "description": "Only return results from within this window. Honoured by SearXNG and Brave; DuckDuckGo ignores it and says so."
                 }
             },
             "required": ["query"]
@@ -73,7 +128,11 @@ impl Tool for WebSearchTool {
         };
 
         let num_results = params.num_results.clamp(1, MAX_NUM_RESULTS);
-        debug!(query = %params.query, num_results, "Web search");
+        let recency = match params.recency.as_deref().map(Recency::parse).transpose() {
+            Ok(recency) => recency,
+            Err(error) => return ToolResult::error(error),
+        };
+        debug!(query = %params.query, num_results, ?recency, "Web search");
 
         let brave_key = std::env::var("BRAVE_SEARCH_API_KEY")
             .ok()
@@ -82,7 +141,7 @@ impl Tool for WebSearchTool {
         // SearXNG is only tried when the user named an instance. Its failure
         // hands over to the next backend only if the operator asked for that.
         if let Some(base) = searxng_base_url(ctx.config.searxng_url.as_deref()) {
-            let error = match search_searxng(&params.query, num_results, &base).await {
+            let error = match search_searxng(&params.query, num_results, &base, recency).await {
                 Ok(result) => return result,
                 Err(e) => e,
             };
@@ -90,19 +149,19 @@ impl Tool for WebSearchTool {
                 NextBackend::Stop(error) => ToolResult::error(error),
                 NextBackend::Brave(api_key) => {
                     warn!("SearXNG unreachable, falling back to Brave Search");
-                    let result = search_brave(&params.query, num_results, &api_key).await;
+                    let result = search_brave(&params.query, num_results, &api_key, recency).await;
                     label_fallback("Brave Search", result)
                 }
                 NextBackend::DuckDuckGo => {
                     warn!("SearXNG unreachable, falling back to DuckDuckGo");
-                    let result = search_duckduckgo(&params.query, num_results).await;
+                    let result = search_duckduckgo(&params.query, num_results, recency).await;
                     label_fallback("DuckDuckGo", result)
                 }
             }
         } else if let Some(api_key) = brave_key {
-            search_brave(&params.query, num_results, &api_key).await
+            search_brave(&params.query, num_results, &api_key, recency).await
         } else {
-            search_duckduckgo(&params.query, num_results).await
+            search_duckduckgo(&params.query, num_results, recency).await
         }
     }
 }
@@ -166,18 +225,19 @@ fn label_fallback(backend: &str, mut result: ToolResult) -> ToolResult {
 ///
 /// Returns `Err` with a human-readable reason when the instance cannot answer,
 /// so the caller can decide between reporting it and moving to another backend.
-async fn search_searxng(query: &str, num_results: usize, base: &str) -> Result<ToolResult, String> {
+async fn search_searxng(
+    query: &str,
+    num_results: usize,
+    base: &str,
+    recency: Option<Recency>,
+) -> Result<ToolResult, String> {
     // A self-hosted SearXNG instance can be slow or unreachable; bound the
     // request so the tool can't hang the turn.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(|e| format!("Could not build the SearXNG HTTP client: {}", e))?;
-    let url = format!(
-        "{}/search?q={}&format=json&safesearch=0",
-        base.trim_end_matches('/'),
-        urlencoding_simple(query)
-    );
+    let url = searxng_url(base, query, recency);
 
     let resp = client
         .get(&url)
@@ -243,13 +303,14 @@ fn format_searxng_results(data: &Value, max: usize) -> String {
 }
 
 /// Search using the Brave Search API.
-async fn search_brave(query: &str, num_results: usize, api_key: &str) -> ToolResult {
+async fn search_brave(
+    query: &str,
+    num_results: usize,
+    api_key: &str,
+    recency: Option<Recency>,
+) -> ToolResult {
     let client = reqwest::Client::new();
-    let url = format!(
-        "https://api.search.brave.com/res/v1/web/search?q={}&count={}",
-        urlencoding_simple(query),
-        num_results
-    );
+    let url = brave_url(query, num_results, recency);
 
     let resp = match client
         .get(&url)
@@ -314,7 +375,11 @@ fn format_brave_results(data: &Value, max: usize) -> String {
 
 /// Fallback: DuckDuckGo Instant Answer API.
 /// Note: this doesn't return full search results, only instant answers.
-async fn search_duckduckgo(query: &str, num_results: usize) -> ToolResult {
+async fn search_duckduckgo(
+    query: &str,
+    num_results: usize,
+    recency: Option<Recency>,
+) -> ToolResult {
     let client = reqwest::Client::new();
     let url = format!(
         "https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1",
@@ -341,8 +406,44 @@ async fn search_duckduckgo(query: &str, num_results: usize) -> ToolResult {
         Err(e) => return ToolResult::error(format!("Failed to parse response: {}", e)),
     };
 
-    let output = format_ddg_results(&data, num_results);
+    let output = ddg_recency_note(format_ddg_results(&data, num_results), recency);
     ToolResult::success(output)
+}
+
+/// The SearXNG search URL, carrying `time_range` when a window was asked for.
+fn searxng_url(base: &str, query: &str, recency: Option<Recency>) -> String {
+    let time_range = recency
+        .map(|recency| format!("&time_range={}", recency.searxng_time_range()))
+        .unwrap_or_default();
+    format!(
+        "{}/search?q={}&format=json&safesearch=0{time_range}",
+        base.trim_end_matches('/'),
+        urlencoding_simple(query)
+    )
+}
+
+/// The Brave search URL, carrying `freshness` when a window was asked for.
+fn brave_url(query: &str, num_results: usize, recency: Option<Recency>) -> String {
+    let freshness = recency
+        .map(|recency| format!("&freshness={}", recency.brave_freshness()))
+        .unwrap_or_default();
+    format!(
+        "https://api.search.brave.com/res/v1/web/search?q={}&count={}{freshness}",
+        urlencoding_simple(query),
+        num_results
+    )
+}
+
+/// Prefix a note when DuckDuckGo could not honour a recency the model asked
+/// for, because its Instant Answer API has no recency parameter.
+fn ddg_recency_note(output: String, recency: Option<Recency>) -> String {
+    match recency {
+        Some(_) => format!(
+            "Note: DuckDuckGo's Instant Answer API has no recency filter, so the results below \
+             are not limited to the window you asked for.\n\n{output}"
+        ),
+        None => output,
+    }
 }
 
 fn format_ddg_results(data: &Value, max: usize) -> String {
@@ -447,6 +548,59 @@ mod tests {
             "suggestions": [],
             "unresponsive_engines": []
         })
+    }
+
+    #[test]
+    fn recency_parses_the_four_words_and_rejects_the_rest() {
+        assert_eq!(Recency::parse("day"), Ok(Recency::Day));
+        assert_eq!(Recency::parse("week"), Ok(Recency::Week));
+        assert_eq!(Recency::parse("month"), Ok(Recency::Month));
+        assert_eq!(Recency::parse("year"), Ok(Recency::Year));
+        assert!(Recency::parse("hour").is_err());
+        assert!(Recency::parse("").is_err());
+    }
+
+    #[test]
+    fn each_backend_gets_its_own_recency_word() {
+        // The three backends name the same window differently; a wrong mapping
+        // sends a code the backend does not understand and silently drops the
+        // filter.
+        assert_eq!(Recency::Day.brave_freshness(), "pd");
+        assert_eq!(Recency::Week.brave_freshness(), "pw");
+        assert_eq!(Recency::Month.brave_freshness(), "pm");
+        assert_eq!(Recency::Year.brave_freshness(), "py");
+        assert_eq!(Recency::Month.searxng_time_range(), "month");
+    }
+
+    #[test]
+    fn a_recency_reaches_the_searxng_and_brave_urls() {
+        let searxng = searxng_url("http://searx.example", "rust", Some(Recency::Week));
+        assert!(searxng.contains("&time_range=week"), "{searxng}");
+
+        let brave = brave_url("rust", 5, Some(Recency::Day));
+        assert!(brave.contains("&freshness=pd"), "{brave}");
+    }
+
+    #[test]
+    fn no_recency_leaves_the_urls_without_a_window() {
+        let searxng = searxng_url("http://searx.example", "rust", None);
+        assert!(!searxng.contains("time_range"), "{searxng}");
+
+        let brave = brave_url("rust", 5, None);
+        assert!(!brave.contains("freshness"), "{brave}");
+    }
+
+    #[test]
+    fn duckduckgo_says_it_could_not_honour_a_recency() {
+        // DuckDuckGo's Instant Answer API has no recency parameter, so a window
+        // the model asked for was dropped; the note keeps that from reading as
+        // an applied filter.
+        let noted = ddg_recency_note("body".to_string(), Some(Recency::Year));
+        assert!(noted.contains("no recency filter"), "{noted}");
+        assert!(noted.contains("body"), "{noted}");
+
+        let plain = ddg_recency_note("body".to_string(), None);
+        assert_eq!(plain, "body");
     }
 
     #[test]

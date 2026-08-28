@@ -9,6 +9,7 @@
 pub mod cisa_kev;
 pub mod crates_io;
 pub mod npm;
+pub mod nvd;
 pub mod osv;
 pub mod pypi;
 pub mod util;
@@ -33,6 +34,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(pypi::PypiHandler),
         Box::new(crates_io::CratesIoHandler),
         Box::new(cisa_kev::CisaKevHandler),
+        Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),
     ]
 });

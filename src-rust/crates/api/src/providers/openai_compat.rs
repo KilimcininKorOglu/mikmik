@@ -507,7 +507,14 @@ impl OpenAiCompatProvider {
             body: Some(text.clone()),
         })?;
 
-        OpenAiProvider::parse_non_streaming_response_pub(&json, &self.id)
+        let mut response = OpenAiProvider::parse_non_streaming_response_pub(&json, &self.id)?;
+        // A DeepSeek V4-family route delivers tool calls as DSML envelopes in the
+        // message text rather than as `tool_calls`; lift them out so the turn
+        // loop dispatches the tool instead of showing the user raw markup. This
+        // is the non-streaming half of the guard `OpenAiChatDecoder` applies to
+        // the streaming path (upstream issue #395).
+        response.content = crate::protocol::dsml::lift_envelopes(response.content);
+        Ok(response)
     }
 
     // -----------------------------------------------------------------------

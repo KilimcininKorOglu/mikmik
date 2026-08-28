@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use mikmik_core::types::{ContentBlock, UsageInfo};
 use serde_json::{json, Value};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::protocol::LineStreamDecoder;
 use crate::provider_types::StreamEvent;
@@ -22,6 +22,11 @@ use crate::providers::openai::OpenAiProvider;
 /// streams a `reasoning_content` field (DeepSeek V4, etc.). Chosen to avoid
 /// colliding with text (index 0) or tool calls (1 + tc_index).
 const THINKING_BLOCK_INDEX: usize = usize::MAX - 100;
+
+/// First content-block index used by a tool call recovered from a DSML envelope.
+/// Chosen far above the OpenAI-style arm's `1 + tc_index` range and below
+/// [`THINKING_BLOCK_INDEX`], so a stream carrying both kinds cannot collide.
+const DSML_BLOCK_INDEX_BASE: usize = 1 << 20;
 
 /// Streaming decoder for the OpenAI Chat Completions SSE format.
 ///
@@ -38,6 +43,12 @@ pub struct OpenAiChatDecoder {
     thinking_open: bool,
     /// Keyed by content-block index → (tool_call_id, name, accumulated_args).
     tool_call_buffers: HashMap<usize, (String, String, String)>,
+    /// Text held back because it may be the start of a DSML tool-call envelope
+    /// split across SSE chunks. See [`crate::protocol::dsml`].
+    dsml_buf: String,
+    /// How many DSML calls this stream has produced, used to mint unique tool
+    /// call ids and block indices.
+    dsml_calls_seen: usize,
 }
 
 impl OpenAiChatDecoder {
@@ -49,7 +60,90 @@ impl OpenAiChatDecoder {
             model_name: String::new(),
             thinking_open: false,
             tool_call_buffers: HashMap::new(),
+            dsml_buf: String::new(),
+            dsml_calls_seen: 0,
         }
+    }
+
+    /// Emit the events for one DSML envelope's calls.
+    ///
+    /// A DSML call arrives fully assembled, so it maps onto the same pair of
+    /// events an OpenAI-style tool call produces: a `ContentBlockStart` opening
+    /// the block and a single `InputJsonDelta` carrying the whole argument JSON.
+    /// Registering it in `tool_call_buffers` is what makes the `finish_reason`
+    /// arm close the block like any other.
+    fn emit_dsml_envelope(&mut self, envelope: &str, out: &mut Vec<StreamEvent>) {
+        let calls = match crate::protocol::dsml::parse_envelope(envelope) {
+            Ok(calls) => calls,
+            Err(e) => {
+                // The envelope is closed but unusable. Surfacing it as text is
+                // what the user would have seen before this parser existed, and
+                // it beats dropping the model's turn silently.
+                warn!("Failed to parse DSML envelope: {}; forwarding as text", e);
+                out.push(StreamEvent::TextDelta {
+                    index: 0,
+                    text: envelope.to_string(),
+                });
+                return;
+            }
+        };
+
+        // Close any open thinking block first, for the same ordering guarantee
+        // the OpenAI tool-call arm keeps.
+        if self.thinking_open {
+            out.push(StreamEvent::ContentBlockStop {
+                index: THINKING_BLOCK_INDEX,
+            });
+            self.thinking_open = false;
+        }
+
+        for call in calls {
+            // Start above every index the OpenAI-style arm may claim (1 + its
+            // own tc_index), so the two schemes cannot collide in one stream.
+            let block_index = DSML_BLOCK_INDEX_BASE + self.dsml_calls_seen;
+            let id = format!("call_dsml_{}", self.dsml_calls_seen);
+            self.dsml_calls_seen += 1;
+
+            self.tool_call_buffers
+                .insert(block_index, (id.clone(), call.name.clone(), String::new()));
+            out.push(StreamEvent::ContentBlockStart {
+                index: block_index,
+                content_block: ContentBlock::ToolUse {
+                    id,
+                    name: call.name,
+                    input: json!({}),
+                    thought_signature: None,
+                },
+            });
+            let args = call.input.to_string();
+            if let Some((_, _, buf)) = self.tool_call_buffers.get_mut(&block_index) {
+                buf.push_str(&args);
+            }
+            out.push(StreamEvent::InputJsonDelta {
+                index: block_index,
+                partial_json: args,
+            });
+        }
+    }
+
+    /// Flush any text held back mid-envelope as ordinary text.
+    ///
+    /// A stream that ends inside an envelope leaves markup in the buffer. It is
+    /// forwarded rather than dropped, because swallowing it would lose the
+    /// model's output with nothing to show for it.
+    fn flush_dsml_buf(&mut self, out: &mut Vec<StreamEvent>) {
+        if self.dsml_buf.is_empty() {
+            return;
+        }
+        let held = std::mem::take(&mut self.dsml_buf);
+        warn!(
+            bytes = held.len(),
+            "Stream ended inside a DSML envelope; forwarding the partial markup as text"
+        );
+        out.push(StreamEvent::TextDelta {
+            index: 0,
+            text: held,
+        });
     }
 
     /// Feed one SSE line. See [`LineStreamDecoder::feed_line`].
@@ -66,6 +160,9 @@ impl OpenAiChatDecoder {
         };
 
         if data == "[DONE]" {
+            // A route that ends the stream without a finish_reason can still
+            // leave envelope text held back; it belongs to the user's turn.
+            self.flush_dsml_buf(out);
             out.push(StreamEvent::MessageStop);
             return true;
         }
@@ -179,21 +276,36 @@ impl OpenAiChatDecoder {
         }
 
         // Text content delta.
+        //
+        // DeepSeek V4-family routes deliver tool calls as DSML envelopes inside
+        // this field rather than as `tool_calls`, so the text is scanned before
+        // it is forwarded: envelopes become tool calls, a fragment that may be
+        // the start of one is held for the next chunk, and everything else goes
+        // to the transcript unchanged (upstream issue #395).
         if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
             if !content.is_empty() {
-                // Close any open thinking block before visible text starts
-                // streaming, so the blocks land in order in the final message:
-                // [Thinking, Text, ToolUse...].
-                if self.thinking_open {
-                    out.push(StreamEvent::ContentBlockStop {
-                        index: THINKING_BLOCK_INDEX,
+                self.dsml_buf.push_str(content);
+                let scan = crate::protocol::dsml::scan(&self.dsml_buf);
+                self.dsml_buf = scan.hold;
+
+                if !scan.emit.is_empty() {
+                    // Close any open thinking block before visible text starts
+                    // streaming, so the blocks land in order in the final message:
+                    // [Thinking, Text, ToolUse...].
+                    if self.thinking_open {
+                        out.push(StreamEvent::ContentBlockStop {
+                            index: THINKING_BLOCK_INDEX,
+                        });
+                        self.thinking_open = false;
+                    }
+                    out.push(StreamEvent::TextDelta {
+                        index: 0,
+                        text: scan.emit,
                     });
-                    self.thinking_open = false;
                 }
-                out.push(StreamEvent::TextDelta {
-                    index: 0,
-                    text: content.to_string(),
-                });
+                for envelope in scan.envelopes {
+                    self.emit_dsml_envelope(&envelope, out);
+                }
             }
         }
 
@@ -253,6 +365,9 @@ impl OpenAiChatDecoder {
         // finish_reason.
         if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
             if !finish_reason.is_empty() && finish_reason != "null" {
+                // Anything still held mid-envelope belongs to the text block, so
+                // it must go out before that block is closed below.
+                self.flush_dsml_buf(out);
                 // Flush any still-open thinking block first so it is finalized
                 // into the assistant message.
                 if self.thinking_open {
@@ -285,6 +400,9 @@ impl OpenAiChatDecoder {
     /// Flush a trailing `MessageStop` if the stream produced any content but
     /// ended without an explicit `[DONE]` sentinel.
     pub fn finish(&mut self, out: &mut Vec<StreamEvent>) {
+        // A stream that ends without a finish_reason may still hold envelope
+        // text; forward it rather than losing it.
+        self.flush_dsml_buf(out);
         if self.message_started {
             out.push(StreamEvent::MessageStop);
         }
@@ -506,5 +624,189 @@ mod tests {
                 usage: Some(_)
             }]
         ));
+    }
+
+    // ---- DSML envelopes (issue #395) ---------------------------------------
+
+    const BAR: &str = "\u{FF5C}";
+
+    /// A complete fullwidth DSML envelope carrying one call.
+    fn dsml_envelope() -> String {
+        format!(
+            "<{BAR}DSML{BAR}tool_calls><{BAR}DSML{BAR}invoke name=\"get_weather\">\
+             <{BAR}DSML{BAR}parameter name=\"location\" string=\"true\">Paris</{BAR}DSML{BAR}parameter>\
+             </{BAR}DSML{BAR}invoke></{BAR}DSML{BAR}tool_calls>"
+        )
+    }
+
+    /// Wrap `text` as one `delta.content` SSE line.
+    fn content_line(text: &str) -> String {
+        format!(
+            "data: {}",
+            json!({
+                "id": "c",
+                "model": "deepseek-v4-pro",
+                "choices": [{ "delta": { "content": text } }]
+            })
+        )
+    }
+
+    /// Collect every text fragment the decoder forwarded.
+    fn text_of(events: &[StreamEvent]) -> String {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::TextDelta { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Collect every tool call the decoder opened, as `(name, arguments)`.
+    fn tool_calls_of(events: &[StreamEvent]) -> Vec<(String, String)> {
+        let mut calls = Vec::new();
+        for e in events {
+            if let StreamEvent::ContentBlockStart {
+                index,
+                content_block: ContentBlock::ToolUse { name, .. },
+            } = e
+            {
+                let args = events
+                    .iter()
+                    .find_map(|ev| match ev {
+                        StreamEvent::InputJsonDelta {
+                            index: i,
+                            partial_json,
+                        } if i == index => Some(partial_json.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                calls.push((name.clone(), args));
+            }
+        }
+        calls
+    }
+
+    #[test]
+    fn a_dsml_envelope_becomes_a_tool_call_and_never_reaches_the_transcript() {
+        let mut d = OpenAiChatDecoder::new(None);
+        let (out, _) = drain(&mut d, &[&content_line(&dsml_envelope())]);
+
+        let calls = tool_calls_of(&out);
+        assert_eq!(calls.len(), 1, "expected one tool call, got {calls:?}");
+        assert_eq!(calls[0].0, "get_weather");
+        assert_eq!(
+            serde_json::from_str::<Value>(&calls[0].1).expect("valid json"),
+            json!({ "location": "Paris" })
+        );
+        assert!(
+            !text_of(&out).contains("DSML"),
+            "markup leaked to the transcript: {}",
+            text_of(&out)
+        );
+    }
+
+    #[test]
+    fn two_invokes_in_one_envelope_open_two_tool_calls() {
+        let envelope = format!(
+            "<{BAR}DSML{BAR}tool_calls>\
+             <{BAR}DSML{BAR}invoke name=\"a\"></{BAR}DSML{BAR}invoke>\
+             <{BAR}DSML{BAR}invoke name=\"b\"></{BAR}DSML{BAR}invoke>\
+             </{BAR}DSML{BAR}tool_calls>"
+        );
+        let mut d = OpenAiChatDecoder::new(None);
+        let (out, _) = drain(&mut d, &[&content_line(&envelope)]);
+
+        let names: Vec<String> = tool_calls_of(&out).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn an_envelope_split_across_sse_chunks_still_produces_one_tool_call() {
+        let envelope = dsml_envelope();
+        // Split inside the fullwidth bar's bytes is impossible across a JSON
+        // string boundary, so split on char boundaries and check every one.
+        for (idx, _) in envelope.char_indices().skip(1) {
+            let (head, tail) = envelope.split_at(idx);
+            let mut d = OpenAiChatDecoder::new(None);
+            let (out, _) = drain(&mut d, &[&content_line(head), &content_line(tail)]);
+
+            let calls = tool_calls_of(&out);
+            assert_eq!(calls.len(), 1, "split at {idx} produced {calls:?}");
+            assert_eq!(calls[0].0, "get_weather");
+            assert!(
+                !text_of(&out).contains("DSML"),
+                "split at {idx} leaked: {}",
+                text_of(&out)
+            );
+        }
+    }
+
+    #[test]
+    fn narration_around_an_envelope_reaches_the_transcript() {
+        let mut d = OpenAiChatDecoder::new(None);
+        let line = content_line(&format!("Let me check. {} Done.", dsml_envelope()));
+        let (out, _) = drain(&mut d, &[&line]);
+
+        assert_eq!(text_of(&out), "Let me check.  Done.");
+        assert_eq!(tool_calls_of(&out).len(), 1);
+    }
+
+    #[test]
+    fn a_dsml_tool_call_is_closed_even_when_the_route_finishes_with_stop() {
+        // A DSML route does not know a tool was called, so it reports
+        // finish_reason "stop"; the block must still be closed.
+        let mut d = OpenAiChatDecoder::new(None);
+        let (out, _) = drain(
+            &mut d,
+            &[
+                &content_line(&dsml_envelope()),
+                r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ],
+        );
+
+        let opened: Vec<usize> = out
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ContentBlockStart {
+                    index,
+                    content_block: ContentBlock::ToolUse { .. },
+                } => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(opened.len(), 1);
+        let closed: Vec<usize> = out
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ContentBlockStop { index } => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            closed.contains(&opened[0]),
+            "tool block {} was never closed; closed = {closed:?}",
+            opened[0]
+        );
+    }
+
+    #[test]
+    fn an_unclosed_envelope_is_forwarded_as_text_rather_than_swallowed() {
+        let partial = format!("<{BAR}DSML{BAR}tool_calls><{BAR}DSML{BAR}invoke name=\"t\">");
+        let mut d = OpenAiChatDecoder::new(None);
+        let mut out = Vec::new();
+        d.feed_line(&content_line(&partial), &mut out);
+        // Nothing is emitted while the envelope may still close.
+        assert_eq!(text_of(&out), "");
+        d.finish(&mut out);
+        assert_eq!(text_of(&out), partial);
+    }
+
+    #[test]
+    fn ordinary_text_is_unaffected_by_the_dsml_guard() {
+        let mut d = OpenAiChatDecoder::new(None);
+        let (out, _) = drain(&mut d, &[&content_line("Hello"), &content_line(" world")]);
+        assert_eq!(text_of(&out), "Hello world");
+        assert!(tool_calls_of(&out).is_empty());
     }
 }

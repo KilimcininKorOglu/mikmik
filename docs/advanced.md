@@ -209,7 +209,7 @@ The goal system lets MikMik work autonomously across multiple turns toward a sin
 
 Once a goal is set, MikMik begins working immediately. It continues across turns without waiting for user input until one of these conditions is met:
 
-- The model calls `GoalComplete` with an audit summary and evidence
+- The model calls the `Goal` tool with op `complete`, an audit summary and evidence
 - You run `/goal pause` or `/goal clear`
 - The runaway guard fires (200-turn hard limit)
 - A token budget is set and exhausted
@@ -227,7 +227,7 @@ Once a goal is set, MikMik begins working immediately. It continues across turns
 
 ### How completion works
 
-When the model believes the objective has been met, it calls `GoalComplete` rather than simply responding. This tool requires two arguments:
+When the model believes the objective has been met, it calls the `Goal` tool with op `complete` rather than simply responding. That op requires two arguments:
 
 - `audit_summary` — a concise description of what was accomplished
 - `evidence` — specific, verifiable evidence (files changed, tests passing, output produced)
@@ -240,7 +240,7 @@ MikMik displays both to the user before marking the goal complete. The model is 
 |-------------|-----------------------------------------------------|
 | `Active`    | Goal is set and work is ongoing                     |
 | `Paused`    | Work paused by user; goal is preserved              |
-| `Completed` | Model called `GoalComplete` with accepted audit |
+| `Completed` | Model called the `Goal` tool's `complete` op with an accepted audit |
 | `Failed`    | Runaway guard fired or budget exhausted             |
 
 ### Disabling the goal system
@@ -249,7 +249,7 @@ MikMik displays both to the user before marking the goal complete. The model is 
 MIKMIK_GOALS=0 mikmik
 ```
 
-Set `MIKMIK_GOALS=0` in the environment to completely disable goal-related commands and the `GoalComplete`. Useful in environments where autonomous multi-turn execution is undesirable.
+Set `MIKMIK_GOALS=0` in the environment to completely disable goal-related commands and the `Goal` tool. Useful in environments where autonomous multi-turn execution is undesirable.
 
 ---
 

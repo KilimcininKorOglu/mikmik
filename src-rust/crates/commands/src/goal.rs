@@ -146,7 +146,7 @@ impl SlashCommand for GoalCommand {
                              1. Restate the objective as concrete deliverables.\n\
                              2. Check that all deliverables have been achieved.\n\
                              3. Run any tests or validation commands.\n\
-                             4. If fully complete, call GoalComplete with audit_summary and evidence.\n\
+                             4. If fully complete, call the Goal tool with op \"complete\", an audit_summary and evidence.\n\
                              5. If not complete, describe what remains.",
                             goal.objective
                         );
@@ -180,6 +180,61 @@ impl SlashCommand for GoalCommand {
                 CommandResult::UserMessage(mikmik_core::goal_kickoff_message(&goal))
             }
         }
+    }
+}
+
+// ---- /guided-goal --------------------------------------------------------
+
+/// Opens a guided conversation that ends with the model creating a goal.
+///
+/// `/goal <objective>` sets a goal from one line. `/guided-goal` is the other
+/// door: it hands the model a prompt to draw the objective, the done-condition
+/// and an optional budget out of the user first, then create the goal itself
+/// with the `Goal` tool's `create` op. That op only works while no goal exists
+/// yet, which is exactly the state this command leaves the session in.
+pub struct GuidedGoalCommand;
+
+#[async_trait]
+impl SlashCommand for GuidedGoalCommand {
+    fn name(&self) -> &str {
+        "guided-goal"
+    }
+    fn description(&self) -> &str {
+        "Draw out a goal in conversation, then let MikMik create it"
+    }
+    fn help(&self) -> &str {
+        "Usage:\n\
+         /guided-goal [rough idea]\n\n\
+         Starts a short back-and-forth: MikMik asks what the single verifiable \
+         outcome is, how you will both know it is done, and whether to cap the \
+         token budget. When the objective is clear it creates the goal itself \
+         and begins working autonomously. Use plain /goal <objective> when you \
+         already know the objective."
+    }
+
+    async fn execute(&self, args: &str, _ctx: &mut CommandContext) -> CommandResult {
+        if !mikmik_core::goals_enabled() {
+            return CommandResult::Message(
+                "Goals are disabled. Unset MIKMIK_GOALS=0 (or remove it) to re-enable.".to_string(),
+            );
+        }
+        let seed = args.trim();
+        let seed_line = if seed.is_empty() {
+            String::new()
+        } else {
+            format!("The user's rough idea:\n<idea>\n{seed}\n</idea>\n\n")
+        };
+        CommandResult::UserMessage(format!(
+            "[Guided goal setup]\n{seed_line}\
+             Help the user turn this into a durable goal. In one short reply:\n\
+             1. State the single verifiable outcome you understand the goal to be.\n\
+             2. Name the done-condition: the test, command or artefact that proves it.\n\
+             3. Ask whether to set a soft token budget, and for any missing detail.\n\
+             If the objective and done-condition are already clear, create the goal \
+             now by calling the Goal tool with op \"create\", the objective and an \
+             optional token_budget, then begin working autonomously. Otherwise ask \
+             your questions first and create it once the user answers."
+        ))
     }
 }
 

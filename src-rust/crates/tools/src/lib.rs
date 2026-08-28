@@ -42,7 +42,7 @@ pub mod file_read;
 pub mod file_write;
 pub mod formatter;
 pub mod glob_tool;
-pub mod goal_complete;
+pub mod goal_tool;
 pub mod grep_tool;
 pub mod learn_tool;
 pub mod line_endings;
@@ -95,7 +95,7 @@ pub use file_read::FileReadTool;
 pub use file_write::FileWriteTool;
 pub use formatter::try_format_file;
 pub use glob_tool::GlobTool;
-pub use goal_complete::GoalCompleteTool;
+pub use goal_tool::GoalTool;
 pub use grep_tool::GrepTool;
 pub use learn_tool::LearnTool;
 pub use lsp_tool::LspTool;
@@ -1010,7 +1010,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(SyntheticOutputTool),
         Box::new(McpAuthTool),
         Box::new(MonitorTool),
-        Box::new(GoalCompleteTool),
+        Box::new(GoalTool),
         // Both desktop tools need the feature; the roster then decides which
         // of them a session actually offers.
         #[cfg(feature = "computer-use")]

@@ -1655,7 +1655,7 @@ the name the account is filed under.
 | `ANTHROPIC_BASE_URL`   | Override the Anthropic API base URL.                                            |
 | `MIKMIK_PROVIDER`     | Active provider. Equivalent to `--provider`.                                    |
 | `MIKMIK_API_BASE`     | Override the API base URL for the active provider. Equivalent to `--api_base`.  |
-| `MIKMIK_GOALS`        | Set to `0` to disable the goal system (`/goal` command and `GoalComplete`). |
+| `MIKMIK_GOALS`        | Set to `0` to disable the goal system (`/goal`, `/guided-goal` and the `Goal` tool). |
 | `OPENAI_API_KEY`       | API key for the `openai` provider.                                              |
 | `GOOGLE_API_KEY`       | API key for the `google` provider.                                              |
 | `GROQ_API_KEY`         | API key for the `groq` provider.                                                |

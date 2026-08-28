@@ -142,7 +142,8 @@ pub fn decide_goal_continuation(
     GoalContinuation::Continue { message }
 }
 
-/// Called by GoalCompleteTool to mark the goal complete.
+/// Marks the goal complete. The Goal tool's complete op sets the status
+/// directly; this stays as a helper the loop can call.
 pub fn mark_goal_complete(session_id: &str) -> Result<(), String> {
     let store = GoalStore::open_default().ok_or_else(|| "Could not open goal store".to_string())?;
     store

@@ -1559,6 +1559,8 @@ pub fn all_commands() -> Vec<Box<dyn SlashCommand>> {
         Box::new(ManagedAgentsCommand),
         // Durable long-running goals
         Box::new(GoalCommand),
+        // Guided goal setup: draw out the objective, then create the goal
+        Box::new(GuidedGoalCommand),
         // The session's TodoWrite list
         Box::new(TodosCommand),
         // The agentic turn limit

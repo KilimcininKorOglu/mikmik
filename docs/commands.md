@@ -1057,9 +1057,22 @@ Set a durable multi-turn autonomous goal. When a goal is active, MikMik continue
 /goal complete                       — request a completion audit
 ```
 
-When the model believes the goal has been achieved, it calls the `GoalComplete` tool with an audit summary and evidence. Goals can be disabled globally by setting `MIKMIK_GOALS=0` in your environment.
+When the model believes the goal has been achieved, it calls the `Goal` tool with op `complete`, an audit summary and evidence. Goals can be disabled globally by setting `MIKMIK_GOALS=0` in your environment.
 
 See [Goal System](./advanced.md#goal-system) in the advanced guide.
+
+---
+
+### /guided-goal
+
+The conversational door to the same goal system. Where `/goal <objective>` sets a goal from one line, `/guided-goal` draws it out first: MikMik states the single verifiable outcome it understands, names the done-condition that proves it, and asks whether to cap the token budget. Once the objective is clear it creates the goal itself — through the `Goal` tool's `create` op — and begins working autonomously.
+
+```
+/guided-goal                         — start the guided setup from scratch
+/guided-goal <rough idea>            — start from a rough idea to refine
+```
+
+Use `/goal <objective>` when you already know the objective; use `/guided-goal` when you want help shaping it.
 
 ---
 

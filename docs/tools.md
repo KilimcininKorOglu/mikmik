@@ -775,20 +775,31 @@ Invoke a named skill (bundled prompt-command) programmatically from within a too
 
 ---
 
-### GoalComplete
+### Goal
 
 **Permission level:** None
 
-Mark the active goal as complete. This tool is surfaced to the model when a `/goal` is active. The model calls it only after performing a genuine completion audit — verifying the goal has been fully met rather than partially addressed.
+Read and manage the durable goal a session is working under — the model's own door to the same store the `/goal` command drives. One tool with an `op`:
 
-| Parameter       | Type   | Required | Description                                                                                                |
-|-----------------|--------|----------|------------------------------------------------------------------------------------------------------------|
-| `audit_summary` | string | yes      | Concise summary of the goal-completion audit                                                               |
-| `evidence`      | string | yes      | Specific evidence demonstrating the goal was achieved (files changed, tests passed, output produced, etc.) |
+| `op`       | What it does                                                                                                  |
+|------------|---------------------------------------------------------------------------------------------------------------|
+| `get`      | Report the objective, its status, and the token budget with how much is left                                  |
+| `complete` | Mark the goal complete after a genuine audit; requires `audit_summary` and `evidence`                         |
+| `resume`   | Continue a paused or budget-limited goal                                                                       |
+| `drop`     | Delete the current goal                                                                                        |
+| `create`   | Set a new goal (`objective`, optional `token_budget`) — only when none exists yet, via the guided flow        |
 
-Calling this tool triggers the goal system to mark the goal as `Completed` and surfaces the audit results to the user. The model is expected to verify the goal thoroughly before calling — calling without genuine evidence is treated as an error.
+| Parameter       | Type   | Required           | Description                                                                                                |
+|-----------------|--------|--------------------|------------------------------------------------------------------------------------------------------------|
+| `op`            | string | yes                | One of `get`, `complete`, `resume`, `drop`, `create`                                                        |
+| `objective`     | string | for `create`       | The single verifiable outcome to work toward                                                               |
+| `token_budget`  | number | no                 | `create`: a soft token budget, in tokens                                                                   |
+| `audit_summary` | string | for `complete`     | Concise summary of the goal-completion audit                                                               |
+| `evidence`      | string | for `complete`     | Specific evidence the goal was achieved (files changed, tests passed, output produced, etc.)               |
 
-See also: `/goal complete` command.
+`complete` sets the goal status to `Completed`, which the query loop reads to stop autonomous continuation; calling it without genuine evidence is treated as an error. `create` is gated the way the guided flow expects: the model may only create a goal when none exists yet, so it never sets itself a budget out of nowhere.
+
+See also: the `/goal` and `/guided-goal` commands.
 
 ---
 

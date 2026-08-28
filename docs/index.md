@@ -57,7 +57,7 @@ Extend MikMik with TOML-manifest plugins that add custom slash commands, MCP ser
 Run named agents (`build`, `plan`, `explore`), or let the model spawn parallel sub-agents with the `Agent` tool. Agents communicate through a shared task registry and message channels, and `isolation: "worktree"` keeps parallel writers apart.
 
 ### Goal system
-Set a durable objective with `/goal` and MikMik works autonomously across turns until the goal is verified complete — using the `GoalComplete` tool for audited completion rather than just stopping.
+Set a durable objective with `/goal` and MikMik works autonomously across turns until the goal is verified complete — using the `Goal` tool's `complete` op for audited completion rather than just stopping.
 
 ### Managed agents (preview)
 Configure a manager-executor architecture with `/managed-agents` where a manager model delegates subtasks to parallel executor agents under one shared budget.

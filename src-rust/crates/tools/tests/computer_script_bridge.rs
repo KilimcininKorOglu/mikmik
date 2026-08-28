@@ -214,3 +214,40 @@ async fn a_call_that_never_finishes_gives_the_turn_back() {
         "the turn came back after {waited:?}, not near the 1s that was asked for"
     );
 }
+
+#[tokio::test]
+async fn an_ax_call_routes_through_the_bridge_to_the_backend() {
+    // The whole `ax` path in one call, without touching the flaky part of the
+    // platform. `ax.get` on a handle the store never held travels the same
+    // route a real read would (runner `ax.get` -> host `ax_get` -> the ax arm
+    // of the dispatcher -> the backend's `get`), and the backend answers
+    // `UnknownHandle` from the store *before* it makes any platform call. So
+    // this pins the wiring deterministically: a routed op comes back as a
+    // caught "no element" error, fast, while an unrouted one would come back
+    // "unknown host call". A real tree read is verified by hand on macOS, where
+    // it returns a live application's role and title.
+    if !node_is_available() {
+        return;
+    }
+    let ctx = session("script-ax");
+
+    let result = run(
+        &ctx,
+        "try { await ax.get('ax-none', 'AXValue'); print('no throw'); } \
+         catch (e) { print('caught ' + e.message); }",
+    )
+    .await;
+    mikmik_tools::computer_script::shutdown_session(&ctx.session_id).await;
+
+    assert!(!result.is_error, "{}", result.content);
+    assert!(
+        result.content.contains("caught ") && result.content.contains("ax-none"),
+        "the ax op did not reach the backend's handle check: {}",
+        result.content
+    );
+    assert!(
+        !result.content.contains("unknown host call"),
+        "the ax op was not routed: {}",
+        result.content
+    );
+}

@@ -77,6 +77,19 @@ for (const [name, fn] of Object.entries(api)) {
   globalThis[name] = fn;
 }
 
+// The accessibility surface, under one `ax` object so its six calls do not
+// crowd the flat namespace. Reading walks the tree the platform already keeps;
+// `set` and `press` change it and go through `writing`, so `read_only` closes
+// them in the same place it closes the pointer.
+globalThis.ax = {
+  focused: () => host('ax_focused'),
+  tree: (pid, depth) => host('ax_tree', { pid, depth }),
+  find: (query) => host('ax_find', query || {}),
+  get: (handle, attribute) => host('ax_get', { handle, attribute }),
+  set: (handle, attribute, value) => writing('ax_set', { handle, attribute, value }),
+  press: (handle) => writing('ax_press', { handle }),
+};
+
 // `print` rather than `console.log`, because the result is a value the host
 // returns to the model and not a stream anyone is watching.
 globalThis.print = (...parts) => {

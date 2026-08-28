@@ -11,6 +11,7 @@
 //! cannot carry the code in and the answers back without the script blocking
 //! on the descriptor the host is writing to.
 
+mod ax;
 mod host_ops;
 mod protocol;
 
@@ -56,6 +57,10 @@ struct ScriptSession {
     /// The id of the next call, so a late answer from a timed-out call is
     /// recognised as stale rather than read as this call's result.
     next_call: u64,
+    /// The accessibility elements this session is holding. Shared with the
+    /// blocking thread that answers an `ax_*` op, so a handle one call held is
+    /// still valid in the next.
+    ax_handles: Arc<ax::HandleStore>,
 }
 
 /// One session per `session_id`.
@@ -71,6 +76,9 @@ pub async fn shutdown_session(session_id: &str) {
         return;
     };
     let mut session = session.lock().await;
+    // Let go of every held element: one outlives the window it names, and
+    // keeping it pins a platform object for nothing once the session ends.
+    session.ax_handles.clear();
     if let Some(pid) = session.child.id() {
         mikmik_core::process_tree::kill_tree(pid);
     }
@@ -120,6 +128,7 @@ async fn get_or_spawn(session_id: &str) -> Result<Arc<Mutex<ScriptSession>>, Str
         child,
         stream: BufReader::new(stream),
         next_call: 1,
+        ax_handles: Arc::new(ax::HandleStore::new()),
     }));
     SESSIONS.insert(session_id.to_string(), session.clone());
     debug!(port, "computer_script session started");
@@ -205,7 +214,10 @@ async fn run_call(
         match message {
             FromRunner::Hello { .. } => continue,
             FromRunner::Host { id, op, args } => {
-                let answer = answer_host_call(id, &op, &args, read_only, deadline, limit).await?;
+                let ax_handles = guard.ax_handles.clone();
+                let answer =
+                    answer_host_call(id, &op, &args, read_only, deadline, limit, ax_handles)
+                        .await?;
                 write_line(&mut guard, &answer).await?;
             }
             FromRunner::Done {
@@ -252,19 +264,48 @@ async fn answer_host_call(
     read_only: bool,
     deadline: tokio::time::Instant,
     limit: Duration,
+    ax_handles: Arc<ax::HandleStore>,
 ) -> Result<ToRunner, String> {
-    if read_only && host_ops::writes(op) {
+    let writes = if ax::owns(op) {
+        ax::writes(op)
+    } else {
+        host_ops::writes(op)
+    };
+    if read_only && writes {
         return Ok(ToRunner::failed(
             id,
             format!("read_only is set, so {op} is refused"),
         ));
     }
-    match tokio::time::timeout_at(deadline, host_ops::run(op, args)).await {
-        Err(_) => Err(format!(
+
+    // The two op families answer on different threads: an `ax_*` op reads the
+    // session's held elements, so it runs on a blocking thread with the store,
+    // while the desktop ops go through `host_ops`. Both are bound by the call's
+    // deadline for the same reason: an op that never returns must not spend the
+    // whole budget and let the loop blame the script for overrunning.
+    let overran = || {
+        format!(
             "`{op}` did not answer within the call's {}s; on macOS that is what an ungranted \
              screen-recording or accessibility permission looks like",
             limit.as_secs()
-        )),
+        )
+    };
+
+    if ax::owns(op) {
+        let (op_owned, args_owned) = (op.to_string(), args.clone());
+        let task = tokio::task::spawn_blocking(move || {
+            ax::run_blocking(&op_owned, &args_owned, &ax_handles)
+        });
+        return match tokio::time::timeout_at(deadline, task).await {
+            Err(_) => Err(overran()),
+            Ok(Err(join)) => Err(format!("the accessibility call did not finish: {join}")),
+            Ok(Ok(Ok(value))) => Ok(ToRunner::ok(id, value)),
+            Ok(Ok(Err(error))) => Ok(ToRunner::failed(id, error.to_string())),
+        };
+    }
+
+    match tokio::time::timeout_at(deadline, host_ops::run(op, args)).await {
+        Err(_) => Err(overran()),
         Ok(Ok(value)) => Ok(ToRunner::ok(id, value)),
         Ok(Err(error)) => Ok(ToRunner::failed(id, error)),
     }
@@ -328,7 +369,11 @@ impl Tool for ComputerScriptTool {
             "await drag(x1,y1,x2,y2); await type(text); await key('ctrl+c'); ",
             "await scroll('down',3); await clipboard() / clipboard(text); await wait(ms); ",
             "print(...) to report a value. ",
-            "This tool reads no accessibility tree and no DOM; use the browser for a page."
+            "The accessibility tree, which names every control the platform draws: ",
+            "await ax.focused(); await ax.tree(pid?,depth?); await ax.find({role,title,value,pid?,limit?}); ",
+            "await ax.get(handle,attr); await ax.set(handle,attr,value); await ax.press(handle). ",
+            "A find or tree returns nodes with an opaque handle you pass back to get, set and press. ",
+            "This tool reads no DOM; use the browser for a page."
         )
     }
 
@@ -494,6 +539,21 @@ mod tests {
             RUNNER_JS.contains("globalThis.print"),
             "the runner does not define print"
         );
+
+        // The accessibility surface is a nested object, so it is checked as
+        // `ax.<name>(` in the description and `<name>: ` in the runner's `ax`
+        // literal. Same failure the flat check guards: a name in one and not
+        // the other.
+        for name in ["focused", "tree", "find", "get", "set", "press"] {
+            assert!(
+                description.contains(&format!("ax.{name}(")),
+                "the description omits ax.{name}()"
+            );
+            assert!(
+                RUNNER_JS.contains(&format!("{name}: ")),
+                "the runner's ax object does not define {name}"
+            );
+        }
     }
 
     #[test]
@@ -551,6 +611,7 @@ mod tests {
             false,
             spent_deadline(),
             Duration::from_secs(30),
+            Arc::new(ax::HandleStore::new()),
         )
         .await
         .expect_err("a spent deadline ends the call");
@@ -571,12 +632,58 @@ mod tests {
             true,
             spent_deadline(),
             Duration::from_secs(30),
+            Arc::new(ax::HandleStore::new()),
         )
         .await
         .expect("a refusal is an answer, not a broken session");
 
         let encoded = serde_json::to_string(&answer).expect("the answer encodes");
         assert!(encoded.contains("read_only"), "{encoded}");
+        assert!(encoded.contains("\"ok\":false"), "{encoded}");
+    }
+
+    #[tokio::test]
+    async fn read_only_refuses_a_writing_ax_op() {
+        // `ax_set` writes, so `read_only` has to close it in the same place it
+        // closes `click`. The gate reads `ax::writes` for an `ax_*` op, and a
+        // spent deadline proves the backend was never reached.
+        let answer = answer_host_call(
+            3,
+            "ax_set",
+            &json!({"handle": "ax-1", "attribute": "AXValue", "value": "x"}),
+            true,
+            spent_deadline(),
+            Duration::from_secs(30),
+            Arc::new(ax::HandleStore::new()),
+        )
+        .await
+        .expect("a refusal is an answer, not a broken session");
+
+        let encoded = serde_json::to_string(&answer).expect("the answer encodes");
+        assert!(encoded.contains("read_only"), "{encoded}");
+        assert!(encoded.contains("\"ok\":false"), "{encoded}");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_ax_handle_fails_the_op_without_breaking_the_session() {
+        // The script sends any handle string it likes. One the store does not
+        // hold is a failed op the script can catch, not an `Err` that tears the
+        // session down. This also exercises the blocking-thread path with the
+        // real store, no platform grant required.
+        let answer = answer_host_call(
+            9,
+            "ax_get",
+            &json!({"handle": "ax-404", "attribute": "AXValue"}),
+            false,
+            tokio::time::Instant::now() + Duration::from_secs(30),
+            Duration::from_secs(30),
+            Arc::new(ax::HandleStore::new()),
+        )
+        .await
+        .expect("an unknown handle is a caught failure, not a broken session");
+
+        let encoded = serde_json::to_string(&answer).expect("the answer encodes");
+        assert!(encoded.contains("ax-404"), "{encoded}");
         assert!(encoded.contains("\"ok\":false"), "{encoded}");
     }
 

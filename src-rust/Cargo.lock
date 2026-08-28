@@ -4493,6 +4493,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "core-foundation",
  "dashmap",
  "dirs",
  "enigo",

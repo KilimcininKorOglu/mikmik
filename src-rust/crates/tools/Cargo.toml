@@ -59,5 +59,11 @@ nix = { workspace = true }
 # as the direct child exits instead of hanging on a detached grandchild (#220/#184).
 libc = "0.2"
 
+# The accessibility backend in `computer_script/ax/macos.rs` reaches AXUIElement,
+# a Core Foundation C API. `enigo` and `xcap` already build this crate on macOS,
+# so it adds no new tree; naming it directly lets the module `use` it.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+
 [features]
 computer-use = ["dep:enigo", "dep:xcap", "dep:image"]

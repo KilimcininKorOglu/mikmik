@@ -237,6 +237,8 @@ fn get_env_var_for_provider(id: &str) -> &'static str {
         "litellm" => "LITELLM_API_KEY",
         "ollama-cloud" => "OLLAMA_API_KEY",
         "bedrock-mantle" => "AWS_BEARER_TOKEN_BEDROCK",
+        "minimax-code" => "MINIMAX_CODE_API_KEY",
+        "minimax-code-cn" => "MINIMAX_CODE_CN_API_KEY",
         _ => "API_KEY",
     }
 }
@@ -786,6 +788,20 @@ fn provider_picker_items() -> Vec<SelectItem> {
             id: "bedrock-mantle".into(),
             title: "Amazon Bedrock Mantle".into(),
             description: "Bedrock OpenAI-compatible SKU".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "minimax-code".into(),
+            title: "MiniMax Token Plan".into(),
+            description: "MiniMax coding plan (api.minimax.io)".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "minimax-code-cn".into(),
+            title: "MiniMax Token Plan (China)".into(),
+            description: "MiniMax coding plan (api.minimaxi.com)".into(),
             category: "Other".into(),
             badge: None,
         },

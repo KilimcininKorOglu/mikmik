@@ -323,6 +323,17 @@ For the OpenAI-compatible protocol, use the custom provider with the correspondi
 }
 ```
 
+#### MiniMax Token Plan (coding plan)
+
+The Token Plan is a subscription that serves MiniMax models over the OpenAI-compatible `/v1` route. It is a separate provider from the Anthropic-wire `minimax` above, with its own login and key:
+
+| Provider id       | Region        | Base URL                      | Key environment variable    | Subscribe                                     |
+|-------------------|---------------|-------------------------------|-----------------------------|-----------------------------------------------|
+| `minimax-code`    | International | `https://api.minimax.io/v1`   | `MINIMAX_CODE_API_KEY`      | `https://platform.minimax.io/subscribe/token-plan` |
+| `minimax-code-cn` | China         | `https://api.minimaxi.com/v1` | `MINIMAX_CODE_CN_API_KEY`   | `https://platform.minimaxi.com/subscribe/token-plan` |
+
+Both are offered under "Other" in [`/connect`](commands.md#connect): subscribe to the Token Plan, then paste the key it gives you.
+
 ---
 
 ### Custom endpoints

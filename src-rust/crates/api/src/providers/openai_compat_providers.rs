@@ -65,8 +65,34 @@ pub fn provider_for_id(provider_id: &str) -> Option<OpenAiCompatProvider> {
         "vllm" => Some(vllm()),
         "ollama-cloud" => Some(ollama_cloud()),
         "bedrock-mantle" => Some(bedrock_mantle()),
+        "minimax-code" => Some(minimax_code()),
+        "minimax-code-cn" => Some(minimax_code_cn()),
         _ => None,
     }
+}
+
+/// MiniMax Token Plan (coding plan), international region. OpenAI-compatible
+/// `/v1` endpoint, distinct from the Anthropic-wire `minimax` API route. The
+/// key is pasted after subscribing to the Token Plan.
+pub fn minimax_code() -> OpenAiCompatProvider {
+    let key = std::env::var("MINIMAX_CODE_API_KEY").unwrap_or_default();
+    OpenAiCompatProvider::new(
+        ProviderId::MINIMAX_CODE,
+        "MiniMax Token Plan",
+        "https://api.minimax.io/v1",
+    )
+    .with_api_key(key)
+}
+
+/// MiniMax Token Plan (coding plan), China region (`api.minimaxi.com`).
+pub fn minimax_code_cn() -> OpenAiCompatProvider {
+    let key = std::env::var("MINIMAX_CODE_CN_API_KEY").unwrap_or_default();
+    OpenAiCompatProvider::new(
+        ProviderId::MINIMAX_CODE_CN,
+        "MiniMax Token Plan (China)",
+        "https://api.minimaxi.com/v1",
+    )
+    .with_api_key(key)
 }
 
 /// Amazon Bedrock Mantle — Bedrock's OpenAI-compatible SKU. Reads the region
@@ -916,6 +942,16 @@ mod tests {
                 ProviderId::WAFER_SERVERLESS,
                 "https://pass.wafer.ai/v1",
             ),
+            (
+                "minimax-code",
+                ProviderId::MINIMAX_CODE,
+                "https://api.minimax.io/v1",
+            ),
+            (
+                "minimax-code-cn",
+                ProviderId::MINIMAX_CODE_CN,
+                "https://api.minimaxi.com/v1",
+            ),
         ];
         for (id, expected_id, expected_base) in cases {
             let provider = provider_for_id(id).unwrap_or_else(|| panic!("{id} should resolve"));
@@ -948,6 +984,8 @@ mod tests {
             ProviderId::OLLAMA_CLOUD,
             ProviderId::CLOUDFLARE_AI_GATEWAY,
             ProviderId::BEDROCK_MANTLE,
+            ProviderId::MINIMAX_CODE,
+            ProviderId::MINIMAX_CODE_CN,
         ] {
             assert!(
                 ProviderId::is_well_known(id),

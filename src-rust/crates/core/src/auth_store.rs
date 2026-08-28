@@ -642,6 +642,8 @@ impl AuthStore {
             "vllm" => "", // No API key required unless the server sets one
             "cloudflare-ai-gateway" => "CLOUDFLARE_API_TOKEN",
             "bedrock-mantle" => "AWS_BEARER_TOKEN_BEDROCK",
+            "minimax-code" => "MINIMAX_CODE_API_KEY",
+            "minimax-code-cn" => "MINIMAX_CODE_CN_API_KEY",
             "custom-openai" => "CUSTOM_OPENAI_API_KEY",
             "custom-anthropic" => "CUSTOM_ANTHROPIC_API_KEY",
             "ollama" | "lm-studio" | "llama-cpp" => "", // No API key required

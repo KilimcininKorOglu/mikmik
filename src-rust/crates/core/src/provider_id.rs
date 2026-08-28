@@ -104,6 +104,11 @@ impl ProviderId {
     pub const OLLAMA_CLOUD: &'static str = "ollama-cloud";
     pub const CLOUDFLARE_AI_GATEWAY: &'static str = "cloudflare-ai-gateway";
     pub const BEDROCK_MANTLE: &'static str = "bedrock-mantle";
+    /// MiniMax Token Plan (coding plan), OpenAI-compatible `/v1`. Separate from
+    /// [`MINIMAX`](Self::MINIMAX), which is the Anthropic-wire API route.
+    pub const MINIMAX_CODE: &'static str = "minimax-code";
+    /// MiniMax Token Plan, China region (`api.minimaxi.com`).
+    pub const MINIMAX_CODE_CN: &'static str = "minimax-code-cn";
 
     /// Every provider id mikmik ships with, including the spelling aliases
     /// users type (`lmstudio` for `lm-studio`, `zhipu` for `zhipuai`, …).
@@ -182,6 +187,8 @@ impl ProviderId {
         Self::OLLAMA_CLOUD,
         Self::CLOUDFLARE_AI_GATEWAY,
         Self::BEDROCK_MANTLE,
+        Self::MINIMAX_CODE,
+        Self::MINIMAX_CODE_CN,
         // Spelling aliases accepted on the wire but not canonical ids.
         "openai-codex",
         "lmstudio",

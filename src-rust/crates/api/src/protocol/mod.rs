@@ -20,8 +20,10 @@
 
 use crate::provider_types::StreamEvent;
 
+pub mod connect;
 pub mod dsml;
 pub mod openai_chat;
+pub mod protobuf;
 
 pub use openai_chat::OpenAiChatDecoder;
 

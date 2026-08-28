@@ -4237,6 +4237,7 @@ dependencies = [
  "bytes",
  "chrono",
  "dirs",
+ "flate2",
  "futures",
  "hex",
  "hmac",

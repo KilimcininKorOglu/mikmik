@@ -38,6 +38,11 @@ pub struct KeyInputDialogState {
     pub input: String,
     pub cursor_pos: usize,
     pub active_field: KeyInputField,
+    /// True when the dialog enters a web-search backend key. The credential is
+    /// then stored under the fixed provider id (the search chain reads it by
+    /// that id), so the account field is locked and hidden and only the key is
+    /// typed.
+    pub web_search_key: bool,
 }
 
 impl Default for KeyInputDialogState {
@@ -56,6 +61,7 @@ impl KeyInputDialogState {
             input: String::new(),
             cursor_pos: 0,
             active_field: KeyInputField::Account,
+            web_search_key: false,
         }
     }
 
@@ -70,6 +76,16 @@ impl KeyInputDialogState {
         self.input.clear();
         self.cursor_pos = 0;
         self.active_field = KeyInputField::Account;
+        self.web_search_key = false;
+    }
+
+    /// Open the dialog for a web-search backend, whose key is stored under the
+    /// fixed provider id. The account field is locked to that id and hidden,
+    /// so the user types only the key.
+    pub fn open_web_search(&mut self, provider_id: String, provider_name: String) {
+        self.open(provider_id, provider_name);
+        self.web_search_key = true;
+        self.active_field = KeyInputField::Key;
     }
 
     /// Close and clear the dialog.
@@ -79,10 +95,16 @@ impl KeyInputDialogState {
         self.input.clear();
         self.cursor_pos = 0;
         self.active_field = KeyInputField::Account;
+        self.web_search_key = false;
     }
 
-    /// Move to the other field.
+    /// Move to the other field. A web-search key has only the key field, so
+    /// the focus stays put.
     pub fn toggle_field(&mut self) {
+        if self.web_search_key {
+            self.active_field = KeyInputField::Key;
+            return;
+        }
         self.active_field = match self.active_field {
             KeyInputField::Account => KeyInputField::Key,
             KeyInputField::Key => KeyInputField::Account,
@@ -163,8 +185,9 @@ pub fn render_key_input_dialog(frame: &mut Frame, state: &KeyInputDialogState, a
 
     // ── Dialog size ──
     let width = 60u16.min(area.width.saturating_sub(4));
-    // Grew by three rows when the account field was added.
-    let height = 12u16;
+    // Grew by three rows when the account field was added; a web-search key
+    // hides that field and shrinks back.
+    let height = if state.web_search_key { 9u16 } else { 12u16 };
     let dialog_area = centered_rect(width, height, area);
 
     // ── Fill dialog background (no border) ──
@@ -197,41 +220,44 @@ pub fn render_key_input_dialog(frame: &mut Frame, state: &KeyInputDialogState, a
     // Blank line
     lines.push(Line::from(""));
 
-    // "Account name:" label and field.
-    lines.push(Line::from(vec![
-        Span::styled(
-            " Account name:",
-            Style::default().fg(Color::Rgb(180, 180, 180)),
-        ),
-        Span::styled(
-            format!("  (speaks {})", state.provider_id),
-            Style::default().fg(dim),
-        ),
-    ]));
-    let account_text = if state.account_input.is_empty() {
-        "name this account...".to_string()
-    } else {
-        state.account_input.clone()
-    };
-    let account_style = if state.account_input.is_empty() {
-        Style::default().fg(dim)
-    } else {
-        Style::default().fg(Color::White)
-    };
-    lines.push(Line::from(vec![
-        Span::styled(format!(" {}", account_text), account_style),
-        Span::styled(
-            if state.active_field == KeyInputField::Account {
-                "_"
-            } else {
-                ""
-            },
-            Style::default().fg(pink),
-        ),
-    ]));
+    // "Account name:" label and field — hidden for a web-search key, whose
+    // credential is stored under the fixed provider id.
+    if !state.web_search_key {
+        lines.push(Line::from(vec![
+            Span::styled(
+                " Account name:",
+                Style::default().fg(Color::Rgb(180, 180, 180)),
+            ),
+            Span::styled(
+                format!("  (speaks {})", state.provider_id),
+                Style::default().fg(dim),
+            ),
+        ]));
+        let account_text = if state.account_input.is_empty() {
+            "name this account...".to_string()
+        } else {
+            state.account_input.clone()
+        };
+        let account_style = if state.account_input.is_empty() {
+            Style::default().fg(dim)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {}", account_text), account_style),
+            Span::styled(
+                if state.active_field == KeyInputField::Account {
+                    "_"
+                } else {
+                    ""
+                },
+                Style::default().fg(pink),
+            ),
+        ]));
 
-    // Blank line
-    lines.push(Line::from(""));
+        // Blank line
+        lines.push(Line::from(""));
+    }
 
     // "API Key:" label
     lines.push(Line::from(vec![Span::styled(
@@ -280,11 +306,18 @@ pub fn render_key_input_dialog(frame: &mut Frame, state: &KeyInputDialogState, a
     } else {
         " paste a key"
     };
-    lines.push(Line::from(vec![
-        Span::styled(" tab", Style::default().fg(dim)),
-        Span::styled(" switch field   enter", Style::default().fg(dim)),
-        Span::styled(confirm_hint, Style::default().fg(dim)),
-    ]));
+    if state.web_search_key {
+        lines.push(Line::from(vec![
+            Span::styled(" enter", Style::default().fg(dim)),
+            Span::styled(confirm_hint, Style::default().fg(dim)),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled(" tab", Style::default().fg(dim)),
+            Span::styled(" switch field   enter", Style::default().fg(dim)),
+            Span::styled(confirm_hint, Style::default().fg(dim)),
+        ]));
+    }
 
     let para = Paragraph::new(lines).bg(dialog_bg);
     frame.render_widget(para, inner);
@@ -368,6 +401,41 @@ mod tests {
         assert_eq!(protocol, "openai", "the wire format is separate");
         assert_eq!(key, "sk-test");
         assert!(!state.visible);
+    }
+
+    #[test]
+    fn a_web_search_key_locks_the_account_to_the_provider_id() {
+        let mut state = KeyInputDialogState::new();
+        state.open_web_search("tavily".to_string(), "Tavily".to_string());
+        // The account is fixed to the id and focus starts on the key.
+        assert_eq!(state.account_input, "tavily");
+        assert_eq!(state.active_field, KeyInputField::Key);
+        // Tab cannot move off the key field.
+        state.toggle_field();
+        assert_eq!(state.active_field, KeyInputField::Key);
+        // Only a key is needed; the fixed id is a valid account name.
+        type_into(&mut state, "tvly-abc");
+        assert!(state.can_submit());
+        let (account, protocol, key) = state.take_key();
+        assert_eq!(account, "tavily");
+        assert_eq!(protocol, "tavily");
+        assert_eq!(key, "tvly-abc");
+    }
+
+    #[test]
+    fn a_web_search_dialog_hides_the_account_field() {
+        let mut state = KeyInputDialogState::new();
+        state.open_web_search("exa".to_string(), "Exa".to_string());
+        type_into(&mut state, "exa-key-9999");
+        let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
+        terminal
+            .draw(|frame| render_key_input_dialog(frame, &state, frame.area()))
+            .expect("draw");
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("Connect Exa"), "title missing");
+        assert!(rendered.contains("API Key:"), "key field missing");
+        assert!(!rendered.contains("Account name:"), "account field hidden");
+        assert!(rendered.contains("9999"), "the last four are shown");
     }
 
     #[test]

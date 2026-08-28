@@ -878,7 +878,60 @@ fn provider_picker_items() -> Vec<SelectItem> {
         });
     }
 
+    items.extend(web_search_picker_items());
     items
+}
+
+/// Provider ids whose credential is a web-search backend key, stored under the
+/// id itself and read by the search chain. Kept in sync with the API-key
+/// backends in `mikmik_tools`' web-search provider list.
+const WEB_SEARCH_KEY_PROVIDERS: [&str; 8] = [
+    "tavily",
+    "exa",
+    "kagi",
+    "brave",
+    "jina",
+    "firecrawl",
+    "parallel",
+    "tinyfish",
+];
+
+/// Whether `id` names a web-search backend whose key is entered on its own,
+/// without activating a chat provider or syncing models.
+pub fn is_web_search_key_provider(id: &str) -> bool {
+    WEB_SEARCH_KEY_PROVIDERS.contains(&id)
+}
+
+/// Connect-picker entries for the web-search backends that take an API key.
+fn web_search_picker_items() -> Vec<SelectItem> {
+    let entries = [
+        ("tavily", "Tavily", "Search API (TAVILY_API_KEY)"),
+        ("exa", "Exa", "Neural search API (EXA_API_KEY)"),
+        ("kagi", "Kagi", "Kagi Search API (KAGI_API_KEY)"),
+        (
+            "brave",
+            "Brave Search",
+            "Brave Search API (BRAVE_SEARCH_API_KEY)",
+        ),
+        ("jina", "Jina", "Jina DeepSearch (JINA_API_KEY)"),
+        (
+            "firecrawl",
+            "Firecrawl",
+            "Firecrawl search (FIRECRAWL_API_KEY)",
+        ),
+        ("parallel", "Parallel", "Parallel search (PARALLEL_API_KEY)"),
+        ("tinyfish", "TinyFish", "TinyFish search (TINYFISH_API_KEY)"),
+    ];
+    entries
+        .into_iter()
+        .map(|(id, title, description)| SelectItem {
+            id: id.into(),
+            title: title.into(),
+            description: description.into(),
+            category: "Web Search".into(),
+            badge: None,
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -2949,6 +3002,33 @@ impl App {
     /// Record a vendor account that reaches its own endpoint.
     fn persist_account_protocol(&mut self, account_id: &str, protocol: &str) {
         self.persist_account(account_id, protocol, None);
+    }
+
+    /// Store a web-search backend key under its provider id and persist it.
+    ///
+    /// Unlike a chat provider, this never activates the account or syncs models:
+    /// the search chain reads the key by id, and the current chat provider is
+    /// left untouched. An empty key clears the stored credential instead.
+    fn save_web_search_key(&mut self, provider_id: &str, provider_name: &str, api_key: String) {
+        if api_key.trim().is_empty() {
+            self.auth_store.remove(provider_id);
+            self.push_notification(
+                NotificationKind::Info,
+                format!("{provider_name} search key cleared"),
+                Some(3),
+            );
+        } else {
+            self.auth_store.set(
+                provider_id,
+                mikmik_core::StoredCredential::ApiKey { key: api_key },
+            );
+            self.push_notification(
+                NotificationKind::Success,
+                format!("Saved {provider_name} search key"),
+                Some(3),
+            );
+        }
+        self.auth_store.save();
     }
 
     /// The account name to file a login under.
@@ -5123,18 +5203,23 @@ impl App {
                 KeyCode::Enter => {
                     if self.key_input_dialog.can_submit() {
                         let provider_name = self.key_input_dialog.provider_name.clone();
+                        let web_search_key = self.key_input_dialog.web_search_key;
                         let (account_id, protocol, api_key) = self.key_input_dialog.take_key();
-                        // Stored under the account name, not the vendor's, so
-                        // a second key for the same vendor is a second account
-                        // instead of overwriting the first.
-                        self.persist_account_protocol(&account_id, &protocol);
-                        self.auth_store.set(
-                            &account_id,
-                            mikmik_core::StoredCredential::ApiKey { key: api_key },
-                        );
-                        self.queue_model_sync(&account_id, false);
-                        self.pending_provider_reload = true;
-                        self.activate_provider(account_id, provider_name, "Connected to");
+                        if web_search_key {
+                            self.save_web_search_key(&account_id, &provider_name, api_key);
+                        } else {
+                            // Stored under the account name, not the vendor's, so
+                            // a second key for the same vendor is a second account
+                            // instead of overwriting the first.
+                            self.persist_account_protocol(&account_id, &protocol);
+                            self.auth_store.set(
+                                &account_id,
+                                mikmik_core::StoredCredential::ApiKey { key: api_key },
+                            );
+                            self.queue_model_sync(&account_id, false);
+                            self.pending_provider_reload = true;
+                            self.activate_provider(account_id, provider_name, "Connected to");
+                        }
                     }
                 }
                 KeyCode::Backspace => {
@@ -5416,6 +5501,12 @@ impl App {
                             "amazon-bedrock" => {
                                 self.key_input_dialog
                                     .open(selected.id.clone(), selected.title.clone());
+                            }
+                            // Web-search backends — key stored under the id, no
+                            // chat activation or model sync.
+                            id if is_web_search_key_provider(id) => {
+                                self.key_input_dialog
+                                    .open_web_search(selected.id.clone(), selected.title.clone());
                             }
                             // All other providers — open API key input dialog
                             _ => {

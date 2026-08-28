@@ -176,7 +176,7 @@ pub fn common_headers() -> Vec<(String, String)> {
 pub fn jwt_account_id(access_token: &str) -> Option<String> {
     use base64::Engine;
 
-    let payload_b64 = access_token.splitn(3, '.').nth(1)?;
+    let payload_b64 = access_token.split('.').nth(1)?;
     let mut padded = payload_b64.to_string();
     while padded.len() % 4 != 0 {
         padded.push('=');

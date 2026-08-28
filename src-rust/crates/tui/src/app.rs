@@ -239,6 +239,9 @@ fn get_env_var_for_provider(id: &str) -> &'static str {
         "bedrock-mantle" => "AWS_BEARER_TOKEN_BEDROCK",
         "minimax-code" => "MINIMAX_CODE_API_KEY",
         "minimax-code-cn" => "MINIMAX_CODE_CN_API_KEY",
+        // Kimi Code authenticates by device-flow OAuth, not an env key. The
+        // token store answers for it; this maps only for display parity.
+        "kimi-code" => "KIMI_CODE_OAUTH_HOST",
         _ => "API_KEY",
     }
 }
@@ -802,6 +805,13 @@ fn provider_picker_items() -> Vec<SelectItem> {
             id: "minimax-code-cn".into(),
             title: "MiniMax Token Plan (China)".into(),
             description: "MiniMax coding plan (api.minimaxi.com)".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "kimi-code".into(),
+            title: "Kimi Code".into(),
+            description: "Moonshot coding plan (device login)".into(),
             category: "Other".into(),
             badge: None,
         },
@@ -4893,6 +4903,22 @@ impl App {
                             self.pending_provider_reload = true;
                             return false;
                         }
+                        if provider_id == "kimi-code" {
+                            // The device flow persisted the tokens itself via
+                            // save_kimi_tokens_and_register; switch to the account
+                            // it registered without re-storing anything.
+                            let account_id = self
+                                .device_auth_dialog
+                                .resolved_account
+                                .clone()
+                                .unwrap_or_else(|| provider_id.clone());
+                            self.device_auth_pending = None;
+                            self.device_auth_dialog.close();
+                            self.queue_model_sync(&account_id, false);
+                            self.pending_provider_reload = true;
+                            self.activate_provider(account_id, provider_name, "Connected to");
+                            return false;
+                        }
                         let credential = if provider_id == "github-copilot" {
                             mikmik_core::StoredCredential::OAuthToken {
                                 access: token.clone(),
@@ -5290,6 +5316,14 @@ impl App {
                                 self.device_auth_dialog
                                     .open("openai-codex".into(), "OpenAI Codex".into());
                                 self.device_auth_pending = Some("openai-codex".to_string());
+                            }
+                            "kimi-code" => {
+                                // Kimi Code: device authorization grant (spawned by
+                                // main loop). The flow persists its own tokens, so
+                                // the success handler only activates the account.
+                                self.device_auth_dialog
+                                    .open("kimi-code".into(), "Kimi Code".into());
+                                self.device_auth_pending = Some("kimi-code".to_string());
                             }
                             // AWS Bedrock — accept a bearer token via key input dialog
                             "amazon-bedrock" => {

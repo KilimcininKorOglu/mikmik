@@ -240,6 +240,11 @@ fn describe(credential: &mikmik_core::StoredCredential) -> String {
             .as_deref()
             .map(|id| format!("  {}", id))
             .unwrap_or_default(),
+        C::KimiOAuth(tokens) => tokens
+            .account_id
+            .as_deref()
+            .map(|id| format!("  {}", id))
+            .unwrap_or_default(),
         // The listing above skips the workspace session, so its arm here is
         // only what the compiler needs to see the match is complete.
         C::OAuthToken { .. } | C::ApiKey { .. } | C::WorkspaceSession { .. } => String::new(),

@@ -13,8 +13,8 @@ use crate::provider::LlmProvider;
 use crate::provider_types::ProviderStatus;
 use crate::providers::{
     AnthropicProvider, AzureProvider, BedrockProvider, CodexProvider, CohereProvider,
-    CopilotProvider, FreeEntry, FreeProvider, GoogleProvider, MinimaxProvider, OpenAiProvider,
-    FREE_CATALOG,
+    CopilotProvider, FreeEntry, FreeProvider, GoogleProvider, KimiCodeProvider, MinimaxProvider,
+    OpenAiProvider, FREE_CATALOG,
 };
 
 fn normalize_openai_compat_base(override_base: &str) -> String {
@@ -95,6 +95,11 @@ fn provider_from_key(provider_id: &str, key: String) -> Option<Arc<dyn LlmProvid
             // The Codex provider is OAuth-based; the `key` field is not used.
             // Load from the stored token file instead.
             CodexProvider::from_stored().map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
+        }
+        "kimi-code" => {
+            // Device-flow OAuth; the `key` field is unused. Load the stored
+            // token and refresh it on demand inside the provider.
+            KimiCodeProvider::from_stored().map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
         }
         "cohere" => Some(Arc::new(CohereProvider::new(key))),
         "custom-openai" => Some(Arc::new(p::custom_openai().with_api_key(key))),
@@ -399,6 +404,8 @@ pub fn provider_from_config(
         // Read the named account's own tokens. `from_stored` would hand every
         // Codex account the active account's token.
         "codex" | "openai-codex" => CodexProvider::from_account(provider_id)
+            .map(|provider| Arc::new(provider) as Arc<dyn LlmProvider>),
+        "kimi-code" => KimiCodeProvider::from_account(provider_id)
             .map(|provider| Arc::new(provider) as Arc<dyn LlmProvider>),
         _ => api_key.and_then(|key| provider_from_key(provider_id, key)),
     }

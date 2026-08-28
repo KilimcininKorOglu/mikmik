@@ -41,3 +41,6 @@ pub use copilot::CopilotProvider;
 
 pub mod codex;
 pub use codex::CodexProvider;
+
+pub mod kimi_code;
+pub use kimi_code::KimiCodeProvider;

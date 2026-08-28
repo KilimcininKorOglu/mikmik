@@ -34,6 +34,9 @@ pub enum StoredCredential {
     /// OpenAI Codex OAuth tokens.
     #[serde(rename = "codex-oauth")]
     CodexOAuth(crate::oauth_config::CodexTokens),
+    /// Kimi Code device-flow OAuth tokens.
+    #[serde(rename = "kimi-oauth")]
+    KimiOAuth(crate::kimi_oauth::KimiTokens),
     /// A session on an organisation's configuration server.
     ///
     /// Held here rather than in `settings.json` beside `workspace.url`: this
@@ -106,6 +109,7 @@ fn implied_protocol(credential: &StoredCredential) -> Option<&'static str> {
     match credential {
         StoredCredential::AnthropicOAuth(_) => Some(crate::provider_id::ProviderId::ANTHROPIC),
         StoredCredential::CodexOAuth(_) => Some(crate::provider_id::ProviderId::CODEX),
+        StoredCredential::KimiOAuth(_) => Some(crate::provider_id::ProviderId::KIMI_CODE),
         StoredCredential::OAuthToken { .. } => Some("github-copilot"),
         StoredCredential::ApiKey { .. } => None,
         // Not a model provider at all: it authenticates against the
@@ -302,6 +306,19 @@ impl AuthStore {
     /// Store Codex OAuth tokens for `account_id` (persists immediately).
     pub fn set_codex_tokens(&mut self, account_id: &str, tokens: crate::oauth_config::CodexTokens) {
         self.set(account_id, StoredCredential::CodexOAuth(tokens));
+    }
+
+    /// The Kimi OAuth tokens stored under `account_id`, if any.
+    pub fn kimi_tokens(&self, account_id: &str) -> Option<&crate::kimi_oauth::KimiTokens> {
+        match self.get(account_id) {
+            Some(StoredCredential::KimiOAuth(tokens)) => Some(tokens),
+            _ => None,
+        }
+    }
+
+    /// Store Kimi OAuth tokens for `account_id` (persists immediately).
+    pub fn set_kimi_tokens(&mut self, account_id: &str, tokens: crate::kimi_oauth::KimiTokens) {
+        self.set(account_id, StoredCredential::KimiOAuth(tokens));
     }
 
     /// The live workspace session for `url`, if there is one.

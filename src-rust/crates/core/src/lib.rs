@@ -8998,6 +8998,7 @@ pub mod feature_gates;
 pub mod import_config;
 pub mod keybindings;
 pub mod keywords;
+pub mod kimi_oauth;
 pub mod lsp;
 pub mod mcp_trust;
 pub mod memdir;

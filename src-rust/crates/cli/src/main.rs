@@ -6692,6 +6692,55 @@ async fn run_interactive(
                         }
                     });
                 }
+                "kimi-code" => {
+                    let tx2 = device_auth_tx.clone();
+                    // Kimi Code device authorization grant. On success the task
+                    // persists and registers the tokens itself, then reports the
+                    // account it filed them under so the success handler can
+                    // activate it without re-storing anything.
+                    tokio::spawn(async move {
+                        match mikmik_core::kimi_oauth::request_device_authorization().await {
+                            Ok(device) => {
+                                let _ = tx2
+                                    .send(DeviceAuthEvent::GotCode {
+                                        user_code: device.user_code,
+                                        verification_uri: device.verification_uri_complete,
+                                        device_code: device.device_code.clone(),
+                                        interval: device.interval,
+                                    })
+                                    .await;
+                                match mikmik_core::kimi_oauth::poll_for_token(
+                                    &device.device_code,
+                                    device.interval,
+                                    device.expires_in,
+                                )
+                                .await
+                                {
+                                    Ok(tokens) => {
+                                        let event = match mikmik_core::kimi_oauth::save_kimi_tokens_and_register(
+                                            &tokens,
+                                        ) {
+                                            Ok(account_id) => DeviceAuthEvent::TokenReceivedFor {
+                                                token: "connected".to_string(),
+                                                account_id,
+                                            },
+                                            Err(e) => DeviceAuthEvent::Error(format!(
+                                                "Kimi login could not be saved: {e}"
+                                            )),
+                                        };
+                                        let _ = tx2.send(event).await;
+                                    }
+                                    Err(e) => {
+                                        let _ = tx2.send(DeviceAuthEvent::Error(e)).await;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx2.send(DeviceAuthEvent::Error(e)).await;
+                            }
+                        }
+                    });
+                }
                 _ => {
                     // Unknown provider for device auth — should not happen
                     app.device_auth_dialog
@@ -7376,6 +7425,9 @@ fn print_account_list(provider: &str, display_name: &str) {
             Some(mikmik_core::StoredCredential::CodexOAuth(tokens)) => {
                 format!("  {}", tokens.account_id.as_deref().unwrap_or(""))
             }
+            Some(mikmik_core::StoredCredential::KimiOAuth(tokens)) => {
+                format!("  {}", tokens.account_id.as_deref().unwrap_or(""))
+            }
             _ => String::new(),
         };
         println!("  {} {}{}", marker, id, detail.trim_end());
@@ -7675,6 +7727,12 @@ async fn auth_status(json_output: bool) {
                 access, refresh, ..
             }) if active_provider == "github-copilot"
                 && (!access.is_empty() || !refresh.is_empty()) =>
+            {
+                Some("stored token".to_string())
+            }
+            Some(mikmik_core::StoredCredential::KimiOAuth(tokens))
+                if active_provider == mikmik_core::provider_id::ProviderId::KIMI_CODE
+                    && !tokens.access_token.is_empty() =>
             {
                 Some("stored token".to_string())
             }

@@ -109,6 +109,10 @@ impl ProviderId {
     pub const MINIMAX_CODE: &'static str = "minimax-code";
     /// MiniMax Token Plan, China region (`api.minimaxi.com`).
     pub const MINIMAX_CODE_CN: &'static str = "minimax-code-cn";
+    /// Kimi Code — Moonshot's coding plan, device-flow OAuth, OpenAI-compatible
+    /// at `api.kimi.com/coding/v1`. Separate from [`MOONSHOT`](Self::MOONSHOT),
+    /// which is the API-key Moonshot route.
+    pub const KIMI_CODE: &'static str = "kimi-code";
 
     /// Every provider id mikmik ships with, including the spelling aliases
     /// users type (`lmstudio` for `lm-studio`, `zhipu` for `zhipuai`, …).
@@ -189,6 +193,7 @@ impl ProviderId {
         Self::BEDROCK_MANTLE,
         Self::MINIMAX_CODE,
         Self::MINIMAX_CODE_CN,
+        Self::KIMI_CODE,
         // Spelling aliases accepted on the wire but not canonical ids.
         "openai-codex",
         "lmstudio",

@@ -336,6 +336,21 @@ Both are offered under "Other" in [`/connect`](commands.md#connect): subscribe t
 
 ---
 
+### Kimi Code
+
+Moonshot's coding plan, signed in with the OAuth 2.0 device authorization grant rather than an API key. It is a separate provider from the API-key `moonshotai` route: it serves an OpenAI-compatible API at `https://api.kimi.com/coding/v1` behind a device-flow token.
+
+Pick "Kimi Code" under "Other" in [`/connect`](commands.md#connect). MikMik opens `auth.kimi.com` in the browser and shows a user code; approve it there and the session switches to the new account. The access token is refreshed automatically when it expires. A second login files a second account named after the token's identity.
+
+| Setting                 | Environment variable    | Default                          |
+|-------------------------|-------------------------|----------------------------------|
+| OAuth host              | `KIMI_CODE_OAUTH_HOST` (or `KIMI_OAUTH_HOST`) | `https://auth.kimi.com` |
+| API base                | `KIMI_CODE_BASE_URL`    | `https://api.kimi.com/coding/v1` |
+
+The overrides exist for self-hosted or regional gateways; the defaults need no configuration.
+
+---
+
 ### Custom endpoints
 
 Two slots exist for endpoints MikMik does not ship a provider for, one per wire format:

@@ -986,6 +986,7 @@ mod tests {
             ProviderId::BEDROCK_MANTLE,
             ProviderId::MINIMAX_CODE,
             ProviderId::MINIMAX_CODE_CN,
+            ProviderId::KIMI_CODE,
         ] {
             assert!(
                 ProviderId::is_well_known(id),

@@ -7,7 +7,9 @@ pub mod brave;
 pub mod duckduckgo;
 pub mod jina;
 pub mod searxng;
+pub mod synthetic;
 pub mod tavily;
+pub mod tinyfish;
 
 /// Minimal percent-encoding for a URL query-parameter value.
 pub(crate) fn urlencode(s: &str) -> String {

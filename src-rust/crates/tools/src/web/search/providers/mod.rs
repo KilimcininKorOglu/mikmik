@@ -5,6 +5,7 @@
 
 pub mod brave;
 pub mod duckduckgo;
+pub mod jina;
 pub mod searxng;
 pub mod tavily;
 

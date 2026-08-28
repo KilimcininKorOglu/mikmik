@@ -104,6 +104,7 @@ pub trait SearchProvider: Send + Sync {
 pub fn provider_for(id: SearchProviderId) -> Option<Box<dyn SearchProvider>> {
     use super::providers;
     match id {
+        SearchProviderId::Jina => Some(Box::new(providers::jina::JinaProvider)),
         SearchProviderId::Searxng => Some(Box::new(providers::searxng::SearxngProvider)),
         SearchProviderId::Tavily => Some(Box::new(providers::tavily::TavilyProvider)),
         SearchProviderId::Brave => Some(Box::new(providers::brave::BraveProvider)),
@@ -167,7 +168,9 @@ mod tests {
     }
 
     #[test]
-    fn only_the_four_ported_backends_have_a_provider_so_far() {
+    fn implemented_providers_keep_their_chain_order() {
+        // A provider must resolve at its own slot; a mismatch means the wrong
+        // backend runs. Update this list as providers land.
         let implemented: Vec<_> = SEARCH_PROVIDER_ORDER
             .into_iter()
             .filter(|id| provider_for(*id).is_some())
@@ -175,6 +178,7 @@ mod tests {
         assert_eq!(
             implemented,
             vec![
+                SearchProviderId::Jina,
                 SearchProviderId::Tavily,
                 SearchProviderId::Brave,
                 SearchProviderId::Searxng,

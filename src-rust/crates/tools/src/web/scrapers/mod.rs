@@ -22,6 +22,7 @@ pub mod metacpan;
 pub mod npm;
 pub mod nuget;
 pub mod nvd;
+pub mod openlibrary;
 pub mod osv;
 pub mod packagist;
 pub mod pub_dev;
@@ -67,6 +68,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(terraform::TerraformHandler),
         Box::new(devto::DevToHandler),
         Box::new(huggingface::HuggingFaceHandler),
+        Box::new(openlibrary::OpenLibraryHandler),
         Box::new(cisa_kev::CisaKevHandler),
         Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),

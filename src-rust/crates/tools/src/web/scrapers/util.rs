@@ -297,6 +297,23 @@ pub fn format_number(n: u64) -> String {
     out
 }
 
+/// Format a byte count as `B`/`KB`/`MB`/`GB` (1024-based, one decimal above 1K).
+pub fn format_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let b = bytes as f64;
+    if b < KB {
+        format!("{bytes}B")
+    } else if b < MB {
+        format!("{:.1}KB", b / KB)
+    } else if b < GB {
+        format!("{:.1}MB", b / MB)
+    } else {
+        format!("{:.1}GB", b / GB)
+    }
+}
+
 /// Format a millisecond epoch as `YYYY-MM-DD`, or empty when out of range.
 pub fn format_epoch_millis(ms: i64) -> String {
     chrono::DateTime::from_timestamp_millis(ms)
@@ -369,6 +386,14 @@ mod tests {
         // 2021-01-01T00:00:00Z in milliseconds.
         assert_eq!(format_epoch_millis(1_609_459_200_000), "2021-01-01");
         assert_eq!(format_epoch_millis(0), "1970-01-01");
+    }
+
+    #[test]
+    fn bytes_scale_through_the_units() {
+        assert_eq!(format_bytes(512), "512B");
+        assert_eq!(format_bytes(1536), "1.5KB");
+        assert_eq!(format_bytes(5 * 1024 * 1024), "5.0MB");
+        assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.0GB");
     }
 
     #[test]

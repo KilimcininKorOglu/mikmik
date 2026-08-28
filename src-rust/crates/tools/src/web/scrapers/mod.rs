@@ -6,9 +6,11 @@
 // non-`None` result; a URL no handler claims falls through to the generic
 // web-fetch path.
 
+pub mod aur;
 pub mod cisa_kev;
 pub mod clojars;
 pub mod crates_io;
+pub mod dockerhub;
 pub mod hex;
 pub mod maven;
 pub mod metacpan;
@@ -49,6 +51,8 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(pub_dev::PubDevHandler),
         Box::new(metacpan::MetaCpanHandler),
         Box::new(clojars::ClojarsHandler),
+        Box::new(aur::AurHandler),
+        Box::new(dockerhub::DockerHubHandler),
         Box::new(cisa_kev::CisaKevHandler),
         Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),

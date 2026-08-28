@@ -297,6 +297,61 @@ pub fn format_number(n: u64) -> String {
     out
 }
 
+/// Decode the common HTML entities (named and numeric) in `input`.
+///
+/// Covers the handful of named entities that appear in API text bodies plus
+/// decimal (`&#39;`) and hex (`&#x27;`) numeric references; an unrecognized
+/// entity is left verbatim. Not a full HTML parser.
+pub fn decode_html_entities(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp..];
+        match after.find(';').filter(|&end| end <= 12) {
+            Some(end) => {
+                let entity = &after[1..end];
+                match decode_entity(entity) {
+                    Some(ch) => out.push(ch),
+                    None => out.push_str(&after[..=end]),
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &after[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Resolve a single entity body (the text between `&` and `;`) to a char.
+fn decode_entity(entity: &str) -> Option<char> {
+    match entity {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" | "#39" | "#x27" | "#X27" => Some('\''),
+        "nbsp" => Some('\u{00a0}'),
+        _ => decode_numeric_entity(entity),
+    }
+}
+
+fn decode_numeric_entity(entity: &str) -> Option<char> {
+    let code = if let Some(hex) = entity
+        .strip_prefix("#x")
+        .or_else(|| entity.strip_prefix("#X"))
+    {
+        u32::from_str_radix(hex, 16).ok()?
+    } else {
+        entity.strip_prefix('#')?.parse::<u32>().ok()?
+    };
+    char::from_u32(code)
+}
+
 /// Format a byte count as `B`/`KB`/`MB`/`GB` (1024-based, one decimal above 1K).
 pub fn format_bytes(bytes: u64) -> String {
     const KB: f64 = 1024.0;
@@ -386,6 +441,25 @@ mod tests {
         // 2021-01-01T00:00:00Z in milliseconds.
         assert_eq!(format_epoch_millis(1_609_459_200_000), "2021-01-01");
         assert_eq!(format_epoch_millis(0), "1970-01-01");
+    }
+
+    #[test]
+    fn html_entities_decode_named_and_numeric() {
+        assert_eq!(
+            decode_html_entities("Tom &amp; Jerry &lt;3 &quot;hi&quot;"),
+            "Tom & Jerry <3 \"hi\""
+        );
+        assert_eq!(
+            decode_html_entities("it&#39;s &#x27;quoted&#x27;"),
+            "it's 'quoted'"
+        );
+        assert_eq!(decode_html_entities("a &#65; b"), "a A b");
+        // Unknown or malformed entities are left as written.
+        assert_eq!(
+            decode_html_entities("5 &unknown; & plain"),
+            "5 &unknown; & plain"
+        );
+        assert_eq!(decode_html_entities("no entity here"), "no entity here");
     }
 
     #[test]

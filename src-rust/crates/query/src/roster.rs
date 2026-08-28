@@ -30,6 +30,7 @@ pub fn build_tool_roster(
 ) -> Arc<Vec<Box<dyn Tool>>> {
     let mut tools: Vec<Box<dyn Tool>> = mikmik_tools::all_tools();
     tools.push(Box::new(crate::AgentTool));
+    tools.push(Box::new(crate::VibeTool));
 
     // Each of these withholds a tool that could only answer "there is nothing
     // here" where its condition fails. The reasoning is the one the ACP bridge

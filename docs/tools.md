@@ -1449,6 +1449,24 @@ Supervise long-lived processes by name. The name is the handle: it persists for 
 
 ---
 
+### vibe
+
+**Permission level:** None
+
+Persistent worker sessions that keep their context between messages. A worker's turn loop stays alive between messages, parked on a channel of its own, so its context survives from one `send` to the next. `SendMessage`'s contract is untouched.
+
+| Parameter | Type   | Required | Description                                                       |
+|-----------|--------|----------|-------------------------------------------------------------------|
+| `op`      | string | yes      | `spawn`, `send`, `wait`, `kill`, or `list`                        |
+| `name`    | string | for most | The worker name the op acts on                                    |
+| `prompt`  | string | for spawn/send | `spawn`: the first prompt; `send`: the next message          |
+| `tools`   | array  | no       | `spawn`: tools to give the worker; defaults to all               |
+| `model`   | string | no       | `spawn`: model override for the worker                           |
+
+`spawn` starts a worker and runs its first turn. `send` gives it the next message; the worker remembers everything before. `wait` blocks until the running turn finishes and returns its output. `kill` stops a worker; `list` shows the workers and how many turns each has run.
+
+---
+
 ### StructuredOutput
 
 **Permission level:** None

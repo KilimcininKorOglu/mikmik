@@ -26,6 +26,7 @@ pub mod roster;
 pub mod sanitize;
 pub mod session_memory;
 pub mod skill_prefetch;
+pub mod vibe;
 
 mod runner;
 pub use agent_tool::{init_team_swarm_runner, AgentTool};
@@ -55,6 +56,7 @@ pub use session_memory::{
 pub use skill_prefetch::{
     format_skill_listing, prefetch_skills, SharedSkillIndex, SkillDefinition, SkillIndex,
 };
+pub use vibe::VibeTool;
 
 use mikmik_api::{
     AnthropicStreamEvent, ApiMessage, ApiToolDefinition, CreateMessageRequest, StreamAccumulator,

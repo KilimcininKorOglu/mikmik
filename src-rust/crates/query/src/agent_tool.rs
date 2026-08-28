@@ -92,7 +92,7 @@ async fn remove_worktree(git_root: &Path, worktree_dir: &Path) {
 
 pub struct AgentTool;
 
-fn build_model_registry() -> ModelRegistry {
+pub(crate) fn build_model_registry() -> ModelRegistry {
     let mut registry = ModelRegistry::new();
     if let Some(cache_dir) = dirs::cache_dir() {
         let cache_path = cache_dir.join("mikmik").join("models_dev.json");
@@ -108,7 +108,10 @@ fn build_model_registry() -> ModelRegistry {
 /// the main session's permission mode on a plan the user never asked for. So
 /// the plan approval channel does not come along, which leaves `ExitPlanMode`
 /// on its non-blocking path there.
-fn subagent_context(parent: &ToolContext, inbox: mikmik_tools::AgentAddress) -> ToolContext {
+pub(crate) fn subagent_context(
+    parent: &ToolContext,
+    inbox: mikmik_tools::AgentAddress,
+) -> ToolContext {
     let mut ctx = parent.clone();
     ctx.plan_approval_tx = None;
     // A sub-agent shares its parent's session id, so it needs an address of
@@ -167,7 +170,7 @@ const SPAWNING_TOOLS: &[&str] = &[
 ///
 /// The spawn filter comes first and an allowlist narrows what is left, so a
 /// model that asks for a spawning tool by name does not receive one.
-fn subagent_tools(allowed: Option<&Vec<String>>) -> Vec<Box<dyn Tool>> {
+pub(crate) fn subagent_tools(allowed: Option<&Vec<String>>) -> Vec<Box<dyn Tool>> {
     mikmik_tools::all_tools()
         .into_iter()
         .filter(|t| !SPAWNING_TOOLS.contains(&t.name()))
@@ -199,7 +202,7 @@ fn resolve_subagent_model(params: &AgentInput, ctx: &ToolContext) -> String {
 
 /// Split out from [`resolve_subagent_model`] so it can be tested against a
 /// bare `Config`; building a whole `ToolContext` proves nothing about routing.
-fn subagent_model_for(config: &mikmik_core::Config, chosen: Option<&str>) -> String {
+pub(crate) fn subagent_model_for(config: &mikmik_core::Config, chosen: Option<&str>) -> String {
     let route = match chosen {
         Some(model) => config.resolve_route(model),
         // No override: whatever the parent session resolved to, fallbacks and
@@ -915,7 +918,7 @@ impl AgentTool {
 // Helper: convert a QueryOutcome into a result string for background agents
 // ---------------------------------------------------------------------------
 
-fn format_outcome(outcome: QueryOutcome) -> String {
+pub(crate) fn format_outcome(outcome: QueryOutcome) -> String {
     match outcome {
         QueryOutcome::EndTurn { message, .. } => message.get_all_text(),
         QueryOutcome::MaxTokens {

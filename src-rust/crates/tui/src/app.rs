@@ -236,6 +236,7 @@ fn get_env_var_for_provider(id: &str) -> &'static str {
         "wafer-serverless" => "WAFER_API_KEY",
         "litellm" => "LITELLM_API_KEY",
         "ollama-cloud" => "OLLAMA_API_KEY",
+        "bedrock-mantle" => "AWS_BEARER_TOKEN_BEDROCK",
         _ => "API_KEY",
     }
 }
@@ -778,6 +779,13 @@ fn provider_picker_items() -> Vec<SelectItem> {
             id: "ollama-cloud".into(),
             title: "Ollama Cloud".into(),
             description: "ollama.com hosted inference".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "bedrock-mantle".into(),
+            title: "Amazon Bedrock Mantle".into(),
+            description: "Bedrock OpenAI-compatible SKU".into(),
             category: "Other".into(),
             badge: None,
         },

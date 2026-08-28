@@ -64,8 +64,25 @@ pub fn provider_for_id(provider_id: &str) -> Option<OpenAiCompatProvider> {
         "litellm" => Some(litellm()),
         "vllm" => Some(vllm()),
         "ollama-cloud" => Some(ollama_cloud()),
+        "bedrock-mantle" => Some(bedrock_mantle()),
         _ => None,
     }
+}
+
+/// Amazon Bedrock Mantle — Bedrock's OpenAI-compatible SKU. Reads the region
+/// from `AWS_REGION` (default `us-east-1`) to build the templated base URL, and
+/// the AWS bearer token from `AWS_BEARER_TOKEN_BEDROCK`. A configured
+/// `providers.bedrock-mantle.api_base` overrides the whole base if the user
+/// needs a different region or endpoint.
+pub fn bedrock_mantle() -> OpenAiCompatProvider {
+    let region = std::env::var("AWS_REGION")
+        .ok()
+        .filter(|r| !r.trim().is_empty())
+        .unwrap_or_else(|| "us-east-1".to_string());
+    let base = format!("https://bedrock-mantle.{region}.api.aws/openai/v1");
+    let key = std::env::var("AWS_BEARER_TOKEN_BEDROCK").unwrap_or_default();
+    OpenAiCompatProvider::new(ProviderId::BEDROCK_MANTLE, "Amazon Bedrock Mantle", base)
+        .with_api_key(key)
 }
 
 /// Normalise a host into an OpenAI-compatible `<host>/v1` base URL.
@@ -929,12 +946,33 @@ mod tests {
             ProviderId::LITELLM,
             ProviderId::VLLM,
             ProviderId::OLLAMA_CLOUD,
+            ProviderId::CLOUDFLARE_AI_GATEWAY,
+            ProviderId::BEDROCK_MANTLE,
         ] {
             assert!(
                 ProviderId::is_well_known(id),
                 "{id} must be a well-known account prefix"
             );
         }
+    }
+
+    /// Bedrock Mantle builds its base URL from a region and speaks the
+    /// OpenAI-compatible `/openai/v1` path, so a missing region must still yield
+    /// a usable default rather than a malformed host.
+    #[test]
+    fn bedrock_mantle_builds_a_region_templated_openai_base() {
+        let base = provider_for_id("bedrock-mantle")
+            .expect("bedrock-mantle resolves")
+            .base_url()
+            .to_string();
+        assert!(
+            base.starts_with("https://bedrock-mantle."),
+            "base must be region-templated, got {base}"
+        );
+        assert!(
+            base.ends_with(".api.aws/openai/v1"),
+            "base must use the OpenAI-compatible path, got {base}"
+        );
     }
 
     #[test]

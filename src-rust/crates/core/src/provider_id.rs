@@ -102,6 +102,8 @@ impl ProviderId {
     pub const LITELLM: &'static str = "litellm";
     pub const VLLM: &'static str = "vllm";
     pub const OLLAMA_CLOUD: &'static str = "ollama-cloud";
+    pub const CLOUDFLARE_AI_GATEWAY: &'static str = "cloudflare-ai-gateway";
+    pub const BEDROCK_MANTLE: &'static str = "bedrock-mantle";
 
     /// Every provider id mikmik ships with, including the spelling aliases
     /// users type (`lmstudio` for `lm-studio`, `zhipu` for `zhipuai`, …).
@@ -178,6 +180,8 @@ impl ProviderId {
         Self::LITELLM,
         Self::VLLM,
         Self::OLLAMA_CLOUD,
+        Self::CLOUDFLARE_AI_GATEWAY,
+        Self::BEDROCK_MANTLE,
         // Spelling aliases accepted on the wire but not canonical ids.
         "openai-codex",
         "lmstudio",

@@ -275,7 +275,11 @@ pub fn provider_from_config(
         "anthropic" if provider_id == ProviderId::ANTHROPIC => None,
         // Built from settings rather than the resolved key, because it needs a
         // base URL and speaks the Anthropic wire format, not OpenAI's.
-        "anthropic" | "custom-anthropic" => anthropic_account_provider(provider_id),
+        // A Cloudflare AI Gateway with the Anthropic route speaks the Anthropic
+        // wire; the user supplies its templated base URL as `api_base`.
+        "anthropic" | "custom-anthropic" | "cloudflare-ai-gateway" => {
+            anthropic_account_provider(provider_id)
+        }
         // Composite "Free" provider — two keys are pulled internally from the
         // auth store; the `api_key` resolved above is ignored.
         "free" => build_free_provider(),

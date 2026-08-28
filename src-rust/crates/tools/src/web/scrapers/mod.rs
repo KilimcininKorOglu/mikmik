@@ -8,10 +8,12 @@
 
 pub mod cisa_kev;
 pub mod crates_io;
+pub mod hex;
 pub mod npm;
 pub mod nvd;
 pub mod osv;
 pub mod pypi;
+pub mod rubygems;
 pub mod util;
 
 use async_trait::async_trait;
@@ -33,6 +35,8 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(npm::NpmHandler) as Box<dyn SpecialHandler>,
         Box::new(pypi::PypiHandler),
         Box::new(crates_io::CratesIoHandler),
+        Box::new(rubygems::RubyGemsHandler),
+        Box::new(hex::HexHandler),
         Box::new(cisa_kev::CisaKevHandler),
         Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),

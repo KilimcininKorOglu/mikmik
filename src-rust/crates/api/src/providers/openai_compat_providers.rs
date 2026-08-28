@@ -67,8 +67,22 @@ pub fn provider_for_id(provider_id: &str) -> Option<OpenAiCompatProvider> {
         "bedrock-mantle" => Some(bedrock_mantle()),
         "minimax-code" => Some(minimax_code()),
         "minimax-code-cn" => Some(minimax_code_cn()),
+        "xiaomi" => Some(xiaomi()),
         _ => None,
     }
+}
+
+/// Xiaomi MiMo — OpenAI-compatible at `api.xiaomimimo.com/v1`. Reads
+/// `XIAOMI_API_KEY` (a standard `sk-` or a Token Plan `tp-` key). The regional
+/// Token Plan endpoints are reached by overriding `providers.xiaomi.api_base`.
+pub fn xiaomi() -> OpenAiCompatProvider {
+    let key = std::env::var("XIAOMI_API_KEY").unwrap_or_default();
+    OpenAiCompatProvider::new(
+        ProviderId::XIAOMI,
+        "Xiaomi MiMo",
+        "https://api.xiaomimimo.com/v1",
+    )
+    .with_api_key(key)
 }
 
 /// MiniMax Token Plan (coding plan), international region. OpenAI-compatible
@@ -952,6 +966,11 @@ mod tests {
                 ProviderId::MINIMAX_CODE_CN,
                 "https://api.minimaxi.com/v1",
             ),
+            (
+                "xiaomi",
+                ProviderId::XIAOMI,
+                "https://api.xiaomimimo.com/v1",
+            ),
         ];
         for (id, expected_id, expected_base) in cases {
             let provider = provider_for_id(id).unwrap_or_else(|| panic!("{id} should resolve"));
@@ -987,6 +1006,7 @@ mod tests {
             ProviderId::MINIMAX_CODE,
             ProviderId::MINIMAX_CODE_CN,
             ProviderId::KIMI_CODE,
+            ProviderId::XIAOMI,
         ] {
             assert!(
                 ProviderId::is_well_known(id),

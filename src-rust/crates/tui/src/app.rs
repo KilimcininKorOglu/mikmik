@@ -239,6 +239,7 @@ fn get_env_var_for_provider(id: &str) -> &'static str {
         "bedrock-mantle" => "AWS_BEARER_TOKEN_BEDROCK",
         "minimax-code" => "MINIMAX_CODE_API_KEY",
         "minimax-code-cn" => "MINIMAX_CODE_CN_API_KEY",
+        "xiaomi" => "XIAOMI_API_KEY",
         // Kimi Code authenticates by device-flow OAuth, not an env key. The
         // token store answers for it; this maps only for display parity.
         "kimi-code" => "KIMI_CODE_OAUTH_HOST",
@@ -812,6 +813,13 @@ fn provider_picker_items() -> Vec<SelectItem> {
             id: "kimi-code".into(),
             title: "Kimi Code".into(),
             description: "Moonshot coding plan (device login)".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "xiaomi".into(),
+            title: "Xiaomi MiMo".into(),
+            description: "OpenAI-compatible (api.xiaomimimo.com)".into(),
             category: "Other".into(),
             badge: None,
         },

@@ -351,6 +351,28 @@ The overrides exist for self-hosted or regional gateways; the defaults need no c
 
 ---
 
+### Xiaomi MiMo
+
+OpenAI-compatible models at `https://api.xiaomimimo.com/v1`, reached with an API key (`XIAOMI_API_KEY`). Both a standard pay-as-you-go `sk-` key and a Token Plan `tp-` key work.
+
+Pick "Xiaomi MiMo" under "Other" in [`/connect`](commands.md#connect) and paste the key from the [console](https://platform.xiaomimimo.com). The Token Plan is served from regional hosts; to target one, override the base URL:
+
+```json
+{
+  "provider": "xiaomi",
+  "providers": {
+    "xiaomi": {
+      "api_key": "tp-...",
+      "api_base": "https://token-plan-sgp.xiaomimimo.com/v1"
+    }
+  }
+}
+```
+
+Regional Token Plan bases: `token-plan-sgp` (Singapore), `token-plan-ams` (Europe), `token-plan-cn` (China).
+
+---
+
 ### Custom endpoints
 
 Two slots exist for endpoints MikMik does not ship a provider for, one per wire format:

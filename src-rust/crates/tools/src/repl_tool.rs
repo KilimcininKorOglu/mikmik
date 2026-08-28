@@ -49,6 +49,23 @@ struct ReplSession {
 static REPL_SESSIONS: Lazy<Arc<DashMap<(String, String), Arc<Mutex<ReplSession>>>>> =
     Lazy::new(|| Arc::new(DashMap::new()));
 
+/// Stop the one interpreter a `(session, language)` pair is running.
+///
+/// This is what `reset` calls before a run: the language's interpreter and
+/// everything it started go, so the next run spawns a fresh one with none of
+/// the previous state. The other languages' interpreters are left alone.
+async fn reset_session(session_id: &str, language: &str) {
+    let key = (session_id.to_string(), language.to_string());
+    let Some((_, session)) = REPL_SESSIONS.remove(&key) else {
+        return;
+    };
+    let mut session = session.lock().await;
+    if let Some(pid) = session.child.id() {
+        mikmik_core::process_tree::kill_tree(pid);
+    }
+    let _ = session.child.kill().await;
+}
+
 /// Stop every interpreter started for `session_id`.
 ///
 /// Called when a session ends. Each interpreter is killed along with anything
@@ -162,6 +179,7 @@ async fn run_in_session(
     session: &Arc<Mutex<ReplSession>>,
     language: &str,
     code: &str,
+    read_timeout: Duration,
 ) -> Result<String, String> {
     let wrapped = wrap_code(language, code);
 
@@ -179,7 +197,6 @@ async fn run_in_session(
 
     // Read lines until we see the sentinel, with a timeout
     let mut output_lines: Vec<String> = Vec::new();
-    let read_timeout = Duration::from_secs(30);
 
     loop {
         let mut line = String::new();
@@ -219,11 +236,35 @@ async fn run_in_session(
 
 pub struct ReplTool;
 
+/// The read timeout a call uses when it names none.
+const DEFAULT_TIMEOUT_SECS: u64 = 30;
+
+/// The longest read timeout a call may ask for.
+const MAX_TIMEOUT_SECS: u64 = 600;
+
 #[derive(Debug, Deserialize)]
 struct ReplInput {
     code: String,
     #[serde(default)]
     language: Option<String>,
+    /// Start a fresh interpreter for this language before running, dropping
+    /// every variable and import the previous one held.
+    #[serde(default)]
+    reset: bool,
+    /// Seconds to wait for the block to finish (default 30, maximum 600).
+    #[serde(default)]
+    timeout: Option<u64>,
+    /// A label for this block, shown at the top of the output.
+    #[serde(default)]
+    title: Option<String>,
+}
+
+/// Put a title above the output, so a labelled block reads as its own step.
+fn apply_title(output: String, title: Option<&str>) -> String {
+    match title.map(str::trim).filter(|title| !title.is_empty()) {
+        Some(title) => format!("=== {title} ===\n{output}"),
+        None => output,
+    }
 }
 
 #[async_trait]
@@ -259,6 +300,18 @@ impl Tool for ReplTool {
                     "type": "string",
                     "enum": ["bash", "python", "javascript"],
                     "description": "Interpreter language. Defaults to bash."
+                },
+                "reset": {
+                    "type": "boolean",
+                    "description": "Start a fresh interpreter for this language first, dropping its variables and imports. Only this language is reset."
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": "Seconds to wait for the block (default 30, maximum 600)."
+                },
+                "title": {
+                    "type": "string",
+                    "description": "A label for this block, shown above its output."
                 }
             },
             "required": ["code"]
@@ -306,7 +359,21 @@ impl Tool for ReplTool {
         debug!(
             session = %ctx.session_id,
             language = %language,
+            reset = params.reset,
             "ReplTool execute"
+        );
+
+        // A reset ends this language's interpreter before the run, so the code
+        // below spawns a fresh one with none of the previous state.
+        if params.reset {
+            reset_session(&ctx.session_id, &language).await;
+        }
+
+        let read_timeout = Duration::from_secs(
+            params
+                .timeout
+                .unwrap_or(DEFAULT_TIMEOUT_SECS)
+                .clamp(1, MAX_TIMEOUT_SECS),
         );
 
         let session = match get_or_spawn_session(&ctx.session_id, &language).await {
@@ -314,8 +381,8 @@ impl Tool for ReplTool {
             Err(e) => return ToolResult::error(format!("Failed to start REPL session: {}", e)),
         };
 
-        match run_in_session(&session, &language, &params.code).await {
-            Ok(output) => ToolResult::success(output),
+        match run_in_session(&session, &language, &params.code, read_timeout).await {
+            Ok(output) => ToolResult::success(apply_title(output, params.title.as_deref())),
             Err(e) => {
                 // Remove the dead session so next call spawns a fresh one
                 let key = (ctx.session_id.clone(), language.clone());
@@ -409,6 +476,98 @@ mod tests {
     #[test]
     fn repl_requires_execute_permission_level() {
         assert_eq!(ReplTool.permission_level(), PermissionLevel::Execute);
+    }
+
+    #[test]
+    fn a_title_sits_above_the_output_and_a_blank_one_is_dropped() {
+        assert_eq!(
+            apply_title("42\n".to_string(), Some("compute")),
+            "=== compute ===\n42\n"
+        );
+        assert_eq!(apply_title("42".to_string(), None), "42");
+        assert_eq!(apply_title("42".to_string(), Some("   ")), "42");
+    }
+
+    #[cfg(unix)]
+    fn node_or_bash() -> bool {
+        which::which("bash").is_ok()
+    }
+
+    /// Reset has to drop the interpreter's state: a variable set before the
+    /// reset must be gone after it, while the same code without a reset still
+    /// sees it. Without a working reset the second block would print `5`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reset_starts_a_fresh_interpreter_without_the_old_state() {
+        if !node_or_bash() {
+            return;
+        }
+        let ctx = ctx_with(Arc::new(AllowHandler), "repl-reset-test");
+
+        let set = ReplTool
+            .execute(
+                json!({ "language": "bash", "code": "KEPT=5; echo set" }),
+                &ctx,
+            )
+            .await;
+        assert!(!set.is_error, "{}", set.content);
+
+        let kept = ReplTool
+            .execute(
+                json!({ "language": "bash", "code": "echo \"kept=$KEPT\"" }),
+                &ctx,
+            )
+            .await;
+        assert!(kept.content.contains("kept=5"), "{}", kept.content);
+
+        let after_reset = ReplTool
+            .execute(
+                json!({ "language": "bash", "code": "echo \"kept=$KEPT\"", "reset": true }),
+                &ctx,
+            )
+            .await;
+        shutdown_session("repl-reset-test").await;
+
+        assert!(!after_reset.is_error, "{}", after_reset.content);
+        assert!(
+            after_reset.content.contains("kept="),
+            "{}",
+            after_reset.content
+        );
+        assert!(
+            !after_reset.content.contains("kept=5"),
+            "reset kept the old variable: {}",
+            after_reset.content
+        );
+    }
+
+    /// A short timeout has to cut a block that runs longer, and the message
+    /// names the limit that was asked for. Without the parameter this used a
+    /// fixed 30s and the 2s sleep would finish first.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_short_timeout_cuts_a_slow_block() {
+        if which::which("bash").is_err() {
+            return;
+        }
+        let ctx = ctx_with(Arc::new(AllowHandler), "repl-timeout-test");
+
+        let started = std::time::Instant::now();
+        let result = ReplTool
+            .execute(
+                json!({ "language": "bash", "code": "sleep 5; echo done", "timeout": 1 }),
+                &ctx,
+            )
+            .await;
+        let waited = started.elapsed();
+        shutdown_session("repl-timeout-test").await;
+
+        assert!(result.is_error, "{}", result.content);
+        assert!(result.content.contains("1s"), "{}", result.content);
+        assert!(
+            waited < std::time::Duration::from_secs(4),
+            "the block ran for {waited:?}, past the 1s it was given"
+        );
     }
 
     #[tokio::test]

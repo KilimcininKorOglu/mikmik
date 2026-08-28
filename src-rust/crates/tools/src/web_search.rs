@@ -80,6 +80,16 @@ impl Recency {
             Self::Year => "year",
         }
     }
+
+    /// Tavily's `time_range` value, which is the same word the model gave.
+    fn tavily_time_range(self) -> &'static str {
+        match self {
+            Self::Day => "day",
+            Self::Week => "week",
+            Self::Month => "month",
+            Self::Year => "year",
+        }
+    }
 }
 
 #[async_trait]
@@ -114,7 +124,7 @@ impl Tool for WebSearchTool {
                 "recency": {
                     "type": "string",
                     "enum": ["day", "week", "month", "year"],
-                    "description": "Only return results from within this window. Honoured by SearXNG and Brave; DuckDuckGo ignores it and says so."
+                    "description": "Only return results from within this window. Honoured by SearXNG, Tavily and Brave; DuckDuckGo ignores it and says so."
                 }
             },
             "required": ["query"]
@@ -134,6 +144,9 @@ impl Tool for WebSearchTool {
         };
         debug!(query = %params.query, num_results, ?recency, "Web search");
 
+        let tavily_key = std::env::var("TAVILY_API_KEY")
+            .ok()
+            .filter(|k| !k.is_empty());
         let brave_key = std::env::var("BRAVE_SEARCH_API_KEY")
             .ok()
             .filter(|k| !k.is_empty());
@@ -145,8 +158,18 @@ impl Tool for WebSearchTool {
                 Ok(result) => return result,
                 Err(e) => e,
             };
-            match after_searxng_failure(error, ctx.config.web_search_fallback, brave_key) {
+            match after_searxng_failure(
+                error,
+                ctx.config.web_search_fallback,
+                tavily_key,
+                brave_key,
+            ) {
                 NextBackend::Stop(error) => ToolResult::error(error),
+                NextBackend::Tavily(api_key) => {
+                    warn!("SearXNG unreachable, falling back to Tavily");
+                    let result = search_tavily(&params.query, num_results, &api_key, recency).await;
+                    label_fallback("Tavily", result)
+                }
                 NextBackend::Brave(api_key) => {
                     warn!("SearXNG unreachable, falling back to Brave Search");
                     let result = search_brave(&params.query, num_results, &api_key, recency).await;
@@ -158,6 +181,8 @@ impl Tool for WebSearchTool {
                     label_fallback("DuckDuckGo", result)
                 }
             }
+        } else if let Some(api_key) = tavily_key {
+            search_tavily(&params.query, num_results, &api_key, recency).await
         } else if let Some(api_key) = brave_key {
             search_brave(&params.query, num_results, &api_key, recency).await
         } else {
@@ -187,6 +212,7 @@ fn searxng_base_url(configured: Option<&str>) -> Option<String> {
 enum NextBackend {
     /// Report the SearXNG failure and search nothing else.
     Stop(String),
+    Tavily(String),
     Brave(String),
     DuckDuckGo,
 }
@@ -194,21 +220,25 @@ enum NextBackend {
 /// Decides whether a SearXNG failure ends the search or hands over.
 ///
 /// Split out from [`WebSearchTool::execute`] so the choice can be tested
-/// without reaching the network.
+/// without reaching the network. Tavily is preferred over Brave when both
+/// keys are present: it is a dedicated search API that returns full results,
+/// so it is the closer stand-in for the SearXNG that just failed.
 fn after_searxng_failure(
     error: String,
     fallback_enabled: bool,
+    tavily_key: Option<String>,
     brave_key: Option<String>,
 ) -> NextBackend {
     if !fallback_enabled {
         return NextBackend::Stop(format!(
             "{error}\n\nSet \"webSearchFallback\": true in settings.json to let \
-             WebSearch continue with Brave Search or DuckDuckGo when SearXNG is down."
+             WebSearch continue with Tavily, Brave Search or DuckDuckGo when SearXNG is down."
         ));
     }
-    match brave_key {
-        Some(key) => NextBackend::Brave(key),
-        None => NextBackend::DuckDuckGo,
+    match (tavily_key, brave_key) {
+        (Some(key), _) => NextBackend::Tavily(key),
+        (None, Some(key)) => NextBackend::Brave(key),
+        (None, None) => NextBackend::DuckDuckGo,
     }
 }
 
@@ -356,6 +386,82 @@ fn format_brave_results(data: &Value, max: usize) -> String {
                 .and_then(|s| s.as_str())
                 .unwrap_or("");
 
+            output.push_str(&format!(
+                "{}. **{}**\n   URL: {}\n   {}\n\n",
+                i + 1,
+                title,
+                url,
+                snippet
+            ));
+        }
+    }
+
+    if output.is_empty() {
+        "No results found.".to_string()
+    } else {
+        output
+    }
+}
+
+/// Search using the Tavily Search API.
+async fn search_tavily(
+    query: &str,
+    num_results: usize,
+    api_key: &str,
+    recency: Option<Recency>,
+) -> ToolResult {
+    let client = reqwest::Client::new();
+    let body = tavily_request_body(query, num_results, recency);
+
+    let resp = match client
+        .post("https://api.tavily.com/search")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return ToolResult::error(format!("Search request failed: {}", e)),
+    };
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        return ToolResult::error(format!("Tavily API returned status {}", status));
+    }
+
+    let data: Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => return ToolResult::error(format!("Failed to parse response: {}", e)),
+    };
+
+    ToolResult::success(format_tavily_results(&data, num_results))
+}
+
+/// The Tavily request body, carrying `time_range` when a window was asked for.
+///
+/// A pure builder so the payload can be asserted without reaching the network.
+fn tavily_request_body(query: &str, num_results: usize, recency: Option<Recency>) -> Value {
+    let mut body = json!({
+        "query": query,
+        "max_results": num_results,
+    });
+    if let Some(recency) = recency {
+        body["time_range"] = json!(recency.tavily_time_range());
+    }
+    body
+}
+
+fn format_tavily_results(data: &Value, max: usize) -> String {
+    let mut output = String::new();
+    if let Some(items) = data.get("results").and_then(|r| r.as_array()) {
+        for (i, item) in items.iter().take(max).enumerate() {
+            let title = item
+                .get("title")
+                .and_then(|t| t.as_str())
+                .unwrap_or("(No title)");
+            let url = item.get("url").and_then(|u| u.as_str()).unwrap_or("");
+            let snippet = item.get("content").and_then(|s| s.as_str()).unwrap_or("");
             output.push_str(&format!(
                 "{}. **{}**\n   URL: {}\n   {}\n\n",
                 i + 1,
@@ -570,6 +676,58 @@ mod tests {
         assert_eq!(Recency::Month.brave_freshness(), "pm");
         assert_eq!(Recency::Year.brave_freshness(), "py");
         assert_eq!(Recency::Month.searxng_time_range(), "month");
+        assert_eq!(Recency::Week.tavily_time_range(), "week");
+    }
+
+    #[test]
+    fn a_tavily_body_carries_the_window_and_result_cap() {
+        // A wrong or missing time_range sends an unfiltered request while the
+        // model asked for a window; a wrong max_results ignores the cap.
+        let windowed = tavily_request_body("rust", 7, Some(Recency::Month));
+        assert_eq!(windowed["time_range"], json!("month"));
+        assert_eq!(windowed["max_results"], json!(7));
+        assert_eq!(windowed["query"], json!("rust"));
+
+        let plain = tavily_request_body("rust", 5, None);
+        assert!(plain.get("time_range").is_none(), "{plain}");
+    }
+
+    #[test]
+    fn tavily_results_render_title_url_and_snippet() {
+        let body = json!({
+            "results": [
+                {
+                    "title": "Ownership",
+                    "url": "https://doc.rust-lang.org/book/ch04-01.html",
+                    "content": "Ownership is a set of rules.",
+                    "score": 0.98
+                }
+            ]
+        });
+        let output = format_tavily_results(&body, 20);
+
+        assert!(output.contains("1. **Ownership**"), "{output}");
+        assert!(
+            output.contains("URL: https://doc.rust-lang.org/book/ch04-01.html"),
+            "{output}"
+        );
+        assert!(output.contains("Ownership is a set of rules."), "{output}");
+    }
+
+    #[test]
+    fn tavily_formatting_honours_the_result_cap_and_empty_case() {
+        let body = json!({
+            "results": [
+                { "title": "First", "url": "https://a", "content": "one" },
+                { "title": "Second", "url": "https://b", "content": "two" }
+            ]
+        });
+        let capped = format_tavily_results(&body, 1);
+        assert!(capped.contains("First"), "{capped}");
+        assert!(!capped.contains("Second"), "{capped}");
+
+        let empty = json!({ "results": [] });
+        assert_eq!(format_tavily_results(&empty, 20), "No results found.");
     }
 
     #[test]
@@ -646,6 +804,7 @@ mod tests {
         let next = after_searxng_failure(
             "SearXNG request failed".to_string(),
             false,
+            None,
             Some("brave-key".to_string()),
         );
 
@@ -659,15 +818,47 @@ mod tests {
     }
 
     #[test]
+    fn fallback_prefers_tavily_over_brave_when_both_keys_present() {
+        // Tavily is a dedicated search API returning full results, so it is the
+        // closer stand-in for SearXNG than Brave; wired the wrong way the paid
+        // Tavily key would sit idle behind Brave.
+        let next = after_searxng_failure(
+            "down".to_string(),
+            true,
+            Some("tavily-key".to_string()),
+            Some("brave-key".to_string()),
+        );
+
+        assert_eq!(next, NextBackend::Tavily("tavily-key".to_string()));
+    }
+
+    #[test]
+    fn fallback_uses_tavily_when_only_its_key_is_present() {
+        let next = after_searxng_failure(
+            "down".to_string(),
+            true,
+            Some("tavily-key".to_string()),
+            None,
+        );
+
+        assert_eq!(next, NextBackend::Tavily("tavily-key".to_string()));
+    }
+
+    #[test]
     fn fallback_prefers_brave_when_its_key_is_present() {
-        let next = after_searxng_failure("down".to_string(), true, Some("brave-key".to_string()));
+        let next = after_searxng_failure(
+            "down".to_string(),
+            true,
+            None,
+            Some("brave-key".to_string()),
+        );
 
         assert_eq!(next, NextBackend::Brave("brave-key".to_string()));
     }
 
     #[test]
     fn fallback_lands_on_duckduckgo_without_a_brave_key() {
-        let next = after_searxng_failure("down".to_string(), true, None);
+        let next = after_searxng_failure("down".to_string(), true, None, None);
 
         assert_eq!(next, NextBackend::DuckDuckGo);
     }

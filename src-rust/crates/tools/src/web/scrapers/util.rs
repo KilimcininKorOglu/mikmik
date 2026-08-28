@@ -297,6 +297,13 @@ pub fn format_number(n: u64) -> String {
     out
 }
 
+/// Format a millisecond epoch as `YYYY-MM-DD`, or empty when out of range.
+pub fn format_epoch_millis(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|dt| dt.format("%Y-%m-%d").to_string())
+        .unwrap_or_default()
+}
+
 /// Format a date value as `YYYY-MM-DD`, or empty on unparseable input.
 pub fn format_iso_date(value: &str) -> String {
     if let Some(prefix) = value.get(..10) {
@@ -355,6 +362,13 @@ mod tests {
         assert_eq!(format_iso_date("2024-06-30T12:00:00Z"), "2024-06-30");
         assert_eq!(format_iso_date("2024-06-30"), "2024-06-30");
         assert_eq!(format_iso_date("not a date"), "");
+    }
+
+    #[test]
+    fn epoch_millis_formats_a_date() {
+        // 2021-01-01T00:00:00Z in milliseconds.
+        assert_eq!(format_epoch_millis(1_609_459_200_000), "2021-01-01");
+        assert_eq!(format_epoch_millis(0), "1970-01-01");
     }
 
     #[test]

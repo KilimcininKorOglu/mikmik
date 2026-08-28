@@ -9,9 +9,13 @@
 pub mod cisa_kev;
 pub mod crates_io;
 pub mod hex;
+pub mod maven;
 pub mod npm;
+pub mod nuget;
 pub mod nvd;
 pub mod osv;
+pub mod packagist;
+pub mod pub_dev;
 pub mod pypi;
 pub mod rubygems;
 pub mod util;
@@ -37,6 +41,10 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(crates_io::CratesIoHandler),
         Box::new(rubygems::RubyGemsHandler),
         Box::new(hex::HexHandler),
+        Box::new(maven::MavenHandler),
+        Box::new(nuget::NuGetHandler),
+        Box::new(packagist::PackagistHandler),
+        Box::new(pub_dev::PubDevHandler),
         Box::new(cisa_kev::CisaKevHandler),
         Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),

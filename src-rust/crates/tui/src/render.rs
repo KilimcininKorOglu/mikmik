@@ -2922,16 +2922,31 @@ fn render_tool_block_lines(
         summary = shorten_home_path(&summary);
     }
 
+    // A task-list call keeps its tool name and carries the task in
+    // parentheses, e.g. `TaskUpdate(Fix the bug)`, because the task itself is
+    // the point and the bare verb says nothing about which one.
+    let is_task_list = matches!(
+        normalized.as_str(),
+        "taskcreate" | "taskupdate" | "taskget" | "taskstop" | "taskoutput" | "tasklist"
+    );
     let mut header_spans = vec![Span::styled(
         format!("   {} ", icon),
         Style::default().fg(accent),
     )];
     if running {
-        header_spans.extend(shimmer_spans(&running_label, frame_count));
+        let label = if is_task_list && !summary.is_empty() {
+            format!("{}({})", block.name, summary)
+        } else {
+            running_label.clone()
+        };
+        header_spans.extend(shimmer_spans(&label, frame_count));
     } else {
-        // Show the primary argument; fall back to the tool name when there is none.
+        // Show the primary argument; fall back to the tool name when there is
+        // none. A task-list call shows both, `TaskUpdate(Fix the bug)`.
         let primary = if summary.is_empty() {
             block.name.clone()
+        } else if is_task_list {
+            format!("{}({})", block.name, summary)
         } else {
             summary
         };

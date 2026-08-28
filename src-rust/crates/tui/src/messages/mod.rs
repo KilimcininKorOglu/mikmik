@@ -1136,6 +1136,30 @@ fn title_case_word(label: &str) -> String {
     }
 }
 
+/// The `task_id` argument, whether it arrived as `task_id`, `taskId`, a string
+/// or a number.
+fn task_id_arg(input: &serde_json::Value) -> String {
+    for key in ["task_id", "taskId"] {
+        if let Some(value) = input.get(key) {
+            if let Some(s) = value.as_str() {
+                return s.to_string();
+            }
+            if let Some(n) = value.as_u64() {
+                return n.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// The subject a task id names, read from the live task store.
+fn task_subject_for(id: &str) -> Option<String> {
+    mikmik_tools::tasks::TASK_STORE
+        .get(id)
+        .map(|task| task.subject.clone())
+        .filter(|subject| !subject.is_empty())
+}
+
 pub fn extract_tool_summary(tool_name: &str, input: &serde_json::Value) -> String {
     fn str_field<'a>(input: &'a serde_json::Value, key: &str) -> &'a str {
         input.get(key).and_then(|v| v.as_str()).unwrap_or("")
@@ -1194,6 +1218,27 @@ pub fn extract_tool_summary(tool_name: &str, input: &serde_json::Value) -> Strin
                 task
             };
             truncate(task.lines().next().unwrap_or(""), 60)
+        }
+        // The task-list tools name the task itself, not a file or command. Create
+        // carries the subject in its input; the rest carry only the id, so the
+        // subject is read back from the live task store, falling back to the id.
+        "taskcreate" => {
+            let subject = str_field(input, "subject");
+            let subject = if subject.is_empty() {
+                str_field(input, "description")
+            } else {
+                subject
+            };
+            truncate(subject.lines().next().unwrap_or(""), 60)
+        }
+        "taskupdate" | "taskget" | "taskstop" | "taskoutput" => {
+            let inline = str_field(input, "subject");
+            if !inline.is_empty() {
+                return truncate(inline, 60);
+            }
+            let id = task_id_arg(input);
+            let shown = task_subject_for(&id).unwrap_or(id);
+            truncate(&shown, 60)
         }
         _ => {
             // First string value from the input object
@@ -2389,6 +2434,57 @@ mod tests {
     fn an_lsp_call_without_a_file_names_only_what_it_asks() {
         let input = serde_json::json!({ "action": "symbols", "file": "*", "query": "Parser" });
         assert_eq!(extract_tool_summary("LSP", &input), "symbols Parser");
+    }
+
+    #[test]
+    fn task_create_is_summarised_by_its_subject() {
+        let input = serde_json::json!({ "subject": "Fix the login bug", "description": "..." });
+        assert_eq!(
+            extract_tool_summary("TaskCreate", &input),
+            "Fix the login bug"
+        );
+    }
+
+    #[test]
+    fn task_update_resolves_its_id_to_the_stored_subject() {
+        let id = "summary-test-resolve-42";
+        mikmik_tools::tasks::TASK_STORE.insert(
+            id.to_string(),
+            mikmik_tools::tasks::Task {
+                id: id.to_string(),
+                subject: "Wire the provider".to_string(),
+                description: String::new(),
+                status: mikmik_tools::tasks::TaskStatus::Pending,
+                owner: None,
+                blocks: Vec::new(),
+                blocked_by: Vec::new(),
+                metadata: None,
+                output: None,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            },
+        );
+        let input = serde_json::json!({ "task_id": id });
+        assert_eq!(
+            extract_tool_summary("TaskUpdate", &input),
+            "Wire the provider"
+        );
+        mikmik_tools::tasks::TASK_STORE.remove(id);
+    }
+
+    #[test]
+    fn task_update_falls_back_to_the_id_when_unknown() {
+        let input = serde_json::json!({ "task_id": "no-such-task-id-999" });
+        assert_eq!(
+            extract_tool_summary("TaskUpdate", &input),
+            "no-such-task-id-999"
+        );
+    }
+
+    #[test]
+    fn task_update_prefers_an_inline_subject_rename() {
+        let input = serde_json::json!({ "task_id": "1", "subject": "Renamed task" });
+        assert_eq!(extract_tool_summary("TaskUpdate", &input), "Renamed task");
     }
 
     #[test]

@@ -839,13 +839,34 @@ impl ModelRegistry {
     /// [`Config::resolve_route`](mikmik_core::config::Config::resolve_route),
     /// never from `config.provider` plus a prefix strip, because the two
     /// disagree whenever the chosen model names a different account.
+    ///
+    /// A composite account carries the real provider inside the model id: free
+    /// mode stores `free/opencode-zen/<model>`, which resolves to the account
+    /// `free` and the model `opencode-zen/<model>`, and the registry knows that
+    /// model under `opencode-zen`, not under `free`. So a miss on the first key
+    /// is retried against the provider embedded in the model id before falling
+    /// back to a default. Without that second key this returned 128 000 for a
+    /// 204 800-token model while `compact::resolve_context_window`, which
+    /// already tried it, returned the right number for the same route.
     pub fn context_window_for(&self, provider_id: &str, model_id: &str) -> u64 {
-        if let Some(entry) = self.get(provider_id, model_id) {
-            if entry.info.context_window > 0 {
-                return entry.info.context_window as u64;
+        if let Some(window) = self.stored_context_window(provider_id, model_id) {
+            return window;
+        }
+        if let Some((embedded_provider, embedded_model)) = model_id.split_once('/') {
+            if let Some(window) = self.stored_context_window(embedded_provider, embedded_model) {
+                return window;
             }
         }
         Self::default_context_window(provider_id)
+    }
+
+    /// The window this registry stores for a pair, if it holds a usable one.
+    ///
+    /// `None` covers both "no entry" and an entry whose window is zero, because
+    /// zero is not a window and the caller has to keep looking.
+    fn stored_context_window(&self, provider_id: &str, model_id: &str) -> Option<u64> {
+        let window = self.get(provider_id, model_id)?.info.context_window;
+        (window > 0).then_some(window as u64)
     }
 
     /// The window to assume for a provider whose model is not in the registry.
@@ -2231,6 +2252,67 @@ mod tests {
             ),
             200_000,
             "a model the catalogue does not cover falls back to its provider's default"
+        );
+    }
+
+    /// Free mode stores `free/opencode-zen/<model>`, which resolves to the
+    /// account `free` and the model `opencode-zen/<model>`. The registry files
+    /// that model under `opencode-zen`, so asking `free` about it misses and
+    /// the footer reported a 128k default for a 204 800-token model.
+    #[test]
+    fn a_composite_account_resolves_through_the_provider_inside_the_model_id() {
+        let reg = ModelRegistry::new();
+        let truth = reg.context_window_for("opencode-zen", "minimax-m2.5-free");
+        assert!(
+            truth > 128_000,
+            "this test needs a model whose real window differs from the default; got {truth}"
+        );
+        assert_eq!(
+            reg.context_window_for("free", "opencode-zen/minimax-m2.5-free"),
+            truth,
+            "the free account must reach the window the registry already knows"
+        );
+    }
+
+    /// The footer and auto-compact divide by this number, so they have to agree
+    /// on it. They did not: only `compact::resolve_context_window` tried the
+    /// provider embedded in the model id.
+    #[test]
+    fn the_composite_route_gives_one_window_to_every_consumer() {
+        let reg = ModelRegistry::new();
+        // The footer's path, as `App::refresh_context_window_size` calls it.
+        let footer = reg.context_window_for("free", "opencode-zen/minimax-m2.5-free");
+        // What the registry holds for the same model under its real provider.
+        let truth = reg.context_window_for("opencode-zen", "minimax-m2.5-free");
+        assert_eq!(footer, truth);
+        assert_ne!(
+            footer,
+            ModelRegistry::default_context_window("free"),
+            "the route resolved to the generic default instead of the model's own window"
+        );
+    }
+
+    #[test]
+    fn an_embedded_provider_the_registry_does_not_know_still_falls_back() {
+        // The second key is a repair for composite accounts, not a licence to
+        // invent a window for a model nobody catalogues.
+        let reg = ModelRegistry::new();
+        assert_eq!(
+            reg.context_window_for("free", "no-such-provider/no-such-model"),
+            ModelRegistry::default_context_window("free")
+        );
+    }
+
+    #[test]
+    fn a_model_id_without_a_slash_is_unaffected() {
+        let reg = ModelRegistry::new();
+        assert_eq!(
+            reg.context_window_for(
+                mikmik_core::provider_id::ProviderId::ANTHROPIC,
+                "claude-opus-5"
+            ),
+            1_000_000,
+            "a plain model id must still resolve on the first key"
         );
     }
 

@@ -63,6 +63,7 @@ pub(crate) async fn execute_tool(
                 current_call: Some(std::sync::Arc::new(mikmik_tools::ActiveToolCall {
                     id: tool_id.to_string(),
                     input: input.clone(),
+                    permission_wait_ms: std::sync::Arc::default(),
                 })),
                 // A hosting client is told which call anything it shows the
                 // user belongs to.
@@ -88,11 +89,28 @@ pub(crate) async fn execute_tool(
                 }
             }
             // Timed here rather than around the whole function, so the number
-            // is the tool's own work. A tool that prompts for permission would
-            // otherwise report how long the user took to answer.
+            // is the tool's own work. The central backstop above prompts before
+            // this point, so its wait is already outside the timer; clear the
+            // per-call counter so only a wait the tool raises from *inside*
+            // execute (a self-gating tool) is counted, then subtracted below.
+            if let Some(call) = &ctx.current_call {
+                call.permission_wait_ms
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
+            }
             let started = std::time::Instant::now();
             let mut result = tool.execute(input.clone(), ctx).await;
-            result.duration_ms = Some(started.elapsed().as_millis() as u64);
+            let elapsed = started.elapsed().as_millis() as u64;
+            // A self-gating tool that prompted inside execute recorded how long
+            // the user took; subtract it so the duration is the tool's own work.
+            let waited = ctx
+                .current_call
+                .as_ref()
+                .map(|call| {
+                    call.permission_wait_ms
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                })
+                .unwrap_or(0);
+            result.duration_ms = Some(elapsed.saturating_sub(waited));
             result
         }
         None => {
@@ -147,5 +165,103 @@ pub(crate) fn build_todo_nudge(session_id: &str) -> String {
             incomplete_count,
             if incomplete_count == 1 { "" } else { "s" }
         )
+    }
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::*;
+    use async_trait::async_trait;
+    use mikmik_core::permissions::{PermissionDecision, PermissionHandler, PermissionRequest};
+    use mikmik_tools::{PendingPermissionStore, PermissionLevel, Tool, ToolResult};
+    use serde_json::json;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// A handler that always asks, so the request reaches the pending queue and
+    /// the call blocks until a decision is sent.
+    struct AlwaysAsk;
+    impl PermissionHandler for AlwaysAsk {
+        fn check_permission(&self, _request: &PermissionRequest) -> PermissionDecision {
+            PermissionDecision::Ask {
+                reason: "ask".to_string(),
+            }
+        }
+        fn request_permission(&self, _request: &PermissionRequest) -> PermissionDecision {
+            PermissionDecision::Ask {
+                reason: "ask".to_string(),
+            }
+        }
+    }
+
+    /// A self-gating tool whose own work is trivial: all its wall time is the
+    /// permission prompt it raises from inside `execute`.
+    struct SelfGatingSleeper;
+    #[async_trait]
+    impl Tool for SelfGatingSleeper {
+        fn name(&self) -> &str {
+            "self_gating_sleeper"
+        }
+        fn description(&self) -> &str {
+            "prompts from inside execute"
+        }
+        fn permission_level(&self) -> PermissionLevel {
+            PermissionLevel::Execute
+        }
+        fn self_gates(&self) -> bool {
+            true
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            json!({ "type": "object" })
+        }
+        async fn execute(&self, _input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
+            match ctx.check_permission("self_gating_sleeper", "do it", false) {
+                Ok(()) => ToolResult::success("done"),
+                Err(error) => ToolResult::error(error.to_string()),
+            }
+        }
+    }
+
+    /// The reported duration must be the tool's own work, not how long the user
+    /// took to approve a prompt the tool raised from inside `execute`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_self_gating_tools_duration_excludes_the_permission_wait() {
+        let store = Arc::new(parking_lot::Mutex::new(PendingPermissionStore::default()));
+        let mut ctx = crate::agent_tool::tests::parent_context();
+        ctx.pending_permissions = Some(store.clone());
+        ctx.non_interactive = false;
+        ctx.permission_handler = Arc::new(AlwaysAsk);
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(SelfGatingSleeper)];
+
+        // Approve only after a long pause, so a duration that swallowed the wait
+        // would be clearly above this pause and one that excludes it clearly
+        // below.
+        let store_bg = store.clone();
+        let approver = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            loop {
+                let taken = {
+                    let mut guard = store_bg.lock();
+                    guard.queue.pop_front()
+                };
+                if let Some(mut request) = taken {
+                    if let Some(tx) = request.decision_tx.take() {
+                        let _ = tx.send(PermissionDecision::Allow);
+                    }
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+
+        let result = execute_tool("self_gating_sleeper", "call-1", &json!({}), &tools, &ctx).await;
+        let _ = approver.await;
+
+        assert!(!result.is_error, "{}", result.content);
+        let duration = result.duration_ms.expect("a duration was stamped");
+        assert!(
+            duration < 300,
+            "duration {duration}ms still carried the ~400ms permission wait"
+        );
     }
 }

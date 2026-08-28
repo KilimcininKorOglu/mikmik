@@ -539,6 +539,14 @@ pub struct ActiveToolCall {
     pub id: String,
     /// The arguments the model supplied, as they arrived.
     pub input: serde_json::Value,
+    /// Milliseconds this call spent waiting for the user to answer a permission
+    /// prompt it raised from inside its own `execute` (a self-gating tool).
+    ///
+    /// The runner subtracts it from the call's measured duration, so a tool's
+    /// reported time is its own work and not how long the user took to click.
+    /// Shared behind an `Arc` so `request_permission` can add to the same
+    /// counter the runner later reads. Zero for a tool that never prompts.
+    pub permission_wait_ms: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Shared context passed to every tool invocation.
@@ -785,7 +793,18 @@ impl ToolContext {
                     decision_tx: Some(tx),
                 });
 
+                // Time the wait for the user's answer and attribute it to this
+                // call, so the runner can subtract it: a self-gating tool that
+                // prompts here would otherwise report the user's think time as
+                // its own work.
+                let waited_at = std::time::Instant::now();
                 let decision = tokio::task::block_in_place(|| rx.blocking_recv());
+                if let Some(call) = &self.current_call {
+                    call.permission_wait_ms.fetch_add(
+                        waited_at.elapsed().as_millis() as u64,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                }
                 match decision {
                     Ok(PermissionDecision::Allow | PermissionDecision::AllowPermanently) => Ok(()),
                     _ => Err(mikmik_core::error::ClaudeError::PermissionDenied(
@@ -1496,6 +1515,7 @@ mod tests {
             ctx.current_call = Some(Arc::new(ActiveToolCall {
                 id: "call-1".to_string(),
                 input: serde_json::json!({}),
+                permission_wait_ms: Arc::default(),
             }));
         }
         (ctx, rx)
@@ -1539,6 +1559,7 @@ mod tests {
         no_channel.current_call = Some(Arc::new(ActiveToolCall {
             id: "call-1".to_string(),
             input: serde_json::json!({}),
+            permission_wait_ms: Arc::default(),
         }));
         assert!(
             no_channel.live_output_sink().is_none(),

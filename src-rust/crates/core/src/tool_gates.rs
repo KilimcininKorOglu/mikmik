@@ -56,6 +56,11 @@ pub fn unusable_tools(has_mcp: bool, config: &Config, cwd: &Path) -> Vec<&'stati
     if !config.browser_enabled || !browser_is_reachable(config) {
         withheld.push("browser");
     }
+    // The image tools reach a provider, so with none configured they could only
+    // report that there is nothing to ask.
+    if config.resolve_api_key().is_none() {
+        withheld.extend(["generate_image", "inspect_image"]);
+    }
     withheld
 }
 
@@ -170,6 +175,31 @@ mod tests {
             ..Default::default()
         };
         assert!(!unusable_tools(false, &ready, &cwd()).contains(&"browser"));
+    }
+
+    #[test]
+    fn the_image_tools_stay_out_until_a_provider_has_a_key() {
+        // The selected provider disabled: no key resolves, so both are withheld.
+        // Disabling short-circuits before any environment or stored credential,
+        // which keeps this deterministic wherever it runs.
+        let selected = Config::default().selected_provider_id().to_string();
+        let disabled_provider: crate::config::ProviderConfig =
+            serde_json::from_value(serde_json::json!({ "enabled": false }))
+                .expect("a disabled provider config");
+        let mut off = Config::default();
+        off.provider_configs.insert(selected, disabled_provider);
+        let withheld = unusable_tools(false, &off, &cwd());
+        assert!(withheld.contains(&"generate_image"), "{withheld:?}");
+        assert!(withheld.contains(&"inspect_image"), "{withheld:?}");
+
+        // A key on the selected provider: both are offered.
+        let configured = Config {
+            api_key: Some("sk-test".to_string()),
+            ..Default::default()
+        };
+        let withheld = unusable_tools(false, &configured, &cwd());
+        assert!(!withheld.contains(&"generate_image"), "{withheld:?}");
+        assert!(!withheld.contains(&"inspect_image"), "{withheld:?}");
     }
 
     #[test]

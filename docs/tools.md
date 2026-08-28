@@ -1381,6 +1381,48 @@ Enabled by `browserEnabled`, and offered only when a browser is reachable: a `br
 
 ---
 
+### generate_image
+
+**Permission level:** Write
+
+Generate an image from a structured prompt and save it to a file. Provider selection uses the same account resolution as the rest of the app; no new credential path is opened.
+
+| Parameter      | Type   | Required | Description                                                        |
+|----------------|--------|----------|--------------------------------------------------------------------|
+| `subject`      | string | no       | The main subject                                                   |
+| `action`       | string | no       | What the subject is doing                                          |
+| `scene`        | string | no       | The setting around the subject                                     |
+| `composition`  | string | no       | How the frame is composed                                          |
+| `lighting`     | string | no       | The lighting of the scene                                          |
+| `style`        | string | no       | The visual style                                                   |
+| `text`         | string | no       | Text that should appear in the image                              |
+| `changes`      | string | no       | Changes to make when editing an `input` image                     |
+| `aspect_ratio` | string | no       | Aspect ratio, e.g. `16:9`; mapped to a size when no `image_size`   |
+| `image_size`   | string | no       | Explicit size, e.g. `1024x1024`; wins over `aspect_ratio`         |
+| `input`        | string | no       | A local path or base64 image to edit instead of generating        |
+| `provider`     | string | no       | Account to use; defaults to the active one                        |
+| `model`        | string | no       | Image model; defaults to `gpt-image-1`                            |
+
+At least one prompt field is required. The saved file's path is returned.
+
+---
+
+### inspect_image
+
+**Permission level:** Read-only
+
+Ask a vision-capable model a question about a local image. Unlike `Read`, which shows the image to the model running the session, this sends it to a separate model and returns that model's answer.
+
+| Parameter  | Type   | Required | Description                                                          |
+|------------|--------|----------|----------------------------------------------------------------------|
+| `path`     | string | yes      | Path to the image (png, jpeg, gif, or webp)                          |
+| `question` | string | yes      | The question to ask about the image                                  |
+| `model`    | string | no       | Model to ask; defaults to `advisorModel`, then the session model     |
+
+`generate_image` and `inspect_image` are offered only when a provider is configured with an API key.
+
+---
+
 ### StructuredOutput
 
 **Permission level:** None

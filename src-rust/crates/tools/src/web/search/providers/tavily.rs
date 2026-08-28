@@ -13,9 +13,7 @@ use serde_json::{json, Value};
 pub struct TavilyProvider;
 
 fn api_key() -> Option<String> {
-    std::env::var("TAVILY_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
+    super::stored_or_env_key(SearchProviderId::Tavily, "TAVILY_API_KEY")
 }
 
 /// The Tavily request body, carrying `time_range` when a window was asked for.

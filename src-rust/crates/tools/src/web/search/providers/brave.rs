@@ -14,9 +14,7 @@ use serde_json::Value;
 pub struct BraveProvider;
 
 fn api_key() -> Option<String> {
-    std::env::var("BRAVE_SEARCH_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
+    super::stored_or_env_key(SearchProviderId::Brave, "BRAVE_SEARCH_API_KEY")
 }
 
 /// The Brave search URL, carrying `freshness` when a window was asked for.

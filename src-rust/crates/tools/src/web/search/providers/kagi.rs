@@ -19,7 +19,7 @@ pub struct KagiProvider;
 const KAGI_SEARCH_URL: &str = "https://kagi.com/api/v1/search";
 
 fn api_key() -> Option<String> {
-    std::env::var("KAGI_API_KEY").ok().filter(|k| !k.is_empty())
+    super::stored_or_env_key(SearchProviderId::Kagi, "KAGI_API_KEY")
 }
 
 /// A YYYY-MM-DD bound `recency` units before now, in UTC.

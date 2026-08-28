@@ -21,9 +21,7 @@ const PARALLEL_SEARCH_URL: &str = "https://api.parallel.ai/v1beta/search";
 const PARALLEL_BETA_HEADER: &str = "search-extract-2025-10-10";
 
 fn api_key() -> Option<String> {
-    std::env::var("PARALLEL_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
+    super::stored_or_env_key(SearchProviderId::Parallel, "PARALLEL_API_KEY")
 }
 
 fn recency_days(recency: Recency) -> i64 {

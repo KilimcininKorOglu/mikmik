@@ -18,7 +18,7 @@ pub struct JinaProvider;
 const JINA_SEARCH_URL: &str = "https://s.jina.ai/";
 
 fn api_key() -> Option<String> {
-    std::env::var("JINA_API_KEY").ok().filter(|k| !k.is_empty())
+    super::stored_or_env_key(SearchProviderId::Jina, "JINA_API_KEY")
 }
 
 /// The query to send and the optional single-site host for `X-Site`.

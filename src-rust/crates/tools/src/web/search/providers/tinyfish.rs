@@ -24,9 +24,7 @@ const DEFAULT_PAGE_SIZE: usize = 10;
 const MAX_PAGE: usize = 10;
 
 fn api_key() -> Option<String> {
-    std::env::var("TINYFISH_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
+    super::stored_or_env_key(SearchProviderId::Tinyfish, "TINYFISH_API_KEY")
 }
 
 fn recency_minutes(recency: Recency) -> u32 {

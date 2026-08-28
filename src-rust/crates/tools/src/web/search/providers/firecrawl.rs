@@ -19,9 +19,7 @@ pub struct FirecrawlProvider;
 const FIRECRAWL_DEFAULT_BASE_URL: &str = "https://api.firecrawl.dev/v2";
 
 fn api_key() -> Option<String> {
-    std::env::var("FIRECRAWL_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
+    super::stored_or_env_key(SearchProviderId::Firecrawl, "FIRECRAWL_API_KEY")
 }
 
 fn configured_base() -> Option<String> {

@@ -24,7 +24,7 @@ const MAX_EXA_SNIPPET_CHARS: usize = 500;
 const MAX_ANSWER_SUMMARIES: usize = 3;
 
 fn api_key() -> Option<String> {
-    std::env::var("EXA_API_KEY").ok().filter(|k| !k.is_empty())
+    super::stored_or_env_key(SearchProviderId::Exa, "EXA_API_KEY")
 }
 
 /// Bare hosts from `site:` values, deduped.

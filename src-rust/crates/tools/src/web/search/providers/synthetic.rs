@@ -17,9 +17,7 @@ pub struct SyntheticProvider;
 const SYNTHETIC_SEARCH_URL: &str = "https://api.synthetic.new/v2/search";
 
 fn api_key() -> Option<String> {
-    std::env::var("SYNTHETIC_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
+    super::stored_or_env_key(SearchProviderId::Synthetic, "SYNTHETIC_API_KEY")
 }
 
 /// The query to send: directives re-emitted with site syntax, else verbatim.

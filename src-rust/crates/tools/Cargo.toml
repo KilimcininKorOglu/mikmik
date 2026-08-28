@@ -65,5 +65,17 @@ libc = "0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 
+# The accessibility backend in `computer_script/ax/windows.rs` drives UI
+# Automation, a COM API. The version matches one already in the tree so no new
+# major of the `windows` crate is pulled; the features name only the namespaces
+# the backend touches.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Variant",
+    "Win32_UI_Accessibility",
+] }
+
 [features]
 computer-use = ["dep:enigo", "dep:xcap", "dep:image"]

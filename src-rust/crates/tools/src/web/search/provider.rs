@@ -113,6 +113,7 @@ pub fn provider_for(id: SearchProviderId) -> Option<Box<dyn SearchProvider>> {
         SearchProviderId::Tavily => Some(Box::new(providers::tavily::TavilyProvider)),
         SearchProviderId::Firecrawl => Some(Box::new(providers::firecrawl::FirecrawlProvider)),
         SearchProviderId::Brave => Some(Box::new(providers::brave::BraveProvider)),
+        SearchProviderId::Parallel => Some(Box::new(providers::parallel::ParallelProvider)),
         SearchProviderId::Duckduckgo => Some(Box::new(providers::duckduckgo::DuckDuckGoProvider)),
         _ => None,
     }
@@ -190,6 +191,7 @@ mod tests {
                 SearchProviderId::Tavily,
                 SearchProviderId::Firecrawl,
                 SearchProviderId::Brave,
+                SearchProviderId::Parallel,
                 SearchProviderId::Synthetic,
                 SearchProviderId::Searxng,
                 SearchProviderId::Duckduckgo,

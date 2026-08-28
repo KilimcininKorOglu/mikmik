@@ -72,6 +72,7 @@ pub mod team_tool;
 pub(crate) mod test_support;
 pub mod todo_write;
 pub mod tool_search;
+pub mod web;
 pub mod web_fetch;
 pub mod web_search;
 pub mod worktree;

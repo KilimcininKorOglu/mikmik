@@ -23,6 +23,7 @@ pub mod osv;
 pub mod packagist;
 pub mod pub_dev;
 pub mod pypi;
+pub mod reddit;
 pub mod rubygems;
 pub mod util;
 
@@ -57,6 +58,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(dockerhub::DockerHubHandler),
         Box::new(brew::BrewHandler),
         Box::new(hackernews::HackerNewsHandler),
+        Box::new(reddit::RedditHandler),
         Box::new(cisa_kev::CisaKevHandler),
         Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),

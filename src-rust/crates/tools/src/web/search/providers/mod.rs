@@ -8,6 +8,7 @@ pub mod duckduckgo;
 pub mod exa;
 pub mod firecrawl;
 pub mod jina;
+pub mod kagi;
 pub mod searxng;
 pub mod synthetic;
 pub mod tavily;

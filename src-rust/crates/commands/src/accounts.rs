@@ -260,6 +260,11 @@ fn describe(credential: &mikmik_core::StoredCredential) -> String {
             .as_deref()
             .map(|id| format!("  {}", id))
             .unwrap_or_default(),
+        C::CursorOAuth(tokens) => tokens
+            .account_id
+            .as_deref()
+            .map(|id| format!("  {}", id))
+            .unwrap_or_default(),
         // GitLab Duo tokens carry no readable identity locally; the workspace
         // session is skipped by the listing. These arms are only what the
         // compiler needs to see the match is complete.

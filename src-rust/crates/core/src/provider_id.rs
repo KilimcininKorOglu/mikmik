@@ -125,6 +125,11 @@ impl ProviderId {
     /// direct-access token exchange against the OpenAI-compatible AI-gateway
     /// proxy. Repairs the dead `gitlab` id.
     pub const GITLAB_DUO: &'static str = "gitlab-duo";
+    /// Cursor (Cursor Pro) — PKCE poll login, then a bidirectional agent
+    /// session over the Connect protobuf wire at `api2.cursor.sh`. Cursor's
+    /// server-side agent drives the turn; mikmik supplies its own tools as
+    /// executors.
+    pub const CURSOR: &'static str = "cursor";
     /// Devin / Windsurf Cascade — PKCE loopback login for a session token,
     /// exchanged per turn for a user JWT; chat runs over the Connect protobuf
     /// wire at `server.codeium.com`.
@@ -222,6 +227,7 @@ impl ProviderId {
         Self::GITLAB_DUO,
         Self::GOOGLE_ANTIGRAVITY,
         Self::DEVIN,
+        Self::CURSOR,
         // Spelling aliases accepted on the wire but not canonical ids.
         "openai-codex",
         "lmstudio",

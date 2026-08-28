@@ -7018,6 +7018,56 @@ async fn run_interactive(
                         }
                     });
                 }
+                "cursor" => {
+                    let tx2 = device_auth_tx.clone();
+                    // Cursor PKCE poll flow: open the browser sign-in page, then
+                    // poll api2.cursor.sh until the sign-in completes. No loopback
+                    // callback — the token is delivered by the poll endpoint.
+                    tokio::spawn(async move {
+                        let params = match mikmik_core::cursor_oauth::generate_auth_params() {
+                            Ok(p) => p,
+                            Err(e) => {
+                                let _ = tx2
+                                    .send(DeviceAuthEvent::Error(format!(
+                                        "Cursor PKCE setup failed: {e}"
+                                    )))
+                                    .await;
+                                return;
+                            }
+                        };
+                        let _ = tx2
+                            .send(DeviceAuthEvent::GotBrowserUrl {
+                                url: params.login_url.clone(),
+                            })
+                            .await;
+
+                        match mikmik_core::cursor_oauth::poll_for_token(
+                            &params.uuid,
+                            &params.verifier,
+                        )
+                        .await
+                        {
+                            Ok(tokens) => {
+                                let event =
+                                    match mikmik_core::cursor_oauth::save_cursor_tokens_and_register(
+                                        &tokens,
+                                    ) {
+                                        Ok(account_id) => DeviceAuthEvent::TokenReceivedFor {
+                                            token: "connected".to_string(),
+                                            account_id,
+                                        },
+                                        Err(e) => DeviceAuthEvent::Error(format!(
+                                            "Cursor login could not be saved: {e}"
+                                        )),
+                                    };
+                                let _ = tx2.send(event).await;
+                            }
+                            Err(e) => {
+                                let _ = tx2.send(DeviceAuthEvent::Error(e)).await;
+                            }
+                        }
+                    });
+                }
                 _ => {
                     // Unknown provider for device auth — should not happen
                     app.device_auth_dialog
@@ -7714,6 +7764,9 @@ fn print_account_list(provider: &str, display_name: &str) {
             Some(mikmik_core::StoredCredential::DevinOAuth(tokens)) => {
                 format!("  {}", tokens.account_id.as_deref().unwrap_or(""))
             }
+            Some(mikmik_core::StoredCredential::CursorOAuth(tokens)) => {
+                format!("  {}", tokens.account_id.as_deref().unwrap_or(""))
+            }
             // GitLab Duo tokens carry no readable identity; the account name is
             // all the listing shows, so they fall through to the empty detail.
             _ => String::new(),
@@ -8045,6 +8098,12 @@ async fn auth_status(json_output: bool) {
             Some(mikmik_core::StoredCredential::DevinOAuth(tokens))
                 if active_provider == mikmik_core::provider_id::ProviderId::DEVIN
                     && !tokens.session_token.is_empty() =>
+            {
+                Some("stored token".to_string())
+            }
+            Some(mikmik_core::StoredCredential::CursorOAuth(tokens))
+                if active_provider == mikmik_core::provider_id::ProviderId::CURSOR
+                    && !tokens.access_token.is_empty() =>
             {
                 Some("stored token".to_string())
             }

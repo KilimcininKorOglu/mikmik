@@ -855,6 +855,13 @@ fn provider_picker_items() -> Vec<SelectItem> {
             category: "Other".into(),
             badge: None,
         },
+        SelectItem {
+            id: "cursor".into(),
+            title: "Cursor Pro".into(),
+            description: "Cursor agent (browser login; reverse-engineered wire)".into(),
+            category: "Other".into(),
+            badge: Some("experimental".into()),
+        },
     ];
 
     // MLX runs on Apple Silicon, so offering it elsewhere would put an entry in
@@ -4948,6 +4955,7 @@ impl App {
                             || provider_id == "gitlab-duo"
                             || provider_id == "google-antigravity"
                             || provider_id == "devin"
+                            || provider_id == "cursor"
                         {
                             // These OAuth flows persist their own tokens (via
                             // save_*_tokens_and_register); switch to the account
@@ -5389,6 +5397,13 @@ impl App {
                                 // persists its own session token.
                                 self.device_auth_dialog.open("devin".into(), "Devin".into());
                                 self.device_auth_pending = Some("devin".to_string());
+                            }
+                            "cursor" => {
+                                // Cursor: PKCE poll (browser) flow. The flow
+                                // persists its own tokens.
+                                self.device_auth_dialog
+                                    .open("cursor".into(), "Cursor Pro".into());
+                                self.device_auth_pending = Some("cursor".to_string());
                             }
                             "gitlab-duo" => {
                                 // GitLab Duo: PKCE loopback (browser) flow. The

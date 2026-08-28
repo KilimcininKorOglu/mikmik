@@ -49,6 +49,9 @@ pub enum StoredCredential {
     /// Devin / Windsurf Cascade session token (PKCE loopback).
     #[serde(rename = "devin-oauth")]
     DevinOAuth(crate::devin_oauth::DevinTokens),
+    /// Cursor (Cursor Pro) OAuth tokens (PKCE poll).
+    #[serde(rename = "cursor-oauth")]
+    CursorOAuth(crate::cursor_oauth::CursorTokens),
     /// A session on an organisation's configuration server.
     ///
     /// Held here rather than in `settings.json` beside `workspace.url`: this
@@ -128,6 +131,7 @@ fn implied_protocol(credential: &StoredCredential) -> Option<&'static str> {
             Some(crate::provider_id::ProviderId::GOOGLE_ANTIGRAVITY)
         }
         StoredCredential::DevinOAuth(_) => Some(crate::provider_id::ProviderId::DEVIN),
+        StoredCredential::CursorOAuth(_) => Some(crate::provider_id::ProviderId::CURSOR),
         StoredCredential::OAuthToken { .. } => Some("github-copilot"),
         StoredCredential::ApiKey { .. } => None,
         // Not a model provider at all: it authenticates against the
@@ -396,6 +400,23 @@ impl AuthStore {
     /// Store Devin session token for `account_id` (persists immediately).
     pub fn set_devin_tokens(&mut self, account_id: &str, tokens: crate::devin_oauth::DevinTokens) {
         self.set(account_id, StoredCredential::DevinOAuth(tokens));
+    }
+
+    /// The Cursor OAuth tokens stored under `account_id`, if any.
+    pub fn cursor_tokens(&self, account_id: &str) -> Option<&crate::cursor_oauth::CursorTokens> {
+        match self.get(account_id) {
+            Some(StoredCredential::CursorOAuth(tokens)) => Some(tokens),
+            _ => None,
+        }
+    }
+
+    /// Store Cursor OAuth tokens for `account_id` (persists immediately).
+    pub fn set_cursor_tokens(
+        &mut self,
+        account_id: &str,
+        tokens: crate::cursor_oauth::CursorTokens,
+    ) {
+        self.set(account_id, StoredCredential::CursorOAuth(tokens));
     }
 
     /// The live workspace session for `url`, if there is one.

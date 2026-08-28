@@ -6,8 +6,10 @@
 // non-`None` result; a URL no handler claims falls through to the generic
 // web-fetch path.
 
+pub mod cisa_kev;
 pub mod crates_io;
 pub mod npm;
+pub mod osv;
 pub mod pypi;
 pub mod util;
 
@@ -30,6 +32,8 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(npm::NpmHandler) as Box<dyn SpecialHandler>,
         Box::new(pypi::PypiHandler),
         Box::new(crates_io::CratesIoHandler),
+        Box::new(cisa_kev::CisaKevHandler),
+        Box::new(osv::OsvHandler),
     ]
 });
 

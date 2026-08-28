@@ -393,6 +393,16 @@ The bundled OAuth client id is registered with the `http://localhost:8080/callba
 
 ---
 
+### Google Antigravity
+
+Google Antigravity subscribers sign in with a Google OAuth 2.0 browser flow instead of an API key. It is a separate provider (`google-antigravity`) from the API-key `google` route: it reaches Gemini (and the Claude / GPT-OSS families Google fronts) through the internal Cloud Code Assist plane at `daily-cloudcode-pa.googleapis.com`, not the public Gemini API.
+
+Pick "Google Antigravity" under "Other" in [`/connect`](commands.md#connect). MikMik opens `accounts.google.com` in the browser on a loopback callback (`localhost:51121/oauth-callback`); approve the consent and the session switches to the new account. On first login MikMik resolves the account's Cloud Code project, provisioning the free tier when the account has not been onboarded. The access token is refreshed automatically when it expires.
+
+The inference wire is the ordinary Gemini `generateContent` body wrapped in a Cloud Code envelope, streamed over SSE. `PI_AI_ANTIGRAVITY_OS`, `PI_AI_ANTIGRAVITY_ARCH`, and `PI_AI_ANTIGRAVITY_CL` override the user-agent fields the client advertises; the backend only gates on the client version.
+
+---
+
 ### Custom endpoints
 
 Two slots exist for endpoints MikMik does not ship a provider for, one per wire format:

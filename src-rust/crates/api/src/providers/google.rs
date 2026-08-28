@@ -81,7 +81,7 @@ impl GoogleProvider {
         )
     }
 
-    fn tool_use_id_for_name(name: &str, occurrence: usize) -> String {
+    pub(crate) fn tool_use_id_for_name(name: &str, occurrence: usize) -> String {
         let sanitized: String = name
             .chars()
             .map(|ch| {
@@ -358,7 +358,10 @@ impl GoogleProvider {
     }
 
     /// Build the full request body JSON for the Gemini API.
-    fn build_request_body(&self, request: &ProviderRequest) -> Value {
+    ///
+    /// An associated function (no `self`) so the Antigravity provider, which
+    /// wraps this same body in a Cloud Code envelope, can reuse it verbatim.
+    pub(crate) fn build_gemini_body(request: &ProviderRequest) -> Value {
         // ---- Convert messages ----
         // Google requires a flat list of content objects.
         // ToolResult blocks must become separate user-role messages.
@@ -501,8 +504,12 @@ impl GoogleProvider {
     }
 
     /// Extract content blocks and usage from a completed Gemini response body.
-    fn parse_response_body(
-        &self,
+    ///
+    /// An associated function taking the provider id explicitly so the
+    /// Antigravity provider (whose responses share this candidates/parts shape
+    /// after the Cloud Code envelope is unwrapped) can reuse it.
+    pub(crate) fn parse_gemini_response(
+        provider_id: &ProviderId,
         body: &Value,
         model: &str,
     ) -> Result<ProviderResponse, ProviderError> {
@@ -510,14 +517,14 @@ impl GoogleProvider {
             .get("candidates")
             .and_then(|c| c.as_array())
             .ok_or_else(|| ProviderError::Other {
-                provider: self.id.clone(),
+                provider: provider_id.clone(),
                 message: "Missing 'candidates' in response".to_string(),
                 status: None,
                 body: Some(body.to_string()),
             })?;
 
         let candidate = candidates.first().ok_or_else(|| ProviderError::Other {
-            provider: self.id.clone(),
+            provider: provider_id.clone(),
             message: "Empty 'candidates' array in response".to_string(),
             status: None,
             body: Some(body.to_string()),
@@ -576,7 +583,7 @@ impl GoogleProvider {
         }
 
         // Extract usage metadata.
-        let usage = self.extract_usage(body);
+        let usage = Self::gemini_usage(body);
 
         Ok(ProviderResponse {
             id: format!("gemini-{}", uuid_v4_simple()),
@@ -588,7 +595,7 @@ impl GoogleProvider {
     }
 
     /// Extract UsageInfo from a response body's usageMetadata field.
-    fn extract_usage(&self, body: &Value) -> UsageInfo {
+    pub(crate) fn gemini_usage(body: &Value) -> UsageInfo {
         let meta = body.get("usageMetadata");
         UsageInfo {
             input_tokens: meta
@@ -625,7 +632,7 @@ impl LlmProvider for GoogleProvider {
     ) -> Result<ProviderResponse, ProviderError> {
         let url = self.generate_url(&request.model);
         let model = request.model.clone();
-        let body = self.build_request_body(&request);
+        let body = Self::build_gemini_body(&request);
 
         debug!("Google create_message: POST {}", url);
 
@@ -664,7 +671,7 @@ impl LlmProvider for GoogleProvider {
                 body: Some(resp_body.clone()),
             })?;
 
-        self.parse_response_body(&json_body, &model)
+        Self::parse_gemini_response(&self.id, &json_body, &model)
     }
 
     async fn create_message_stream(
@@ -674,7 +681,7 @@ impl LlmProvider for GoogleProvider {
     {
         let url = self.stream_url(&request.model);
         let model = request.model.clone();
-        let body = self.build_request_body(&request);
+        let body = Self::build_gemini_body(&request);
 
         debug!("Google create_message_stream: POST {}", url);
 
@@ -995,7 +1002,7 @@ fn uuid_v4_simple() -> String {
 /// it must be captured and echoed back verbatim on the next turn or the API
 /// rejects the tool call with HTTP 400 (issue #311). Shared by the streaming
 /// and non-streaming parsers, whose parts have the identical shape.
-fn thought_signature_from_part(part: &Value) -> Option<String> {
+pub(crate) fn thought_signature_from_part(part: &Value) -> Option<String> {
     part.get("thoughtSignature")
         .and_then(|s| s.as_str())
         .map(|s| s.to_string())
@@ -1026,7 +1033,6 @@ mod tests {
 
     #[test]
     fn build_request_body_uses_function_names_for_tool_results() {
-        let provider = GoogleProvider::new("test".to_string());
         let request = test_request(vec![
             Message::assistant_blocks(vec![ContentBlock::ToolUse {
                 id: "call_search_2".to_string(),
@@ -1041,7 +1047,7 @@ mod tests {
             }]),
         ]);
 
-        let body = provider.build_request_body(&request);
+        let body = GoogleProvider::build_gemini_body(&request);
         let contents = body["contents"].as_array().expect("contents array");
         assert_eq!(contents.len(), 2);
         assert_eq!(
@@ -1052,7 +1058,6 @@ mod tests {
 
     #[test]
     fn build_request_body_preserves_tool_result_order() {
-        let provider = GoogleProvider::new("test".to_string());
         let request = test_request(vec![Message::user_blocks(vec![
             ContentBlock::Text {
                 text: "before".to_string(),
@@ -1067,7 +1072,7 @@ mod tests {
             },
         ])]);
 
-        let body = provider.build_request_body(&request);
+        let body = GoogleProvider::build_gemini_body(&request);
         let contents = body["contents"].as_array().expect("contents array");
         assert_eq!(contents.len(), 3);
         assert_eq!(contents[0]["role"], json!("user"));
@@ -1095,9 +1100,12 @@ mod tests {
             "usageMetadata": {}
         });
 
-        let parsed = provider
-            .parse_response_body(&response, "gemini-3-flash-preview")
-            .expect("parsed response");
+        let parsed = GoogleProvider::parse_gemini_response(
+            &provider.id,
+            &response,
+            "gemini-3-flash-preview",
+        )
+        .expect("parsed response");
 
         assert!(matches!(
             &parsed.content[0],
@@ -1155,9 +1163,12 @@ mod tests {
             "usageMetadata": {}
         });
 
-        let parsed = provider
-            .parse_response_body(&response, "gemini-3.1-pro-preview")
-            .expect("parsed response");
+        let parsed = GoogleProvider::parse_gemini_response(
+            &provider.id,
+            &response,
+            "gemini-3.1-pro-preview",
+        )
+        .expect("parsed response");
 
         match &parsed.content[0] {
             ContentBlock::ToolUse {
@@ -1189,9 +1200,9 @@ mod tests {
             "usageMetadata": {}
         });
 
-        let parsed = provider
-            .parse_response_body(&response, "gemini-2.0-flash")
-            .expect("parsed response");
+        let parsed =
+            GoogleProvider::parse_gemini_response(&provider.id, &response, "gemini-2.0-flash")
+                .expect("parsed response");
 
         assert!(matches!(
             &parsed.content[0],
@@ -1203,7 +1214,6 @@ mod tests {
     fn build_request_body_round_trips_thought_signature_onto_function_call() {
         // A captured signature must ride back as a camelCase sibling of the
         // functionCall part, or Gemini 3.x rejects the turn with HTTP 400 (#311).
-        let provider = GoogleProvider::new("test".to_string());
         let request = test_request(vec![Message::assistant_blocks(vec![
             ContentBlock::ToolUse {
                 id: "call_read".to_string(),
@@ -1213,7 +1223,7 @@ mod tests {
             },
         ])]);
 
-        let body = provider.build_request_body(&request);
+        let body = GoogleProvider::build_gemini_body(&request);
         let contents = body["contents"].as_array().expect("contents array");
         let part = &contents[0]["parts"][0];
         assert_eq!(part["functionCall"]["name"], json!("read"));
@@ -1224,7 +1234,6 @@ mod tests {
     #[test]
     fn build_request_body_without_signature_omits_thought_signature_key() {
         // Absent signature keeps the old wire shape: no thoughtSignature key.
-        let provider = GoogleProvider::new("test".to_string());
         let request = test_request(vec![Message::assistant_blocks(vec![
             ContentBlock::ToolUse {
                 id: "call_read".to_string(),
@@ -1234,7 +1243,7 @@ mod tests {
             },
         ])]);
 
-        let body = provider.build_request_body(&request);
+        let body = GoogleProvider::build_gemini_body(&request);
         let part = &body["contents"][0]["parts"][0];
         assert_eq!(part["functionCall"]["name"], json!("read"));
         assert!(

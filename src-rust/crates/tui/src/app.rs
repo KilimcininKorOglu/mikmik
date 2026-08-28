@@ -841,6 +841,13 @@ fn provider_picker_items() -> Vec<SelectItem> {
             category: "Other".into(),
             badge: None,
         },
+        SelectItem {
+            id: "google-antigravity".into(),
+            title: "Google Antigravity".into(),
+            description: "Antigravity Gemini/Claude (browser login)".into(),
+            category: "Other".into(),
+            badge: None,
+        },
     ];
 
     // MLX runs on Apple Silicon, so offering it elsewhere would put an entry in
@@ -4932,6 +4939,7 @@ impl App {
                         if provider_id == "kimi-code"
                             || provider_id == "xai-oauth"
                             || provider_id == "gitlab-duo"
+                            || provider_id == "google-antigravity"
                         {
                             // These OAuth flows persist their own tokens (via
                             // save_*_tokens_and_register); switch to the account
@@ -5360,6 +5368,13 @@ impl App {
                                 self.device_auth_dialog
                                     .open("xai-oauth".into(), "xAI Grok (OAuth)".into());
                                 self.device_auth_pending = Some("xai-oauth".to_string());
+                            }
+                            "google-antigravity" => {
+                                // Antigravity: Google OAuth loopback (browser)
+                                // flow. The flow persists its own tokens.
+                                self.device_auth_dialog
+                                    .open("google-antigravity".into(), "Google Antigravity".into());
+                                self.device_auth_pending = Some("google-antigravity".to_string());
                             }
                             "gitlab-duo" => {
                                 // GitLab Duo: PKCE loopback (browser) flow. The

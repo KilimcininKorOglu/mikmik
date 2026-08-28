@@ -8991,6 +8991,7 @@ pub use oauth::OAuthTokens;
 // New modules: keybindings, voice, lsp, system_prompt, memdir, oauth_config
 // ---------------------------------------------------------------------------
 pub mod accounts;
+pub mod antigravity_oauth;
 pub mod bash_classifier;
 pub mod codex_oauth;
 pub mod effort;

@@ -6870,6 +6870,83 @@ async fn run_interactive(
                         }
                     });
                 }
+                "google-antigravity" => {
+                    let tx2 = device_auth_tx.clone();
+                    // Google OAuth loopback flow: bind the fixed callback port
+                    // the desktop client's credentials are registered with, open
+                    // the browser, capture the code, exchange it, resolve the
+                    // Cloud Code project, and register the account.
+                    tokio::spawn(async move {
+                        let state = uuid::Uuid::new_v4().to_string();
+                        let port = mikmik_core::antigravity_oauth::CALLBACK_PORT;
+                        let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port))
+                            .await
+                        {
+                            Ok(l) => l,
+                            Err(e) => {
+                                let _ = tx2
+                                        .send(DeviceAuthEvent::Error(format!(
+                                            "Antigravity callback server could not bind port {port}: {e}"
+                                        )))
+                                        .await;
+                                return;
+                            }
+                        };
+                        let auth_url = mikmik_core::antigravity_oauth::authorize_url(&state);
+                        let _ = tx2
+                            .send(DeviceAuthEvent::GotBrowserUrl { url: auth_url })
+                            .await;
+
+                        let code = match oauth_flow::run_callback_server(listener, &state).await {
+                            Ok(code) => code,
+                            Err(e) => {
+                                let _ = tx2
+                                    .send(DeviceAuthEvent::Error(format!(
+                                        "Antigravity callback failed: {e}"
+                                    )))
+                                    .await;
+                                return;
+                            }
+                        };
+
+                        let mut tokens =
+                            match mikmik_core::antigravity_oauth::exchange_code(&code).await {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    let _ = tx2.send(DeviceAuthEvent::Error(e)).await;
+                                    return;
+                                }
+                            };
+
+                        match mikmik_core::antigravity_oauth::discover_project(&tokens.access_token)
+                            .await
+                        {
+                            Ok(project) => tokens.project_id = Some(project),
+                            Err(e) => {
+                                let _ = tx2
+                                    .send(DeviceAuthEvent::Error(format!(
+                                        "Antigravity project provisioning failed: {e}"
+                                    )))
+                                    .await;
+                                return;
+                            }
+                        }
+
+                        let event =
+                            match mikmik_core::antigravity_oauth::save_antigravity_tokens_and_register(
+                                &tokens,
+                            ) {
+                                Ok(account_id) => DeviceAuthEvent::TokenReceivedFor {
+                                    token: "connected".to_string(),
+                                    account_id,
+                                },
+                                Err(e) => DeviceAuthEvent::Error(format!(
+                                    "Antigravity login could not be saved: {e}"
+                                )),
+                            };
+                        let _ = tx2.send(event).await;
+                    });
+                }
                 _ => {
                     // Unknown provider for device auth — should not happen
                     app.device_auth_dialog
@@ -7560,6 +7637,9 @@ fn print_account_list(provider: &str, display_name: &str) {
             Some(mikmik_core::StoredCredential::XaiOAuth(tokens)) => {
                 format!("  {}", tokens.account_id.as_deref().unwrap_or(""))
             }
+            Some(mikmik_core::StoredCredential::AntigravityOAuth(tokens)) => {
+                format!("  {}", tokens.account_id.as_deref().unwrap_or(""))
+            }
             // GitLab Duo tokens carry no readable identity; the account name is
             // all the listing shows, so they fall through to the empty detail.
             _ => String::new(),
@@ -7878,6 +7958,12 @@ async fn auth_status(json_output: bool) {
             }
             Some(mikmik_core::StoredCredential::GitlabDuoOAuth(tokens))
                 if active_provider == mikmik_core::provider_id::ProviderId::GITLAB_DUO
+                    && !tokens.access_token.is_empty() =>
+            {
+                Some("stored token".to_string())
+            }
+            Some(mikmik_core::StoredCredential::AntigravityOAuth(tokens))
+                if active_provider == mikmik_core::provider_id::ProviderId::GOOGLE_ANTIGRAVITY
                     && !tokens.access_token.is_empty() =>
             {
                 Some("stored token".to_string())

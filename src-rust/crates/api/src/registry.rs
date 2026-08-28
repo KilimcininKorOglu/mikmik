@@ -12,9 +12,9 @@ use crate::client::ClientConfig;
 use crate::provider::LlmProvider;
 use crate::provider_types::ProviderStatus;
 use crate::providers::{
-    AnthropicProvider, AzureProvider, BedrockProvider, CodexProvider, CohereProvider,
-    CopilotProvider, FreeEntry, FreeProvider, GitlabDuoProvider, GoogleProvider, KimiCodeProvider,
-    MinimaxProvider, OpenAiProvider, XaiOAuthProvider, FREE_CATALOG,
+    AnthropicProvider, AntigravityProvider, AzureProvider, BedrockProvider, CodexProvider,
+    CohereProvider, CopilotProvider, FreeEntry, FreeProvider, GitlabDuoProvider, GoogleProvider,
+    KimiCodeProvider, MinimaxProvider, OpenAiProvider, XaiOAuthProvider, FREE_CATALOG,
 };
 
 fn normalize_openai_compat_base(override_base: &str) -> String {
@@ -109,6 +109,11 @@ fn provider_from_key(provider_id: &str, key: String) -> Option<Arc<dyn LlmProvid
             // OAuth (or GITLAB_TOKEN PAT) plus a direct-access exchange; the
             // `key` field is unused.
             GitlabDuoProvider::from_stored().map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
+        }
+        "google-antigravity" => {
+            // Google OAuth plus a Cloud Code project handshake; the `key` field
+            // is unused. Load the stored token and refresh it on demand.
+            AntigravityProvider::from_stored().map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
         }
         "cohere" => Some(Arc::new(CohereProvider::new(key))),
         "custom-openai" => Some(Arc::new(p::custom_openai().with_api_key(key))),
@@ -419,6 +424,8 @@ pub fn provider_from_config(
         "xai-oauth" => XaiOAuthProvider::from_account(provider_id)
             .map(|provider| Arc::new(provider) as Arc<dyn LlmProvider>),
         "gitlab-duo" => GitlabDuoProvider::from_account(provider_id)
+            .map(|provider| Arc::new(provider) as Arc<dyn LlmProvider>),
+        "google-antigravity" => AntigravityProvider::from_account(provider_id)
             .map(|provider| Arc::new(provider) as Arc<dyn LlmProvider>),
         _ => api_key.and_then(|key| provider_from_key(provider_id, key)),
     }

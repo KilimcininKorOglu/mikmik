@@ -43,6 +43,9 @@ pub enum StoredCredential {
     /// GitLab Duo OAuth tokens (PKCE loopback or a stored PAT).
     #[serde(rename = "gitlab-duo-oauth")]
     GitlabDuoOAuth(crate::gitlab_duo::GitlabTokens),
+    /// Google Antigravity OAuth tokens plus the resolved Cloud Code project.
+    #[serde(rename = "antigravity-oauth")]
+    AntigravityOAuth(crate::antigravity_oauth::AntigravityTokens),
     /// A session on an organisation's configuration server.
     ///
     /// Held here rather than in `settings.json` beside `workspace.url`: this
@@ -118,6 +121,9 @@ fn implied_protocol(credential: &StoredCredential) -> Option<&'static str> {
         StoredCredential::KimiOAuth(_) => Some(crate::provider_id::ProviderId::KIMI_CODE),
         StoredCredential::XaiOAuth(_) => Some(crate::provider_id::ProviderId::XAI_OAUTH),
         StoredCredential::GitlabDuoOAuth(_) => Some(crate::provider_id::ProviderId::GITLAB_DUO),
+        StoredCredential::AntigravityOAuth(_) => {
+            Some(crate::provider_id::ProviderId::GOOGLE_ANTIGRAVITY)
+        }
         StoredCredential::OAuthToken { .. } => Some("github-copilot"),
         StoredCredential::ApiKey { .. } => None,
         // Not a model provider at all: it authenticates against the
@@ -353,6 +359,26 @@ impl AuthStore {
     /// Store GitLab Duo OAuth tokens for `account_id` (persists immediately).
     pub fn set_gitlab_tokens(&mut self, account_id: &str, tokens: crate::gitlab_duo::GitlabTokens) {
         self.set(account_id, StoredCredential::GitlabDuoOAuth(tokens));
+    }
+
+    /// The Antigravity OAuth tokens stored under `account_id`, if any.
+    pub fn antigravity_tokens(
+        &self,
+        account_id: &str,
+    ) -> Option<&crate::antigravity_oauth::AntigravityTokens> {
+        match self.get(account_id) {
+            Some(StoredCredential::AntigravityOAuth(tokens)) => Some(tokens),
+            _ => None,
+        }
+    }
+
+    /// Store Antigravity OAuth tokens for `account_id` (persists immediately).
+    pub fn set_antigravity_tokens(
+        &mut self,
+        account_id: &str,
+        tokens: crate::antigravity_oauth::AntigravityTokens,
+    ) {
+        self.set(account_id, StoredCredential::AntigravityOAuth(tokens));
     }
 
     /// The live workspace session for `url`, if there is one.

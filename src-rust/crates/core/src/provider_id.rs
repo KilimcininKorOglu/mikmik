@@ -125,6 +125,13 @@ impl ProviderId {
     /// direct-access token exchange against the OpenAI-compatible AI-gateway
     /// proxy. Repairs the dead `gitlab` id.
     pub const GITLAB_DUO: &'static str = "gitlab-duo";
+    /// Google Antigravity — Google OAuth loopback login, then the internal
+    /// Cloud Code Assist control plane (`daily-cloudcode-pa.googleapis.com`).
+    /// Inference is the Gemini `generateContent` wire wrapped in a Cloud Code
+    /// envelope; shares that wire with the Gemini CLI route but carries its own
+    /// OAuth credentials and endpoint. Separate from [`GOOGLE`](Self::GOOGLE),
+    /// the API-key Gemini route.
+    pub const GOOGLE_ANTIGRAVITY: &'static str = "google-antigravity";
 
     /// Every provider id mikmik ships with, including the spelling aliases
     /// users type (`lmstudio` for `lm-studio`, `zhipu` for `zhipuai`, …).
@@ -209,6 +216,7 @@ impl ProviderId {
         Self::XIAOMI,
         Self::XAI_OAUTH,
         Self::GITLAB_DUO,
+        Self::GOOGLE_ANTIGRAVITY,
         // Spelling aliases accepted on the wire but not canonical ids.
         "openai-codex",
         "lmstudio",

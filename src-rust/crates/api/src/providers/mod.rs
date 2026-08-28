@@ -49,4 +49,7 @@ pub mod xai_oauth;
 pub use xai_oauth::XaiOAuthProvider;
 
 pub mod gitlab_duo;
+
+pub mod antigravity;
+pub use antigravity::AntigravityProvider;
 pub use gitlab_duo::GitlabDuoProvider;

@@ -1528,8 +1528,8 @@ fn session_slash_commands(
     }
 
     let mut skill_count = 0;
-    for (name, skill) in mikmik_core::discover_skills(cwd, &config.skills) {
-        commands.push((name, skill.description.clone()));
+    for resolved in mikmik_core::discover_skills(cwd, &config.skills) {
+        commands.push((resolved.command_name.clone(), resolved.tagged_description()));
         skill_count += 1;
     }
 

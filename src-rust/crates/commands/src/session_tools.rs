@@ -83,21 +83,20 @@ impl SlashCommand for SkillsCommand {
         };
 
         if !discovered.is_empty() {
-            let mut disc_list: Vec<(&String, &mikmik_core::DiscoveredSkill)> =
-                discovered.iter().collect();
-            disc_list.sort_by_key(|(name, _)| name.as_str());
+            let mut disc_list: Vec<&mikmik_core::ResolvedSkill> = discovered.iter().collect();
+            disc_list.sort_by(|a, b| a.command_name.cmp(&b.command_name));
 
             if !output.is_empty() {
                 output.push('\n');
             }
             output.push_str(&format!("\nSkills you can type ({}):\n", disc_list.len()));
-            for (name, skill) in disc_list {
+            for resolved in disc_list {
                 output.push_str(&format!(
                     "  /{}{} — {} ({})\n",
-                    name,
-                    shadow_note(name, ctx),
-                    skill.description,
-                    skill.source_path.display()
+                    resolved.command_name,
+                    shadow_note(&resolved.command_name, ctx),
+                    resolved.tagged_description(),
+                    resolved.skill.source_path.display()
                 ));
             }
         }

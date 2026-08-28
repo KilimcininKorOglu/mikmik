@@ -1696,13 +1696,17 @@ pub fn commands_from_discovered_skills(
         all_cmds.iter().map(|c| c.name()).collect();
 
     discovered
-        .into_values()
-        .filter(|skill| !builtin_names.contains(skill.name.as_str()))
-        .map(|skill| {
+        .into_iter()
+        // A skill whose bare command name clashes with a built-in stays skipped
+        // (the built-in wins that slot); a qualified `name@origin` never clashes
+        // with a built-in, so its siblings remain reachable.
+        .filter(|resolved| !builtin_names.contains(resolved.command_name.as_str()))
+        .map(|resolved| {
+            let description = resolved.tagged_description();
             Box::new(SkillCommand {
-                name: skill.name,
-                description: skill.description,
-                template: skill.template,
+                name: resolved.command_name,
+                description,
+                template: resolved.skill.template,
             }) as Box<dyn SlashCommand>
         })
         .collect()
@@ -1731,13 +1735,15 @@ pub async fn execute_command(input: &str, ctx: &mut CommandContext) -> Option<Co
     }
 
     // Check discovered skill commands (from .mikmik/skills/, git URLs, etc.).
+    // A skill is reached by its resolved command name, which is the bare name
+    // for the highest-priority skill and `name@origin` for any that clash.
     {
         let discovered = mikmik_core::discover_skills(&ctx.working_dir, &ctx.config.skills);
-        if let Some(skill) = discovered.get(cmd_name) {
+        if let Some(resolved) = discovered.into_iter().find(|r| r.command_name == cmd_name) {
             let sc = SkillCommand {
-                name: skill.name.clone(),
-                description: skill.description.clone(),
-                template: skill.template.clone(),
+                name: resolved.command_name,
+                description: resolved.skill.description,
+                template: resolved.skill.template,
             };
             return Some(sc.execute(args, ctx).await);
         }

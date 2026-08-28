@@ -1,14 +1,19 @@
 //! Skill discovery: load custom prompt-template skills from markdown files
 //! on disk and (optionally) from git URLs.
 //!
-//! Search priority (first match wins for a given skill name):
-//!   1. Project `.mikmik/skills/` — walk up from `cwd`
-//!   2. Project `.agents/skills/`  — walk up from `cwd`
-//!   3. Global `~/.config/mikmik/skills/`
-//!   4. Configured extra paths from `SkillsConfig.paths`
-//!   5. Git-URL repos from `SkillsConfig.urls` (cloned once, then cached)
+//! Every source is scanned and every skill is kept, so the user can reach all
+//! of them from the picker. Two skills may share a name; the source (its
+//! [`SkillOrigin`]) both tags the description in the picker and, on a name
+//! clash, decides which skill keeps the bare command name.
+//!
+//! Sources, in priority order (the rank that wins the bare name on a clash):
+//!   1. Project `.mikmik/skills/` — walk up from `cwd`  → `mikmik-project`
+//!   2. Project `.agents/skills/`  — walk up from `cwd` → `agents-project`
+//!   3. Global `~/.config/mikmik/skills/`               → `mikmik-global`
+//!   4. Global `~/.agents/skills/`                      → `agents-global`
+//!   5. Configured extra paths from `SkillsConfig.paths` → `configured`
+//!   6. Git-URL repos from `SkillsConfig.urls` (cloned once, cached) → `url`
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -26,6 +31,79 @@ pub struct DiscoveredSkill {
     pub template: String,
     /// Absolute path to the source `.md` file.
     pub source_path: PathBuf,
+}
+
+/// Where a discovered skill came from.
+///
+/// The origin drives the `(origin)` label shown in the picker and the
+/// `@origin` suffix a skill takes when it must yield the bare command name to a
+/// higher-priority skill of the same name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillOrigin {
+    /// Project `.mikmik/skills/`.
+    MikmikProject,
+    /// Global `~/.config/mikmik/skills/`.
+    MikmikGlobal,
+    /// Project `.agents/skills/`.
+    AgentsProject,
+    /// Global `~/.agents/skills/`.
+    AgentsGlobal,
+    /// A path listed in `SkillsConfig.paths`.
+    Configured,
+    /// A skill cloned from a git URL in `SkillsConfig.urls`.
+    Url,
+}
+
+impl SkillOrigin {
+    /// The source label, e.g. `mikmik-project`. Used both as the `(origin)`
+    /// description prefix and as the `@origin` command-name suffix.
+    pub fn label(self) -> &'static str {
+        match self {
+            SkillOrigin::MikmikProject => "mikmik-project",
+            SkillOrigin::MikmikGlobal => "mikmik-global",
+            SkillOrigin::AgentsProject => "agents-project",
+            SkillOrigin::AgentsGlobal => "agents-global",
+            SkillOrigin::Configured => "configured",
+            SkillOrigin::Url => "url",
+        }
+    }
+
+    /// Priority rank; the lowest rank in a name-clash group keeps the bare
+    /// command name. mikmik always outranks agents, and project always
+    /// outranks global, so the default source is always mikmik.
+    fn rank(self) -> u8 {
+        match self {
+            SkillOrigin::MikmikProject => 0,
+            SkillOrigin::MikmikGlobal => 1,
+            SkillOrigin::AgentsProject => 2,
+            SkillOrigin::AgentsGlobal => 3,
+            SkillOrigin::Configured => 4,
+            SkillOrigin::Url => 5,
+        }
+    }
+}
+
+/// A discovered skill together with its origin and the exact command name that
+/// reaches it.
+///
+/// `command_name` is unique across the whole discovery result: on a name clash
+/// the highest-priority skill keeps the bare name and the rest take
+/// `name@origin`, so every discovered skill stays typeable and pickable.
+#[derive(Debug, Clone)]
+pub struct ResolvedSkill {
+    /// The parsed skill.
+    pub skill: DiscoveredSkill,
+    /// The source this skill came from.
+    pub origin: SkillOrigin,
+    /// What a user types after `/` to run this skill.
+    pub command_name: String,
+}
+
+impl ResolvedSkill {
+    /// The description shown in the picker, prefixed with the `(origin)` tag.
+    pub fn tagged_description(&self) -> String {
+        format!("({}) {}", self.origin.label(), self.skill.description)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,30 +281,77 @@ fn resolve_skill_path(path_str: &str, cwd: &Path, home: Option<&Path>) -> PathBu
     }
 }
 
-/// Discover all skills from all configured sources.
+/// Assign a unique, typeable `command_name` to every discovered skill.
 ///
-/// Returns a `HashMap` of `skill_name → DiscoveredSkill` (first match wins;
-/// duplicates from lower-priority sources are warned via `tracing::warn`).
+/// Skills that share a name are ordered by origin priority (then source path
+/// for a stable result). The first keeps the bare name; each other takes
+/// `name@origin`, and a `-N` suffix is added only if that string still repeats
+/// (two skills of the same name from the same origin). The bare name therefore
+/// always resolves to the highest-priority (mikmik-first) skill, and every
+/// other skill stays reachable under a name the user can see and type.
+fn assign_command_names(tagged: Vec<(SkillOrigin, DiscoveredSkill)>) -> Vec<ResolvedSkill> {
+    use std::collections::{BTreeMap, HashSet};
+
+    // Group input positions by skill name, in a deterministic order.
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, (_, skill)) in tagged.iter().enumerate() {
+        groups.entry(skill.name.clone()).or_default().push(i);
+    }
+
+    let mut command_names: Vec<Option<String>> = vec![None; tagged.len()];
+    let mut used: HashSet<String> = HashSet::new();
+
+    for (_, mut idxs) in groups {
+        idxs.sort_by(|&a, &b| {
+            tagged[a]
+                .0
+                .rank()
+                .cmp(&tagged[b].0.rank())
+                .then_with(|| tagged[a].1.source_path.cmp(&tagged[b].1.source_path))
+        });
+        for (pos, &i) in idxs.iter().enumerate() {
+            let (origin, skill) = &tagged[i];
+            let base = if pos == 0 {
+                skill.name.clone()
+            } else {
+                format!("{}@{}", skill.name, origin.label())
+            };
+            let mut candidate = base.clone();
+            let mut n = 2;
+            while used.contains(&candidate) {
+                candidate = format!("{}-{}", base, n);
+                n += 1;
+            }
+            used.insert(candidate.clone());
+            command_names[i] = Some(candidate);
+        }
+    }
+
+    tagged
+        .into_iter()
+        .zip(command_names)
+        .map(|((origin, skill), command_name)| ResolvedSkill {
+            skill,
+            origin,
+            command_name: command_name.unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Discover all skills from every configured source.
+///
+/// Returns every discovered skill, each tagged with its [`SkillOrigin`] and a
+/// unique `command_name`. Nothing is deduplicated: two skills of the same name
+/// are both returned and told apart by `command_name` (see
+/// [`assign_command_names`]).
 pub fn discover_skills(
     cwd: &Path,
     config_skills: &crate::config::SkillsConfig,
-) -> HashMap<String, DiscoveredSkill> {
-    let mut all: HashMap<String, DiscoveredSkill> = HashMap::new();
-    let mut warn_duplicates: Vec<String> = Vec::new();
-
-    // Inline closure: insert a batch, warning on duplicates.
-    let mut add = |skills: Vec<DiscoveredSkill>| {
+) -> Vec<ResolvedSkill> {
+    let mut tagged: Vec<(SkillOrigin, DiscoveredSkill)> = Vec::new();
+    let mut push = |origin: SkillOrigin, skills: Vec<DiscoveredSkill>| {
         for skill in skills {
-            if let Some(existing) = all.get(&skill.name) {
-                warn_duplicates.push(format!(
-                    "Duplicate skill '{}' found at {} (keeping {})",
-                    skill.name,
-                    skill.source_path.display(),
-                    existing.source_path.display()
-                ));
-            } else {
-                all.insert(skill.name.clone(), skill);
-            }
+            tagged.push((origin, skill));
         }
     };
 
@@ -234,8 +359,14 @@ pub fn discover_skills(
     {
         let mut dir: &Path = cwd;
         loop {
-            add(scan_dir(&dir.join(".mikmik").join("skills")));
-            add(scan_dir(&dir.join(".agents").join("skills")));
+            push(
+                SkillOrigin::MikmikProject,
+                scan_dir(&dir.join(".mikmik").join("skills")),
+            );
+            push(
+                SkillOrigin::AgentsProject,
+                scan_dir(&dir.join(".agents").join("skills")),
+            );
             match dir.parent() {
                 Some(parent) if parent != dir => dir = parent,
                 _ => break,
@@ -243,30 +374,34 @@ pub fn discover_skills(
         }
     }
 
-    // ---- 2. Global skills: <mikmik home>/skills/ ---------------------------
-    add(scan_dir(
-        &crate::config::Settings::config_dir().join("skills"),
-    ));
+    // ---- 2. Global mikmik skills: <mikmik home>/skills/ --------------------
+    push(
+        SkillOrigin::MikmikGlobal,
+        scan_dir(&crate::config::Settings::config_dir().join("skills")),
+    );
 
-    // ---- 3. Configured extra paths ------------------------------------------
-    for path_str in &config_skills.paths {
-        let path = resolve_skill_path(path_str, cwd, dirs::home_dir().as_deref());
-        add(scan_dir(&path));
+    // ---- 3. Global agents skills: ~/.agents/skills/ ------------------------
+    if let Some(home) = dirs::home_dir() {
+        push(
+            SkillOrigin::AgentsGlobal,
+            scan_dir(&home.join(".agents").join("skills")),
+        );
     }
 
-    // ---- 4. Git URL skills (cached) -----------------------------------------
+    // ---- 4. Configured extra paths ------------------------------------------
+    for path_str in &config_skills.paths {
+        let path = resolve_skill_path(path_str, cwd, dirs::home_dir().as_deref());
+        push(SkillOrigin::Configured, scan_dir(&path));
+    }
+
+    // ---- 5. Git URL skills (cached) -----------------------------------------
     for url in &config_skills.urls {
         if let Some(git_skills) = fetch_git_skills(url) {
-            add(git_skills);
+            push(SkillOrigin::Url, git_skills);
         }
     }
 
-    // Emit warnings for any duplicate skill names encountered.
-    for w in &warn_duplicates {
-        tracing::warn!("{}", w);
-    }
-
-    all
+    assign_command_names(tagged)
 }
 
 // ---------------------------------------------------------------------------
@@ -482,6 +617,11 @@ mod tests {
 
     // ---- discover_skills ----------------------------------------------------
 
+    /// Locate a discovered skill by the command name it resolves to.
+    fn by_command<'a>(skills: &'a [ResolvedSkill], command: &str) -> Option<&'a ResolvedSkill> {
+        skills.iter().find(|r| r.command_name == command)
+    }
+
     #[test]
     fn test_discover_from_project_dir() {
         let tmp = make_temp_dir();
@@ -495,8 +635,9 @@ mod tests {
 
         let config = crate::config::SkillsConfig::default();
         let discovered = discover_skills(tmp.path(), &config);
-        assert!(discovered.contains_key("myskill"));
-        assert_eq!(discovered["myskill"].description, "Test");
+        let skill = by_command(&discovered, "myskill").expect("myskill discovered");
+        assert_eq!(skill.origin, SkillOrigin::MikmikProject);
+        assert_eq!(skill.skill.description, "Test");
     }
 
     #[test]
@@ -514,11 +655,13 @@ mod tests {
             urls: vec![],
         };
         let discovered = discover_skills(tmp.path(), &config);
-        assert!(discovered.contains_key("extra"));
+        // No clash, so a configured skill keeps the bare command name.
+        let skill = by_command(&discovered, "extra").expect("extra discovered");
+        assert_eq!(skill.origin, SkillOrigin::Configured);
     }
 
     #[test]
-    fn test_discover_deduplicates_first_wins() {
+    fn clashing_skills_are_all_kept_and_disambiguated() {
         let tmp = make_temp_dir();
         let proj_skills = tmp.path().join(".mikmik").join("skills");
         std::fs::create_dir_all(&proj_skills).unwrap();
@@ -540,8 +683,87 @@ mod tests {
             urls: vec![],
         };
         let discovered = discover_skills(tmp.path(), &config);
-        // Project-level wins over extra path.
-        assert_eq!(discovered["dup"].description, "project");
+        // Both are kept: nothing is deduplicated.
+        let dups: Vec<_> = discovered
+            .iter()
+            .filter(|r| r.skill.name == "dup")
+            .collect();
+        assert_eq!(dups.len(), 2);
+        // The mikmik-project skill keeps the bare command name.
+        let bare = by_command(&discovered, "dup").expect("bare dup");
+        assert_eq!(bare.origin, SkillOrigin::MikmikProject);
+        assert_eq!(bare.skill.description, "project");
+        // The configured skill stays reachable under a qualified name.
+        let qualified = by_command(&discovered, "dup@configured").expect("qualified dup");
+        assert_eq!(qualified.skill.description, "extra");
+    }
+
+    #[test]
+    fn mikmik_project_outranks_agents_project_for_the_bare_name() {
+        let tmp = make_temp_dir();
+        let mikmik_dir = tmp.path().join(".mikmik").join("skills");
+        std::fs::create_dir_all(&mikmik_dir).unwrap();
+        write_file(
+            &mikmik_dir,
+            "dup.md",
+            "---\nname: dup\ndescription: from mikmik\n---\nBody.",
+        );
+        let agents_dir = tmp.path().join(".agents").join("skills");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        write_file(
+            &agents_dir,
+            "dup.md",
+            "---\nname: dup\ndescription: from agents\n---\nBody.",
+        );
+
+        let discovered = discover_skills(tmp.path(), &crate::config::SkillsConfig::default());
+        let bare = by_command(&discovered, "dup").expect("bare dup");
+        assert_eq!(bare.origin, SkillOrigin::MikmikProject);
+        // The project `.agents/skills/` source is scanned and stays reachable.
+        let agents = by_command(&discovered, "dup@agents-project").expect("agents dup");
+        assert_eq!(agents.skill.description, "from agents");
+    }
+
+    #[test]
+    fn origin_label_and_tagged_description() {
+        assert_eq!(SkillOrigin::MikmikProject.label(), "mikmik-project");
+        assert_eq!(SkillOrigin::AgentsGlobal.label(), "agents-global");
+        let resolved = ResolvedSkill {
+            skill: DiscoveredSkill {
+                name: "x".to_string(),
+                description: "does x".to_string(),
+                template: String::new(),
+                source_path: PathBuf::from("x.md"),
+            },
+            origin: SkillOrigin::Configured,
+            command_name: "x".to_string(),
+        };
+        assert_eq!(resolved.tagged_description(), "(configured) does x");
+    }
+
+    #[test]
+    fn a_same_origin_name_clash_gets_a_numeric_suffix() {
+        // Three skills, same name, same origin: the qualified `@origin` name
+        // alone cannot separate them, so the extras take a `-N` suffix.
+        let mk = |path: &str| DiscoveredSkill {
+            name: "foo".to_string(),
+            description: String::new(),
+            template: String::new(),
+            source_path: PathBuf::from(path),
+        };
+        let tagged = vec![
+            (SkillOrigin::AgentsGlobal, mk("/a/foo.md")),
+            (SkillOrigin::AgentsGlobal, mk("/b/foo.md")),
+            (SkillOrigin::AgentsGlobal, mk("/c/foo.md")),
+        ];
+        let resolved = assign_command_names(tagged);
+        let names: std::collections::HashSet<&str> =
+            resolved.iter().map(|r| r.command_name.as_str()).collect();
+        // All three are distinct and reachable.
+        assert_eq!(names.len(), 3);
+        assert!(names.contains("foo"));
+        assert!(names.contains("foo@agents-global"));
+        assert!(names.contains("foo@agents-global-2"));
     }
 
     #[test]

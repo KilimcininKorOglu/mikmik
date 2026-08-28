@@ -56,3 +56,5 @@ pub use antigravity::AntigravityProvider;
 pub mod devin;
 pub use devin::DevinProvider;
 pub use gitlab_duo::GitlabDuoProvider;
+
+pub mod cursor;

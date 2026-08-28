@@ -121,6 +121,10 @@ impl ProviderId {
     /// `auth.x.ai`, OpenAI-compatible inference at `api.x.ai/v1`. Separate from
     /// [`XAI`](Self::XAI), which is the API-key route.
     pub const XAI_OAUTH: &'static str = "xai-oauth";
+    /// GitLab Duo — PKCE loopback (or `GITLAB_TOKEN` PAT) login, then a
+    /// direct-access token exchange against the OpenAI-compatible AI-gateway
+    /// proxy. Repairs the dead `gitlab` id.
+    pub const GITLAB_DUO: &'static str = "gitlab-duo";
 
     /// Every provider id mikmik ships with, including the spelling aliases
     /// users type (`lmstudio` for `lm-studio`, `zhipu` for `zhipuai`, …).
@@ -204,6 +208,7 @@ impl ProviderId {
         Self::KIMI_CODE,
         Self::XIAOMI,
         Self::XAI_OAUTH,
+        Self::GITLAB_DUO,
         // Spelling aliases accepted on the wire but not canonical ids.
         "openai-codex",
         "lmstudio",

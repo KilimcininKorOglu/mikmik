@@ -40,6 +40,9 @@ pub enum StoredCredential {
     /// xAI Grok device-flow OAuth tokens.
     #[serde(rename = "xai-oauth")]
     XaiOAuth(crate::xai_oauth::XaiTokens),
+    /// GitLab Duo OAuth tokens (PKCE loopback or a stored PAT).
+    #[serde(rename = "gitlab-duo-oauth")]
+    GitlabDuoOAuth(crate::gitlab_duo::GitlabTokens),
     /// A session on an organisation's configuration server.
     ///
     /// Held here rather than in `settings.json` beside `workspace.url`: this
@@ -114,6 +117,7 @@ fn implied_protocol(credential: &StoredCredential) -> Option<&'static str> {
         StoredCredential::CodexOAuth(_) => Some(crate::provider_id::ProviderId::CODEX),
         StoredCredential::KimiOAuth(_) => Some(crate::provider_id::ProviderId::KIMI_CODE),
         StoredCredential::XaiOAuth(_) => Some(crate::provider_id::ProviderId::XAI_OAUTH),
+        StoredCredential::GitlabDuoOAuth(_) => Some(crate::provider_id::ProviderId::GITLAB_DUO),
         StoredCredential::OAuthToken { .. } => Some("github-copilot"),
         StoredCredential::ApiKey { .. } => None,
         // Not a model provider at all: it authenticates against the
@@ -336,6 +340,19 @@ impl AuthStore {
     /// Store xAI OAuth tokens for `account_id` (persists immediately).
     pub fn set_xai_tokens(&mut self, account_id: &str, tokens: crate::xai_oauth::XaiTokens) {
         self.set(account_id, StoredCredential::XaiOAuth(tokens));
+    }
+
+    /// The GitLab Duo OAuth tokens stored under `account_id`, if any.
+    pub fn gitlab_tokens(&self, account_id: &str) -> Option<&crate::gitlab_duo::GitlabTokens> {
+        match self.get(account_id) {
+            Some(StoredCredential::GitlabDuoOAuth(tokens)) => Some(tokens),
+            _ => None,
+        }
+    }
+
+    /// Store GitLab Duo OAuth tokens for `account_id` (persists immediately).
+    pub fn set_gitlab_tokens(&mut self, account_id: &str, tokens: crate::gitlab_duo::GitlabTokens) {
+        self.set(account_id, StoredCredential::GitlabDuoOAuth(tokens));
     }
 
     /// The live workspace session for `url`, if there is one.

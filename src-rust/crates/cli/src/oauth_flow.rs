@@ -298,7 +298,7 @@ fn try_open_browser(url: &str) {
 }
 
 /// Tiny async HTTP server that captures /callback?code=AUTH_CODE&state=STATE.
-async fn run_callback_server(
+pub(crate) async fn run_callback_server(
     listener: TcpListener,
     expected_state: &str,
 ) -> anyhow::Result<String> {

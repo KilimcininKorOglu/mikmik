@@ -245,6 +245,8 @@ fn get_env_var_for_provider(id: &str) -> &'static str {
         "kimi-code" => "KIMI_CODE_OAUTH_HOST",
         // xAI OAuth is device-flow too; the token store answers for it.
         "xai-oauth" => "XAI_OAUTH_BASE_URL",
+        // GitLab Duo logs in with OAuth; GITLAB_TOKEN is the PAT alternative.
+        "gitlab-duo" => "GITLAB_TOKEN",
         _ => "API_KEY",
     }
 }
@@ -829,6 +831,13 @@ fn provider_picker_items() -> Vec<SelectItem> {
             id: "xai-oauth".into(),
             title: "xAI Grok (SuperGrok)".into(),
             description: "SuperGrok / X Premium+ (device login)".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "gitlab-duo".into(),
+            title: "GitLab Duo".into(),
+            description: "GitLab Duo (browser login or GITLAB_TOKEN)".into(),
             category: "Other".into(),
             badge: None,
         },
@@ -4920,8 +4929,11 @@ impl App {
                             self.pending_provider_reload = true;
                             return false;
                         }
-                        if provider_id == "kimi-code" || provider_id == "xai-oauth" {
-                            // These device flows persist their own tokens (via
+                        if provider_id == "kimi-code"
+                            || provider_id == "xai-oauth"
+                            || provider_id == "gitlab-duo"
+                        {
+                            // These OAuth flows persist their own tokens (via
                             // save_*_tokens_and_register); switch to the account
                             // they registered without re-storing anything.
                             let account_id = self
@@ -5348,6 +5360,13 @@ impl App {
                                 self.device_auth_dialog
                                     .open("xai-oauth".into(), "xAI Grok (OAuth)".into());
                                 self.device_auth_pending = Some("xai-oauth".to_string());
+                            }
+                            "gitlab-duo" => {
+                                // GitLab Duo: PKCE loopback (browser) flow. The
+                                // flow persists its own tokens.
+                                self.device_auth_dialog
+                                    .open("gitlab-duo".into(), "GitLab Duo".into());
+                                self.device_auth_pending = Some("gitlab-duo".to_string());
                             }
                             // AWS Bedrock — accept a bearer token via key input dialog
                             "amazon-bedrock" => {

@@ -250,9 +250,13 @@ fn describe(credential: &mikmik_core::StoredCredential) -> String {
             .as_deref()
             .map(|id| format!("  {}", id))
             .unwrap_or_default(),
-        // The listing above skips the workspace session, so its arm here is
-        // only what the compiler needs to see the match is complete.
-        C::OAuthToken { .. } | C::ApiKey { .. } | C::WorkspaceSession { .. } => String::new(),
+        // GitLab Duo tokens carry no readable identity locally; the workspace
+        // session is skipped by the listing. These arms are only what the
+        // compiler needs to see the match is complete.
+        C::GitlabDuoOAuth(_)
+        | C::OAuthToken { .. }
+        | C::ApiKey { .. }
+        | C::WorkspaceSession { .. } => String::new(),
     }
 }
 

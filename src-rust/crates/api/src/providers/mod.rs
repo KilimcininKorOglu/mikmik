@@ -47,3 +47,6 @@ pub use kimi_code::KimiCodeProvider;
 
 pub mod xai_oauth;
 pub use xai_oauth::XaiOAuthProvider;
+
+pub mod gitlab_duo;
+pub use gitlab_duo::GitlabDuoProvider;

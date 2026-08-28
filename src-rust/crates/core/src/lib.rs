@@ -8995,6 +8995,7 @@ pub mod bash_classifier;
 pub mod codex_oauth;
 pub mod effort;
 pub mod feature_gates;
+pub mod gitlab_duo;
 pub mod import_config;
 pub mod keybindings;
 pub mod keywords;

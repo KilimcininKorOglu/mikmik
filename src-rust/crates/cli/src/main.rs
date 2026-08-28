@@ -6798,6 +6798,78 @@ async fn run_interactive(
                         }
                     });
                 }
+                "gitlab-duo" => {
+                    let tx2 = device_auth_tx.clone();
+                    // GitLab Duo PKCE loopback flow: bind the fixed callback
+                    // port the client id is registered with, open the browser,
+                    // capture the code, exchange it, and register the account.
+                    tokio::spawn(async move {
+                        let verifier = match mikmik_core::oauth::generate_code_verifier() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                let _ = tx2
+                                    .send(DeviceAuthEvent::Error(format!(
+                                        "GitLab PKCE setup failed: {e}"
+                                    )))
+                                    .await;
+                                return;
+                            }
+                        };
+                        let challenge = mikmik_core::oauth::generate_code_challenge(&verifier);
+                        let state = uuid::Uuid::new_v4().to_string();
+                        let port = mikmik_core::gitlab_duo::callback_port();
+                        let listener =
+                            match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+                                Ok(l) => l,
+                                Err(e) => {
+                                    let _ = tx2
+                                        .send(DeviceAuthEvent::Error(format!(
+                                            "GitLab callback server could not bind port {port}: {e}"
+                                        )))
+                                        .await;
+                                    return;
+                                }
+                            };
+                        let auth_url =
+                            mikmik_core::gitlab_duo::build_authorize_url(&challenge, &state);
+                        let _ = tx2
+                            .send(DeviceAuthEvent::GotBrowserUrl { url: auth_url })
+                            .await;
+
+                        let code = match oauth_flow::run_callback_server(listener, &state).await {
+                            Ok(code) => code,
+                            Err(e) => {
+                                let _ = tx2
+                                    .send(DeviceAuthEvent::Error(format!(
+                                        "GitLab callback failed: {e}"
+                                    )))
+                                    .await;
+                                return;
+                            }
+                        };
+
+                        match mikmik_core::gitlab_duo::exchange_code(&code, &verifier).await {
+                            Ok(tokens) => {
+                                let event =
+                                    match mikmik_core::gitlab_duo::save_gitlab_tokens_and_register(
+                                        &tokens,
+                                    ) {
+                                        Ok(account_id) => DeviceAuthEvent::TokenReceivedFor {
+                                            token: "connected".to_string(),
+                                            account_id,
+                                        },
+                                        Err(e) => DeviceAuthEvent::Error(format!(
+                                            "GitLab login could not be saved: {e}"
+                                        )),
+                                    };
+                                let _ = tx2.send(event).await;
+                            }
+                            Err(e) => {
+                                let _ = tx2.send(DeviceAuthEvent::Error(e)).await;
+                            }
+                        }
+                    });
+                }
                 _ => {
                     // Unknown provider for device auth — should not happen
                     app.device_auth_dialog
@@ -7488,6 +7560,8 @@ fn print_account_list(provider: &str, display_name: &str) {
             Some(mikmik_core::StoredCredential::XaiOAuth(tokens)) => {
                 format!("  {}", tokens.account_id.as_deref().unwrap_or(""))
             }
+            // GitLab Duo tokens carry no readable identity; the account name is
+            // all the listing shows, so they fall through to the empty detail.
             _ => String::new(),
         };
         println!("  {} {}{}", marker, id, detail.trim_end());
@@ -7798,6 +7872,12 @@ async fn auth_status(json_output: bool) {
             }
             Some(mikmik_core::StoredCredential::XaiOAuth(tokens))
                 if active_provider == mikmik_core::provider_id::ProviderId::XAI_OAUTH
+                    && !tokens.access_token.is_empty() =>
+            {
+                Some("stored token".to_string())
+            }
+            Some(mikmik_core::StoredCredential::GitlabDuoOAuth(tokens))
+                if active_provider == mikmik_core::provider_id::ProviderId::GITLAB_DUO
                     && !tokens.access_token.is_empty() =>
             {
                 Some("stored token".to_string())

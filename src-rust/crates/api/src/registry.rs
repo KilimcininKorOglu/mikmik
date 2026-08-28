@@ -13,8 +13,8 @@ use crate::provider::LlmProvider;
 use crate::provider_types::ProviderStatus;
 use crate::providers::{
     AnthropicProvider, AzureProvider, BedrockProvider, CodexProvider, CohereProvider,
-    CopilotProvider, FreeEntry, FreeProvider, GoogleProvider, KimiCodeProvider, MinimaxProvider,
-    OpenAiProvider, XaiOAuthProvider, FREE_CATALOG,
+    CopilotProvider, FreeEntry, FreeProvider, GitlabDuoProvider, GoogleProvider, KimiCodeProvider,
+    MinimaxProvider, OpenAiProvider, XaiOAuthProvider, FREE_CATALOG,
 };
 
 fn normalize_openai_compat_base(override_base: &str) -> String {
@@ -104,6 +104,11 @@ fn provider_from_key(provider_id: &str, key: String) -> Option<Arc<dyn LlmProvid
         "xai-oauth" => {
             // Device-flow OAuth against api.x.ai; the `key` field is unused.
             XaiOAuthProvider::from_stored().map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
+        }
+        "gitlab-duo" => {
+            // OAuth (or GITLAB_TOKEN PAT) plus a direct-access exchange; the
+            // `key` field is unused.
+            GitlabDuoProvider::from_stored().map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
         }
         "cohere" => Some(Arc::new(CohereProvider::new(key))),
         "custom-openai" => Some(Arc::new(p::custom_openai().with_api_key(key))),
@@ -412,6 +417,8 @@ pub fn provider_from_config(
         "kimi-code" => KimiCodeProvider::from_account(provider_id)
             .map(|provider| Arc::new(provider) as Arc<dyn LlmProvider>),
         "xai-oauth" => XaiOAuthProvider::from_account(provider_id)
+            .map(|provider| Arc::new(provider) as Arc<dyn LlmProvider>),
+        "gitlab-duo" => GitlabDuoProvider::from_account(provider_id)
             .map(|provider| Arc::new(provider) as Arc<dyn LlmProvider>),
         _ => api_key.and_then(|key| provider_from_key(provider_id, key)),
     }

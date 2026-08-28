@@ -383,6 +383,16 @@ The subscription bills through xAI directly; this is the same account you use wi
 
 ---
 
+### GitLab Duo
+
+GitLab Duo is reached in two steps. Sign in with the OAuth 2.0 PKCE flow (browser plus a loopback callback on `localhost:8080`) or supply a Personal Access Token in `GITLAB_TOKEN`. Either way MikMik holds a GitLab access token, which it exchanges at request time for a short-lived direct-access token and gateway headers; those authenticate the OpenAI-compatible proxy at `https://cloud.gitlab.com/ai/v1/proxy/openai/v1`.
+
+Pick "GitLab Duo" under "Other" in [`/connect`](commands.md#connect). MikMik opens `gitlab.com` in the browser; approve the authorization and the session switches to the new account. Duo must be enabled for the account, or the direct-access exchange returns 403.
+
+The bundled OAuth client id is registered with the `http://localhost:8080/callback` redirect URI. If GitLab rejects the authorize request ("The redirect URI included is not valid"), either register your own GitLab OAuth application and set `GITLAB_CLIENT_ID` + `GITLAB_REDIRECT_URI`, or skip OAuth and set `GITLAB_TOKEN` to a Personal Access Token with the `api` scope.
+
+---
+
 ### Custom endpoints
 
 Two slots exist for endpoints MikMik does not ship a provider for, one per wire format:

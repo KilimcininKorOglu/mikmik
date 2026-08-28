@@ -25,6 +25,7 @@ pub mod pub_dev;
 pub mod pypi;
 pub mod reddit;
 pub mod rubygems;
+pub mod terraform;
 pub mod util;
 
 use async_trait::async_trait;
@@ -59,6 +60,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(brew::BrewHandler),
         Box::new(hackernews::HackerNewsHandler),
         Box::new(reddit::RedditHandler),
+        Box::new(terraform::TerraformHandler),
         Box::new(cisa_kev::CisaKevHandler),
         Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),

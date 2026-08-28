@@ -413,6 +413,16 @@ Devin emits tool calls that MikMik's own tool loop dispatches, feeding the resul
 
 ---
 
+### Cursor (Cursor Pro)
+
+Cursor Pro subscribers sign in with a PKCE poll flow instead of an API key, and Cursor is unlike every other provider: it is an agent-executor. Its server runs the whole agent loop over one bidirectional HTTP/2 Connect stream to `api2.cursor.sh` and asks the client to run local tools on that same stream, so MikMik does not dispatch tool calls itself for a Cursor turn.
+
+Pick "Cursor" under "Other" in [`/connect`](commands.md#connect). MikMik opens `cursor.com/loginDeepControl` in the browser and polls the Cursor auth endpoint until sign-in completes and returns an access/refresh token pair; the access token is refreshed automatically when it expires.
+
+During a turn, Cursor's server drives its own multi-tool loop: it streams assistant text and thinking, and sends tool-argument frames that MikMik runs through its real tools (read, write, edit, delete, ls, grep, find, shell, and any MCP tools you have configured), gated by the same permission checks as a model-driven call. Hosted web search and fetch gates are auto-approved; interactive question, plan and mode-switch prompts are declined. The reverse-engineered protobuf wire has no public contract and may change without notice.
+
+---
+
 ### Custom endpoints
 
 Two slots exist for endpoints MikMik does not ship a provider for, one per wire format:

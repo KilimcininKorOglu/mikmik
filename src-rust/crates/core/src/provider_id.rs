@@ -99,6 +99,9 @@ impl ProviderId {
     pub const UMANS: &'static str = "umans";
     pub const QIANFAN: &'static str = "qianfan";
     pub const WAFER_SERVERLESS: &'static str = "wafer-serverless";
+    pub const LITELLM: &'static str = "litellm";
+    pub const VLLM: &'static str = "vllm";
+    pub const OLLAMA_CLOUD: &'static str = "ollama-cloud";
 
     /// Every provider id mikmik ships with, including the spelling aliases
     /// users type (`lmstudio` for `lm-studio`, `zhipu` for `zhipuai`, …).
@@ -172,6 +175,9 @@ impl ProviderId {
         Self::UMANS,
         Self::QIANFAN,
         Self::WAFER_SERVERLESS,
+        Self::LITELLM,
+        Self::VLLM,
+        Self::OLLAMA_CLOUD,
         // Spelling aliases accepted on the wire but not canonical ids.
         "openai-codex",
         "lmstudio",

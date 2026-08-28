@@ -637,6 +637,9 @@ impl AuthStore {
             "umans" => "UMANS_API_KEY",
             "qianfan" => "QIANFAN_API_KEY",
             "wafer-serverless" => "WAFER_API_KEY",
+            "litellm" => "LITELLM_API_KEY",
+            "ollama-cloud" => "OLLAMA_API_KEY",
+            "vllm" => "", // No API key required unless the server sets one
             "custom-openai" => "CUSTOM_OPENAI_API_KEY",
             "custom-anthropic" => "CUSTOM_ANTHROPIC_API_KEY",
             "ollama" | "lm-studio" | "llama-cpp" => "", // No API key required

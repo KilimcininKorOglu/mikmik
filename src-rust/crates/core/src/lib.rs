@@ -870,6 +870,8 @@ pub mod config {
             "ollama" => Some("OLLAMA_HOST"),
             "lmstudio" | "lm-studio" => Some("LM_STUDIO_HOST"),
             "llamacpp" | "llama-cpp" | "llama-server" => Some("LLAMA_CPP_HOST"),
+            "litellm" => Some("LITELLM_BASE_URL"),
+            "vllm" => Some("VLLM_BASE_URL"),
             _ => None,
         }
     }
@@ -882,6 +884,8 @@ pub mod config {
             "ollama" => Some("http://localhost:11434"),
             "lmstudio" | "lm-studio" => Some("http://localhost:1234"),
             "llamacpp" | "llama-cpp" | "llama-server" => Some("http://localhost:8080"),
+            "litellm" => Some("http://localhost:4000"),
+            "vllm" => Some("http://127.0.0.1:8000"),
             _ => None,
         }
     }

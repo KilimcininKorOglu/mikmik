@@ -61,8 +61,61 @@ pub fn provider_for_id(provider_id: &str) -> Option<OpenAiCompatProvider> {
         "umans" => Some(umans()),
         "qianfan" => Some(qianfan()),
         "wafer-serverless" => Some(wafer_serverless()),
+        "litellm" => Some(litellm()),
+        "vllm" => Some(vllm()),
+        "ollama-cloud" => Some(ollama_cloud()),
         _ => None,
     }
+}
+
+/// Normalise a host into an OpenAI-compatible `<host>/v1` base URL.
+///
+/// Trailing slashes and an already-present `/v1` are stripped first, so a user
+/// who supplies `http://host/v1/` and one who supplies `http://host` both reach
+/// the same base without a doubled segment.
+fn openai_v1_base(host: &str) -> String {
+    let trimmed = host
+        .trim_end_matches('/')
+        .trim_end_matches("/v1")
+        .trim_end_matches('/');
+    format!("{trimmed}/v1")
+}
+
+/// LiteLLM — self-hosted proxy. Reads `LITELLM_BASE_URL` (default
+/// `http://localhost:4000`) and `LITELLM_API_KEY` (the proxy's master or
+/// virtual key). A configured `providers.litellm.api_base` overrides the base.
+pub fn litellm() -> OpenAiCompatProvider {
+    let host =
+        std::env::var("LITELLM_BASE_URL").unwrap_or_else(|_| "http://localhost:4000".to_string());
+    let key = std::env::var("LITELLM_API_KEY").unwrap_or_default();
+    OpenAiCompatProvider::new(ProviderId::LITELLM, "LiteLLM", openai_v1_base(&host))
+        .with_api_key(key)
+}
+
+/// vLLM — local OpenAI-compatible server. Reads `VLLM_BASE_URL` (default
+/// `http://127.0.0.1:8000`). A token is only needed when the server was
+/// started with `--api-key`, so no key is required by default.
+pub fn vllm() -> OpenAiCompatProvider {
+    let host =
+        std::env::var("VLLM_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".to_string());
+    OpenAiCompatProvider::new(ProviderId::VLLM, "vLLM", openai_v1_base(&host)).with_quirks(
+        ProviderQuirks {
+            no_api_key_required: true,
+            ..Default::default()
+        },
+    )
+}
+
+/// Ollama Cloud — ollama.com hosted inference. Reads `OLLAMA_API_KEY`. Distinct
+/// from the local `ollama` provider, which targets a self-hosted server.
+pub fn ollama_cloud() -> OpenAiCompatProvider {
+    let key = std::env::var("OLLAMA_API_KEY").unwrap_or_default();
+    OpenAiCompatProvider::new(
+        ProviderId::OLLAMA_CLOUD,
+        "Ollama Cloud",
+        "https://ollama.com/v1",
+    )
+    .with_api_key(key)
 }
 
 // ---------------------------------------------------------------------------
@@ -873,11 +926,54 @@ mod tests {
             ProviderId::UMANS,
             ProviderId::QIANFAN,
             ProviderId::WAFER_SERVERLESS,
+            ProviderId::LITELLM,
+            ProviderId::VLLM,
+            ProviderId::OLLAMA_CLOUD,
         ] {
             assert!(
                 ProviderId::is_well_known(id),
                 "{id} must be a well-known account prefix"
             );
         }
+    }
+
+    #[test]
+    fn a_host_becomes_an_openai_v1_base_without_doubling() {
+        assert_eq!(openai_v1_base("http://host:4000"), "http://host:4000/v1");
+        assert_eq!(openai_v1_base("http://host:4000/"), "http://host:4000/v1");
+        assert_eq!(openai_v1_base("http://host:4000/v1"), "http://host:4000/v1");
+        assert_eq!(
+            openai_v1_base("http://host:4000/v1/"),
+            "http://host:4000/v1"
+        );
+    }
+
+    /// The self-hosted providers resolve and carry their default base URL, and
+    /// `ollama-cloud` is a distinct remote endpoint from the local `ollama`.
+    #[test]
+    fn self_hosted_providers_resolve_with_their_defaults() {
+        // Env vars are process-global; only assert the ollama-cloud fixed base
+        // and that the local ones resolve and default to a /v1 base.
+        assert_eq!(
+            provider_for_id("ollama-cloud")
+                .expect("ollama-cloud")
+                .base_url(),
+            "https://ollama.com/v1"
+        );
+        assert_ne!(
+            provider_for_id("ollama-cloud")
+                .expect("ollama-cloud")
+                .base_url(),
+            provider_for_id("ollama").expect("ollama").base_url(),
+            "ollama-cloud must not collapse onto the local ollama endpoint"
+        );
+        assert!(provider_for_id("litellm")
+            .expect("litellm")
+            .base_url()
+            .ends_with("/v1"));
+        assert!(provider_for_id("vllm")
+            .expect("vllm")
+            .base_url()
+            .ends_with("/v1"));
     }
 }

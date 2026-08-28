@@ -234,6 +234,8 @@ fn get_env_var_for_provider(id: &str) -> &'static str {
         "umans" => "UMANS_API_KEY",
         "qianfan" => "QIANFAN_API_KEY",
         "wafer-serverless" => "WAFER_API_KEY",
+        "litellm" => "LITELLM_API_KEY",
+        "ollama-cloud" => "OLLAMA_API_KEY",
         _ => "API_KEY",
     }
 }
@@ -755,6 +757,27 @@ fn provider_picker_items() -> Vec<SelectItem> {
             id: "wafer-serverless".into(),
             title: "Wafer Serverless".into(),
             description: "Pay-as-you-go inference".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "litellm".into(),
+            title: "LiteLLM".into(),
+            description: "Self-hosted proxy (LITELLM_BASE_URL)".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "vllm".into(),
+            title: "vLLM".into(),
+            description: "Local OpenAI-compatible server".into(),
+            category: "Other".into(),
+            badge: Some("LOCAL".into()),
+        },
+        SelectItem {
+            id: "ollama-cloud".into(),
+            title: "Ollama Cloud".into(),
+            description: "ollama.com hosted inference".into(),
             category: "Other".into(),
             badge: None,
         },

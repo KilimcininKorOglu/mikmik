@@ -1732,7 +1732,7 @@ fn decode_single_string(bytes: &[u8]) -> Result<String, ProtoError> {
 mod tests {
     use super::*;
 
-    fn read_field_message<'a>(bytes: &'a [u8], want: u32) -> Vec<u8> {
+    fn read_field_message(bytes: &[u8], want: u32) -> Vec<u8> {
         let mut r = ProtoReader::new(bytes);
         while !r.is_empty() {
             let (field, wire) = r.tag().unwrap();

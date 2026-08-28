@@ -6,6 +6,7 @@
 pub mod brave;
 pub mod duckduckgo;
 pub mod exa;
+pub mod firecrawl;
 pub mod jina;
 pub mod searxng;
 pub mod synthetic;

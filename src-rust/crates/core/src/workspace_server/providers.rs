@@ -131,7 +131,7 @@ pub fn forget(settings: &mut Settings, auth: &mut AuthStore, server: &str) -> Ve
 }
 
 /// The form two addresses are compared in.
-fn normalise(url: &str) -> &str {
+pub(super) fn normalise(url: &str) -> &str {
     url.trim().trim_end_matches('/')
 }
 
@@ -148,6 +148,7 @@ mod tests {
             api_base: Some("https://api.firma.com/v1".to_string()),
             api_key: format!("key-for-{name}"),
             models: vec!["gpt-x".to_string()],
+            kind: None,
         }
     }
 

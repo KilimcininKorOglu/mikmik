@@ -98,6 +98,22 @@ pub struct EntitledProvider {
     pub api_key: String,
     #[serde(default)]
     pub models: Vec<String>,
+    /// `llm` (the default when a server omits it) or `web_search`. Decides
+    /// whether this becomes a `settings.json` model account or a search key
+    /// written only to `auth.json`.
+    #[serde(default)]
+    pub kind: Option<String>,
+}
+
+impl EntitledProvider {
+    /// Whether this entitlement is a web-search key rather than a model account.
+    ///
+    /// Anything but the explicit `web_search` kind, the absent kind included,
+    /// is a model account, so a server that has never heard of the field keeps
+    /// handing out LLM providers exactly as before.
+    pub fn is_web_search(&self) -> bool {
+        self.kind.as_deref() == Some("web_search")
+    }
 }
 
 /// What a policy fetch found.
@@ -444,6 +460,26 @@ mod tests {
         assert!(WorkspaceClient::new(&settings("http://mikmik.firma.com")).is_err());
         assert!(WorkspaceClient::new(&settings("")).is_err());
         assert!(WorkspaceClient::new(&settings("ftp://firma.com")).is_err());
+    }
+
+    #[test]
+    fn only_the_web_search_kind_is_a_search_provider() {
+        let mut provider = EntitledProvider {
+            name: "tavily".to_string(),
+            protocol: None,
+            api_base: None,
+            api_key: "k".to_string(),
+            models: Vec::new(),
+            kind: Some("web_search".to_string()),
+        };
+        assert!(provider.is_web_search());
+
+        // An LLM entitlement, and one from a server that never sends the field,
+        // are both model accounts.
+        provider.kind = Some("llm".to_string());
+        assert!(!provider.is_web_search());
+        provider.kind = None;
+        assert!(!provider.is_web_search());
     }
 
     #[test]

@@ -15,6 +15,7 @@
 pub mod client;
 pub mod policy;
 pub mod providers;
+pub mod search_providers;
 pub mod session;
 pub mod sync;
 

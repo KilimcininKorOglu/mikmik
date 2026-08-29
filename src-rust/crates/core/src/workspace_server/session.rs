@@ -17,7 +17,7 @@ use crate::auth_store::AuthStore;
 use crate::config::{Settings, WorkspaceSettings};
 
 use super::client::{BackupWrite, WorkspaceClient};
-use super::{policy, providers, sync};
+use super::{policy, providers, search_providers, sync};
 
 /// How often the settings file is checked for a change.
 ///
@@ -61,17 +61,37 @@ pub fn connect(settings: &Settings) -> Option<(WorkspaceSettings, WorkspaceClien
 }
 
 /// Take the providers this account is entitled to and write them in.
+///
+/// The entitlement list mixes two kinds. A model provider becomes a
+/// `settings.json` account with its key in `auth.json`; a web-search provider
+/// becomes a key in `auth.json` alone. Each kind is applied by its own path
+/// and the two outcomes are reported together.
 pub async fn pull_providers(client: &WorkspaceClient) -> anyhow::Result<providers::Applied> {
     let entitled = client.providers().await?;
+    let (search, llm): (Vec<_>, Vec<_>) = entitled.iter().partition(|p| p.is_web_search());
+    let llm: Vec<_> = llm.into_iter().cloned().collect();
 
     let mut settings = Settings::load_sync()?;
     let mut auth = AuthStore::load();
-    let applied = providers::apply(&mut settings, &mut auth, client.base(), &entitled);
+    let mut applied = providers::apply(&mut settings, &mut auth, client.base(), &llm);
+    let search_applied = search_providers::apply(&mut auth, client.base(), &search);
+    merge_applied(&mut applied, search_applied);
+
     if !applied.is_empty() {
         settings.save_sync()?;
         auth.save();
     }
     Ok(applied)
+}
+
+/// Fold one `Applied` into another, keeping each list sorted.
+fn merge_applied(into: &mut providers::Applied, other: providers::Applied) {
+    into.written.extend(other.written);
+    into.withdrawn.extend(other.withdrawn);
+    into.refused.extend(other.refused);
+    into.written.sort();
+    into.withdrawn.sort();
+    into.refused.sort();
 }
 
 /// Upload this machine's settings, replacing the version the server holds.
@@ -237,6 +257,25 @@ fn modified_at(path: &std::path::Path) -> Option<std::time::SystemTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merging_two_outcomes_combines_and_sorts_each_list() {
+        let mut llm = providers::Applied {
+            written: vec!["firma-openai".to_string()],
+            withdrawn: Vec::new(),
+            refused: vec!["mine".to_string()],
+        };
+        let search = providers::Applied {
+            written: vec!["brave".to_string()],
+            withdrawn: vec!["tavily".to_string()],
+            refused: Vec::new(),
+        };
+        merge_applied(&mut llm, search);
+
+        assert_eq!(llm.written, vec!["brave", "firma-openai"]);
+        assert_eq!(llm.withdrawn, vec!["tavily"]);
+        assert_eq!(llm.refused, vec!["mine"]);
+    }
 
     #[test]
     fn a_timer_below_the_floor_is_raised_to_it() {

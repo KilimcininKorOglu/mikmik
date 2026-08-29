@@ -22,6 +22,7 @@ pub mod devto;
 pub mod discogs;
 pub mod discourse;
 pub mod dockerhub;
+pub mod docs_rs;
 pub mod fdroid;
 pub mod firefox_addons;
 pub mod flathub;
@@ -118,6 +119,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(github_gist::GitHubGistHandler),
         Box::new(gitlab::GitLabHandler),
         Box::new(sourcegraph::SourcegraphHandler),
+        Box::new(docs_rs::DocsRsHandler),
         Box::new(hackernews::HackerNewsHandler),
         Box::new(reddit::RedditHandler),
         Box::new(lobsters::LobstersHandler),

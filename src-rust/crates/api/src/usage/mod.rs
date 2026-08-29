@@ -12,9 +12,12 @@ mod github_copilot;
 mod google_antigravity;
 mod kimi;
 mod minimax_code;
+mod opencode_go;
 mod provider;
 mod registry;
+mod synthetic;
 mod types;
+mod umans;
 mod xai_oauth;
 mod zai;
 

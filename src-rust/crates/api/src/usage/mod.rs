@@ -6,6 +6,7 @@
 //! resolves the reporter for a provider id.
 
 mod anthropic;
+mod codex;
 mod provider;
 mod registry;
 mod types;

@@ -1,6 +1,7 @@
 //! Maps a provider id to its [`UsageProvider`] implementation.
 
 use super::anthropic::AnthropicUsage;
+use super::codex::CodexUsage;
 use super::provider::UsageProvider;
 use std::sync::Arc;
 
@@ -9,6 +10,7 @@ use std::sync::Arc;
 pub fn usage_provider_for(provider_id: &str) -> Option<Arc<dyn UsageProvider>> {
     match provider_id {
         "anthropic" => Some(Arc::new(AnthropicUsage)),
+        "codex" => Some(Arc::new(CodexUsage)),
         _ => None,
     }
 }

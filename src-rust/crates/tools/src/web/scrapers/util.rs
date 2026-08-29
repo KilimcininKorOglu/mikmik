@@ -5,6 +5,7 @@
 // the body; plus `RenderResult` and the small formatting helpers the handlers
 // build their markdown with.
 
+use std::cmp::Ordering;
 use std::time::Duration;
 
 /// Largest markdown payload a handler returns; longer output is truncated.
@@ -388,6 +389,95 @@ pub fn format_epoch_millis(ms: i64) -> String {
         .unwrap_or_default()
 }
 
+/// Compare two version strings, ported from omp's canonical `compareVersions`.
+///
+/// Trims and strips one leading `v`/`V`, drops SemVer build metadata (`+...`),
+/// compares dot-separated core segments numerically (missing/malformed count
+/// as 0), then applies SemVer-2.0 prerelease ordering: a plain release outranks
+/// any prerelease, numeric identifiers sort before alphanumeric, and a longer
+/// set of otherwise-equal identifiers wins. Never panics.
+pub fn compare_versions(a: &str, b: &str) -> Ordering {
+    let (core_a, pre_a) = parse_version(a);
+    let (core_b, pre_b) = parse_version(b);
+    match compare_numeric_parts(&core_a, &core_b) {
+        Ordering::Equal => compare_prerelease(pre_a.as_deref(), pre_b.as_deref()),
+        other => other,
+    }
+}
+
+/// Split a version into its core segments and optional prerelease identifiers.
+fn parse_version(version: &str) -> (Vec<&str>, Option<Vec<&str>>) {
+    let trimmed = version.trim();
+    let stripped = trimmed
+        .strip_prefix('v')
+        .or_else(|| trimmed.strip_prefix('V'))
+        .unwrap_or(trimmed);
+    let without_build = stripped.split('+').next().unwrap_or(stripped);
+    match without_build.split_once('-') {
+        Some((core, pre)) => (core.split('.').collect(), Some(pre.split('.').collect())),
+        None => (without_build.split('.').collect(), None),
+    }
+}
+
+/// Compare dot-separated core segments; missing or non-numeric segments are 0.
+fn compare_numeric_parts(a: &[&str], b: &[&str]) -> Ordering {
+    let len = a.len().max(b.len());
+    for i in 0..len {
+        let sa = a.get(i).filter(|s| is_digits(s)).copied().unwrap_or("0");
+        let sb = b.get(i).filter(|s| is_digits(s)).copied().unwrap_or("0");
+        match compare_digits(sa, sb) {
+            Ordering::Equal => continue,
+            other => return other,
+        }
+    }
+    Ordering::Equal
+}
+
+fn is_digits(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Compare two digit strings by value, avoiding overflow on long inputs.
+fn compare_digits(a: &str, b: &str) -> Ordering {
+    let na = a.trim_start_matches('0');
+    let nb = b.trim_start_matches('0');
+    match na.len().cmp(&nb.len()) {
+        Ordering::Equal => na.cmp(nb),
+        other => other,
+    }
+}
+
+/// SemVer-2.0 prerelease ordering; `None` is a plain release, which wins.
+fn compare_prerelease(a: Option<&[&str]>, b: Option<&[&str]>) -> Ordering {
+    let (a, b) = match (a, b) {
+        (None, None) => return Ordering::Equal,
+        (None, Some(_)) => return Ordering::Greater,
+        (Some(_), None) => return Ordering::Less,
+        (Some(a), Some(b)) => (a, b),
+    };
+    let len = a.len().max(b.len());
+    for i in 0..len {
+        match (a.get(i), b.get(i)) {
+            (None, _) => return Ordering::Less,
+            (_, None) => return Ordering::Greater,
+            (Some(ia), Some(ib)) => match compare_prerelease_id(ia, ib) {
+                Ordering::Equal => continue,
+                other => return other,
+            },
+        }
+    }
+    Ordering::Equal
+}
+
+fn compare_prerelease_id(ia: &str, ib: &str) -> Ordering {
+    match (is_digits(ia), is_digits(ib)) {
+        (true, true) => compare_digits(ia, ib),
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        (false, false) => ia.cmp(ib),
+    }
+}
+
 /// Format a date value as `YYYY-MM-DD`, or empty on unparseable input.
 pub fn format_iso_date(value: &str) -> String {
     if let Some(prefix) = value.get(..10) {
@@ -487,6 +577,30 @@ mod tests {
         assert_eq!(format_bytes(1536), "1.5KB");
         assert_eq!(format_bytes(5 * 1024 * 1024), "5.0MB");
         assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.0GB");
+    }
+
+    #[test]
+    fn version_comparison_follows_semver_rules() {
+        assert_eq!(compare_versions("1.2.0", "1.2"), Ordering::Equal);
+        assert_eq!(compare_versions("1.10.0", "1.9.0"), Ordering::Greater);
+        assert_eq!(compare_versions("v2.0.0", "2.0.0"), Ordering::Equal);
+        // A prerelease sorts before its plain release.
+        assert_eq!(compare_versions("1.0.0-beta", "1.0.0"), Ordering::Less);
+        // Numeric prerelease identifiers sort before alphanumeric ones.
+        assert_eq!(
+            compare_versions("1.0.0-alpha.1", "1.0.0-alpha"),
+            Ordering::Greater
+        );
+        assert_eq!(compare_versions("1.0.0-1", "1.0.0-alpha"), Ordering::Less);
+        // Build metadata does not affect precedence.
+        assert_eq!(compare_versions("1.0.0+build", "1.0.0"), Ordering::Equal);
+    }
+
+    #[test]
+    fn version_comparison_sorts_a_list() {
+        let mut versions = vec!["0.9.0", "1.0.0", "0.10.0", "1.0.0-rc.1"];
+        versions.sort_by(|a, b| compare_versions(a, b));
+        assert_eq!(versions, vec!["0.9.0", "0.10.0", "1.0.0-rc.1", "1.0.0"]);
     }
 
     #[test]

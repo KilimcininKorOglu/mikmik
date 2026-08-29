@@ -35,6 +35,7 @@ pub mod reddit;
 pub mod rubygems;
 pub mod sec_edgar;
 pub mod semantic_scholar;
+pub mod spdx;
 pub mod terraform;
 pub mod util;
 
@@ -81,6 +82,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(musicbrainz::MusicBrainzHandler),
         Box::new(discogs::DiscogsHandler),
         Box::new(sec_edgar::SecEdgarHandler),
+        Box::new(spdx::SpdxHandler),
         Box::new(cisa_kev::CisaKevHandler),
         Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),

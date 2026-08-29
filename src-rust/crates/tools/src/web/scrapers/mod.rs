@@ -6,6 +6,7 @@
 // non-`None` result; a URL no handler claims falls through to the generic
 // web-fetch path.
 
+pub mod artifacthub;
 pub mod aur;
 pub mod brew;
 pub mod cisa_kev;
@@ -71,6 +72,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(clojars::ClojarsHandler),
         Box::new(aur::AurHandler),
         Box::new(dockerhub::DockerHubHandler),
+        Box::new(artifacthub::ArtifactHubHandler),
         Box::new(brew::BrewHandler),
         Box::new(snapcraft::SnapcraftHandler),
         Box::new(hackernews::HackerNewsHandler),

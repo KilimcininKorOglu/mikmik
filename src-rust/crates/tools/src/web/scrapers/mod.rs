@@ -32,6 +32,7 @@ pub mod musicbrainz;
 pub mod npm;
 pub mod nuget;
 pub mod nvd;
+pub mod ollama;
 pub mod open_vsx;
 pub mod openlibrary;
 pub mod orcid;
@@ -96,6 +97,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(terraform::TerraformHandler),
         Box::new(devto::DevToHandler),
         Box::new(huggingface::HuggingFaceHandler),
+        Box::new(ollama::OllamaHandler),
         Box::new(openlibrary::OpenLibraryHandler),
         Box::new(rawg::RawgHandler),
         Box::new(coingecko::CoinGeckoHandler),

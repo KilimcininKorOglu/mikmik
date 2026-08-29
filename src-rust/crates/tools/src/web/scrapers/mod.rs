@@ -53,6 +53,7 @@ pub mod sec_edgar;
 pub mod semantic_scholar;
 pub mod snapcraft;
 pub mod spdx;
+pub mod spotify;
 pub mod terraform;
 pub mod tldr;
 pub mod util;
@@ -112,6 +113,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(biorxiv::BiorxivHandler),
         Box::new(bluesky::BlueskyHandler),
         Box::new(vimeo::VimeoHandler),
+        Box::new(spotify::SpotifyHandler),
         Box::new(musicbrainz::MusicBrainzHandler),
         Box::new(discogs::DiscogsHandler),
         Box::new(sec_edgar::SecEdgarHandler),

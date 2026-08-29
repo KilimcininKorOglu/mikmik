@@ -2464,6 +2464,11 @@ pub mod config {
         /// Whether to show turn duration in output. Defaults to false.
         #[serde(default, rename = "showTurnDuration")]
         pub show_turn_duration: bool,
+        /// Whether to show account usage/quota limits in the timeline sidebar.
+        /// Defaults to false; turning it on lets the app fetch the active
+        /// account's usage from its endpoint, so it is the user's to ask for.
+        #[serde(default, rename = "showUsageLimits")]
+        pub show_usage_limits: bool,
         /// Whether to show the local time beneath each transcript message.
         /// Defaults to false, because the extra line lengthens the transcript.
         /// Opt in via `"showMessageTimestamps": true`.
@@ -4451,6 +4456,7 @@ pub mod config {
                 claude_md_enabled: base.claude_md_enabled,
                 notify_sound: base.notify_sound,
                 show_turn_duration: base.show_turn_duration,
+                show_usage_limits: base.show_usage_limits,
                 show_message_timestamps: base.show_message_timestamps,
                 show_tool_duration: base.show_tool_duration,
                 // SECURITY: the top-level twins of the `config` keys, and the

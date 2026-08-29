@@ -126,6 +126,7 @@ pub struct SettingsScreen {
     pub notify_on_turn_complete: bool,
     pub notify_sound: bool,
     pub show_turn_duration: bool,
+    pub show_usage_limits: bool,
     pub show_message_timestamps: bool,
     pub show_tool_duration: bool,
     pub output_style: String,
@@ -205,6 +206,7 @@ impl SettingsScreen {
             notify_on_turn_complete: true,
             notify_sound: false,
             show_turn_duration: false,
+            show_usage_limits: false,
             show_message_timestamps: false,
             show_tool_duration: false,
             output_style: "default".to_string(),
@@ -277,6 +279,7 @@ impl SettingsScreen {
         self.notify_on_turn_complete = self.settings_snapshot.notify_on_turn_complete;
         self.notify_sound = self.settings_snapshot.notify_sound;
         self.show_turn_duration = self.settings_snapshot.show_turn_duration;
+        self.show_usage_limits = self.settings_snapshot.show_usage_limits;
         self.show_message_timestamps = self.settings_snapshot.show_message_timestamps;
         self.show_tool_duration = self.settings_snapshot.show_tool_duration;
         self.output_style = self
@@ -850,6 +853,13 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             description: "Display elapsed time per turn in status bar.".into(),
             kind: SettingKind::Bool,
             value: if screen.show_turn_duration { "true" } else { "false" }.to_string(),
+        },
+        SettingsEntry {
+            key: "show_usage_limits".into(),
+            label: "Show usage limits".into(),
+            description: "Show the account's quota/rate limits in the timeline sidebar.".into(),
+            kind: SettingKind::Bool,
+            value: if screen.show_usage_limits { "true" } else { "false" }.to_string(),
         },
         SettingsEntry {
             key: "show_message_timestamps".into(),
@@ -1727,6 +1737,10 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                     "show_turn_duration" => {
                         screen.show_turn_duration = new_value;
                         screen.settings_snapshot.show_turn_duration = new_value;
+                    }
+                    "show_usage_limits" => {
+                        screen.show_usage_limits = new_value;
+                        screen.settings_snapshot.show_usage_limits = new_value;
                     }
                     "show_message_timestamps" => {
                         screen.show_message_timestamps = new_value;

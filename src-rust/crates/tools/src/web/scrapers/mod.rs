@@ -8,6 +8,7 @@
 
 pub mod artifacthub;
 pub mod aur;
+pub mod biorxiv;
 pub mod brew;
 pub mod cisa_kev;
 pub mod clojars;
@@ -95,6 +96,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(crossref::CrossrefHandler),
         Box::new(orcid::OrcidHandler),
         Box::new(pubmed::PubMedHandler),
+        Box::new(biorxiv::BiorxivHandler),
         Box::new(musicbrainz::MusicBrainzHandler),
         Box::new(discogs::DiscogsHandler),
         Box::new(sec_edgar::SecEdgarHandler),

@@ -116,6 +116,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(jetbrains_marketplace::JetBrainsMarketplaceHandler),
         Box::new(brew::BrewHandler),
         Box::new(snapcraft::SnapcraftHandler),
+        Box::new(github::GitHubHandler),
         Box::new(github_gist::GitHubGistHandler),
         Box::new(gitlab::GitLabHandler),
         Box::new(sourcegraph::SourcegraphHandler),

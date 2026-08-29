@@ -9,6 +9,7 @@
 pub mod artifacthub;
 pub mod aur;
 pub mod biorxiv;
+pub mod bluesky;
 pub mod brew;
 pub mod cheatsh;
 pub mod chocolatey;
@@ -108,6 +109,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(orcid::OrcidHandler),
         Box::new(pubmed::PubMedHandler),
         Box::new(biorxiv::BiorxivHandler),
+        Box::new(bluesky::BlueskyHandler),
         Box::new(musicbrainz::MusicBrainzHandler),
         Box::new(discogs::DiscogsHandler),
         Box::new(sec_edgar::SecEdgarHandler),

@@ -297,6 +297,12 @@ struct AgentInput {
     /// Derived from `description` when absent.
     #[serde(default)]
     name: Option<String>,
+    /// Optional: run a named custom agent (a built-in, a `settings.json` entry,
+    /// or one from a `.mikmik/agents`/`.claude/agents` folder). The agent's
+    /// prompt, model, max_turns and tool access become defaults that the
+    /// explicit fields here still override.
+    #[serde(default)]
+    agent: Option<String>,
     /// The complete task prompt to send as the first user message.
     prompt: String,
     /// Optional: which tools to make available (defaults to all minus AgentTool).
@@ -350,6 +356,41 @@ fn with_context(context: Option<&str>, prompt: &str) -> String {
     }
 }
 
+/// Fold a named custom agent's definition into `params` as defaults.
+///
+/// Resolves `params.agent` against the full agent map (built-ins,
+/// `settings.json`, and the `.mikmik/agents`/`.claude/agents` folders) and
+/// copies its `prompt`, `model`, `max_turns` and access-derived tool allowlist
+/// into any field the caller left unset. An unknown name is refused with the
+/// list of available agents. A `None` agent is a no-op.
+fn apply_named_agent(params: &mut AgentInput, ctx: &ToolContext) -> Result<(), ToolResult> {
+    let Some(name) = params.agent.clone() else {
+        return Ok(());
+    };
+    let agents = mikmik_core::resolve_agents(&ctx.working_dir, &ctx.config.agents);
+    let Some(def) = agents.get(&name) else {
+        let mut names: Vec<&str> = agents.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        return Err(ToolResult::error(format!(
+            "unknown agent {name:?}; available agents: {}",
+            names.join(", ")
+        )));
+    };
+    if params.system_prompt.is_none() {
+        params.system_prompt = def.prompt.clone();
+    }
+    if params.model.is_none() {
+        params.model = def.model.clone();
+    }
+    if params.max_turns.is_none() {
+        params.max_turns = def.max_turns;
+    }
+    if params.tools.is_none() {
+        params.tools = mikmik_tools::access_tool_names(&def.access);
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl Tool for AgentTool {
     fn name(&self) -> &str {
@@ -382,6 +423,14 @@ impl Tool for AgentTool {
                                     message. Defaults to a name derived from the description. A \
                                     name already taken in this session gets a numeric suffix, and \
                                     the name actually assigned comes back in the result."
+                },
+                "agent": {
+                    "type": "string",
+                    "description": "Run a named custom agent (a built-in, a settings.json entry, or \
+                                    one from a .mikmik/agents or .claude/agents folder). Its prompt, \
+                                    model, max_turns and tool access become defaults; the explicit \
+                                    fields here override them. An unknown name is refused with the \
+                                    list of available agents."
                 },
                 "prompt": {
                     "type": "string",
@@ -420,6 +469,7 @@ impl Tool for AgentTool {
                         "properties": {
                             "description": { "type": "string" },
                             "name": { "type": "string" },
+                            "agent": { "type": "string" },
                             "prompt": { "type": "string" },
                             "tools": { "type": "array", "items": { "type": "string" } },
                             "system_prompt": { "type": "string" },
@@ -455,10 +505,17 @@ impl Tool for AgentTool {
             return self.spawn_batch(input, ctx).await;
         }
 
-        let params: AgentInput = match serde_json::from_value(input) {
+        let mut params: AgentInput = match serde_json::from_value(input) {
             Ok(p) => p,
             Err(e) => return ToolResult::error(format!("Invalid input: {}", e)),
         };
+
+        // A named custom agent supplies defaults (prompt, model, max_turns and
+        // tool access) before anything below reads those fields, so both the
+        // foreground and background paths inherit them. Explicit params win.
+        if let Err(err) = apply_named_agent(&mut params, ctx) {
+            return err;
+        }
 
         // The reasoning effort this agent runs at, if one was named. An
         // unknown word is refused rather than silently ignored.
@@ -1022,6 +1079,7 @@ pub fn init_team_swarm_runner() {
                     &AgentInput {
                         description: description.clone(),
                         name: Some(agent_name.clone()),
+                        agent: None,
                         prompt: prompt.clone(),
                         tools: tools.clone(),
                         system_prompt: system.clone(),
@@ -1358,6 +1416,84 @@ pub(crate) mod tests {
             editor: None,
             inbox: Default::default(),
         }
+    }
+
+    /// A named agent fills the defaults a spawn left unset, so `agent: "x"`
+    /// alone runs with that agent's prompt, model, turn budget and tool access.
+    #[test]
+    fn a_named_agent_supplies_defaults_the_caller_left_unset() {
+        let mut ctx = parent_context();
+        ctx.config.agents.insert(
+            "unit-test-agent".to_string(),
+            mikmik_core::AgentDefinition {
+                prompt: Some("You audit code.".to_string()),
+                model: Some("anthropic/claude-haiku-4-5".to_string()),
+                max_turns: Some(7),
+                access: "read-only".to_string(),
+                ..Default::default()
+            },
+        );
+        let mut params: AgentInput = serde_json::from_value(serde_json::json!({
+            "description": "audit",
+            "prompt": "review the diff",
+            "agent": "unit-test-agent",
+        }))
+        .expect("valid input");
+
+        apply_named_agent(&mut params, &ctx).expect("known agent");
+
+        assert_eq!(params.system_prompt.as_deref(), Some("You audit code."));
+        assert_eq!(params.model.as_deref(), Some("anthropic/claude-haiku-4-5"));
+        assert_eq!(params.max_turns, Some(7));
+        let tools = params.tools.expect("read-only allowlist");
+        assert!(tools.iter().any(|t| t == "Read"));
+        assert!(!tools.iter().any(|t| t == "Bash"));
+    }
+
+    /// Explicit spawn fields still win over the named agent's defaults.
+    #[test]
+    fn explicit_spawn_params_override_the_named_agent() {
+        let mut ctx = parent_context();
+        ctx.config.agents.insert(
+            "unit-test-agent".to_string(),
+            mikmik_core::AgentDefinition {
+                prompt: Some("agent prompt".to_string()),
+                model: Some("agent/model".to_string()),
+                max_turns: Some(7),
+                access: "read-only".to_string(),
+                ..Default::default()
+            },
+        );
+        let mut params: AgentInput = serde_json::from_value(serde_json::json!({
+            "description": "audit",
+            "prompt": "task",
+            "agent": "unit-test-agent",
+            "system_prompt": "explicit prompt",
+            "model": "explicit/model",
+            "max_turns": 3,
+            "tools": ["Bash"],
+        }))
+        .expect("valid input");
+
+        apply_named_agent(&mut params, &ctx).expect("known agent");
+
+        assert_eq!(params.system_prompt.as_deref(), Some("explicit prompt"));
+        assert_eq!(params.model.as_deref(), Some("explicit/model"));
+        assert_eq!(params.max_turns, Some(3));
+        assert_eq!(params.tools, Some(vec!["Bash".to_string()]));
+    }
+
+    /// An unknown agent name is refused rather than silently ignored.
+    #[test]
+    fn an_unknown_named_agent_is_refused() {
+        let mut params: AgentInput = serde_json::from_value(serde_json::json!({
+            "description": "x",
+            "prompt": "y",
+            "agent": "no-such-agent-xyz",
+        }))
+        .expect("valid input");
+        let err = apply_named_agent(&mut params, &parent_context()).unwrap_err();
+        assert!(format!("{err:?}").contains("no-such-agent-xyz"));
     }
 
     /// A sub-agent must not be able to open the plan dialog: the session it

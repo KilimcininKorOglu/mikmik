@@ -9104,6 +9104,7 @@ pub mod tips;
 pub mod tool_gates;
 pub mod voice;
 pub mod xai_oauth;
+pub mod zai_oauth;
 
 // ---------------------------------------------------------------------------
 // tasks module — background task registry

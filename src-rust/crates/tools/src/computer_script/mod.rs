@@ -291,6 +291,14 @@ async fn answer_host_call(
         )
     };
 
+    // A budget already spent ends the call here, naming the op, instead of
+    // letting a fast op finish past the deadline. `timeout_at` polls the inner
+    // future before it consults the clock, so an op that answers instantly
+    // (macOS `clipboard_read`) would otherwise slip past an exhausted deadline.
+    if tokio::time::Instant::now() >= deadline {
+        return Err(overran());
+    }
+
     if ax::owns(op) {
         let (op_owned, args_owned) = (op.to_string(), args.clone());
         let task = tokio::task::spawn_blocking(move || {

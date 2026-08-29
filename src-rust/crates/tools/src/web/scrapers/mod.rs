@@ -12,6 +12,7 @@ pub mod cisa_kev;
 pub mod clojars;
 pub mod coingecko;
 pub mod crates_io;
+pub mod crossref;
 pub mod devto;
 pub mod dockerhub;
 pub mod hackernews;
@@ -73,6 +74,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(openlibrary::OpenLibraryHandler),
         Box::new(coingecko::CoinGeckoHandler),
         Box::new(semantic_scholar::SemanticScholarHandler),
+        Box::new(crossref::CrossrefHandler),
         Box::new(cisa_kev::CisaKevHandler),
         Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),

@@ -11,6 +11,7 @@ pub mod firecrawl;
 pub mod gemini;
 pub mod jina;
 pub mod kagi;
+pub mod kimi;
 pub mod parallel;
 pub mod searxng;
 pub mod synthetic;

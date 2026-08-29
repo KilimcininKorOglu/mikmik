@@ -27,6 +27,7 @@ pub mod firefox_addons;
 pub mod flathub;
 pub mod github;
 pub mod github_gist;
+pub mod gitlab;
 pub mod hackage;
 pub mod hackernews;
 pub mod hex;
@@ -114,6 +115,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(brew::BrewHandler),
         Box::new(snapcraft::SnapcraftHandler),
         Box::new(github_gist::GitHubGistHandler),
+        Box::new(gitlab::GitLabHandler),
         Box::new(hackernews::HackerNewsHandler),
         Box::new(reddit::RedditHandler),
         Box::new(lobsters::LobstersHandler),

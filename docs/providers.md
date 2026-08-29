@@ -423,6 +423,14 @@ During a turn, Cursor's server drives its own multi-tool loop: it streams assist
 
 ---
 
+### Z.AI (browser login)
+
+Z.AI (GLM Coding Plan) accepts an API key (`zai` row in the [API-key table](#the-rest)), and GLM Coding Plan subscribers can also sign in with a browser flow that mints a durable key for them. The minted key is stored as an ordinary `zai` account, so the inference wire is the same OpenAI-compatible `https://api.z.ai/api/coding/paas/v4` route; only the credential source differs.
+
+Pick "Z.AI" under "Popular" in [`/connect`](commands.md#connect). MikMik opens `chat.z.ai` in the browser on a fixed loopback callback (`localhost:54548/callback`); approve the sign-in and the captured code is exchanged at `zcode.z.ai` for a short-lived access token. That token authenticates against the Z.AI business API to list or create an API key named `mikmik` and copy its secret. MikMik saves that secret as a normal `zai` API key and switches the session to the new account. The callback port is fixed: if `54548` is busy the login fails before the browser opens rather than falling back to a random port the Z.AI allowlist would reject. `ZAI_OAUTH_CLIENT_ID`, `ZAI_OAUTH_AUTHORIZE_URL`, `ZAI_OAUTH_TOKEN_URL`, `ZAI_BIZ_BASE`, and `ZAI_BUSINESS_LOGIN_URL` override the client id and endpoints.
+
+---
+
 ### Custom endpoints
 
 Two slots exist for endpoints MikMik does not ship a provider for, one per wire format:
@@ -866,6 +874,7 @@ is registered under its id and reads one environment variable:
 
 `api_base` in the provider's `settings.json` entry overrides the base URL.
 `alibaba` is accepted as an alias for `qwen`.
+`zai` also offers a [browser login](#zai-browser-login) that mints a key for GLM Coding Plan subscribers, in addition to the `ZAI_API_KEY` route above.
 
 Three more have their own handling: `codex` (OpenAI ChatGPT subscription, see
 [Authentication](auth)), `google-vertex`, and `free`.

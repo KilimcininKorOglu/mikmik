@@ -228,7 +228,9 @@ Native wire-format implementations, each with its own request shaping, streaming
 | **MiniMax** | |
 | **Free Mode** | Rotating free endpoints, configured through `/connect`. `[EXPERIMENTAL]` |
 
-On top of those, MikMik ships around forty **OpenAI-compatible** endpoints — Groq, DeepSeek, Mistral, xAI, OpenRouter, Together, Perplexity, DeepInfra, Cerebras, Venice, SambaNova, Fireworks, Nebius, Moonshot, Qwen and more — plus local runtimes (**Ollama**, **LM Studio**, **llama.cpp**, and **MLX LM** on Apple Silicon) and two escape hatches, `custom-openai` and `custom-anthropic`, for anything not on the list.
+On top of those, MikMik ships around forty **OpenAI-compatible** endpoints — Groq, DeepSeek, Mistral, xAI, OpenRouter, Together, Perplexity, DeepInfra, Cerebras, Venice, SambaNova, Fireworks, Nebius, Moonshot, Qwen, Z.AI and more — plus local runtimes (**Ollama**, **LM Studio**, **llama.cpp**, and **MLX LM** on Apple Silicon) and two escape hatches, `custom-openai` and `custom-anthropic`, for anything not on the list.
+
+**Z.AI (GLM Coding Plan)** takes an API key like the rest, and subscribers can also sign in with a browser flow from `/connect` that mints a durable key for them; see [docs/providers.md](docs/providers.md#zai-browser-login).
 
 Setup instructions, env vars and `settings.json` shapes are in [docs/providers.md](docs/providers.md); local runtimes have their own page in [docs/local-models.md](docs/local-models.md). The authoritative list lives in `src-rust/crates/api/src/providers/`.
 

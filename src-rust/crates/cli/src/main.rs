@@ -1307,11 +1307,10 @@ async fn main() -> anyhow::Result<()> {
     query_config.provider_registry = Some(provider_registry.clone());
 
     // Wire in the named agent (--agent flag).
-    // Merge built-in default agents with user-defined agents (user wins on collision).
+    // Built-in defaults, settings.json agents and folder agents, folder-most-wins.
     let tools = if let Some(ref agent_name) = cli.agent {
         query_config.agent_name = Some(agent_name.clone());
-        let mut all_agents = mikmik_core::default_agents();
-        all_agents.extend(config.agents.clone());
+        let all_agents = mikmik_core::resolve_agents(&cwd, &config.agents);
         if let Some(def) = all_agents.get(agent_name) {
             let access = def.access.clone();
             query_config.agent_definition = Some(def.clone());
@@ -6370,8 +6369,8 @@ async fn run_interactive(
         if app.agent_mode_changed {
             app.agent_mode_changed = false;
             let mode = app.agent_mode.as_deref().unwrap_or("build");
-            let mut all_agents = mikmik_core::default_agents();
-            all_agents.extend(cmd_ctx.config.agents.clone());
+            let all_agents =
+                mikmik_core::resolve_agents(&cmd_ctx.working_dir, &cmd_ctx.config.agents);
             if let Some(def) = all_agents.get(mode) {
                 base_query_config.agent_name = Some(mode.to_string());
                 base_query_config.agent_definition = Some(def.clone());

@@ -142,10 +142,9 @@ impl SlashCommand for AgentCommand {
     async fn execute(&self, args: &str, ctx: &mut CommandContext) -> CommandResult {
         use std::collections::HashMap;
 
-        // Merge built-in defaults with user-defined agents (user wins on collision).
-        let mut all_agents: HashMap<String, mikmik_core::AgentDefinition> =
-            mikmik_core::default_agents();
-        all_agents.extend(ctx.config.agents.clone());
+        // Built-in defaults, settings.json agents and folder agents, folder-most-wins.
+        let all_agents: HashMap<String, mikmik_core::AgentDefinition> =
+            mikmik_core::resolve_agents(&ctx.working_dir, &ctx.config.agents);
 
         let agent_name = args.trim();
 

@@ -3,6 +3,7 @@
 use super::anthropic::AnthropicUsage;
 use super::codex::CodexUsage;
 use super::provider::UsageProvider;
+use super::zai::ZaiUsage;
 use std::sync::Arc;
 
 /// Returns the usage reporter for a provider id, or `None` when that provider
@@ -11,6 +12,7 @@ pub fn usage_provider_for(provider_id: &str) -> Option<Arc<dyn UsageProvider>> {
     match provider_id {
         "anthropic" => Some(Arc::new(AnthropicUsage)),
         "codex" => Some(Arc::new(CodexUsage)),
+        "zai" => Some(Arc::new(ZaiUsage)),
         _ => None,
     }
 }

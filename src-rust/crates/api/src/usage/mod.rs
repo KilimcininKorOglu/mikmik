@@ -10,6 +10,7 @@ mod codex;
 mod provider;
 mod registry;
 mod types;
+mod zai;
 
 pub use provider::{UsageFetchContext, UsageProvider};
 pub use registry::usage_provider_for;

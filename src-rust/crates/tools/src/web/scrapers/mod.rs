@@ -33,6 +33,7 @@ pub mod osv;
 pub mod packagist;
 pub mod pub_dev;
 pub mod pypi;
+pub mod rawg;
 pub mod reddit;
 pub mod rubygems;
 pub mod sec_edgar;
@@ -82,6 +83,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(devto::DevToHandler),
         Box::new(huggingface::HuggingFaceHandler),
         Box::new(openlibrary::OpenLibraryHandler),
+        Box::new(rawg::RawgHandler),
         Box::new(coingecko::CoinGeckoHandler),
         Box::new(semantic_scholar::SemanticScholarHandler),
         Box::new(crossref::CrossrefHandler),

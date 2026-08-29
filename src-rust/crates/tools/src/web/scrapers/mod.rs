@@ -72,6 +72,7 @@ pub mod spotify;
 pub mod stackoverflow;
 pub mod terraform;
 pub mod tldr;
+pub mod twitter;
 pub mod util;
 pub mod vimeo;
 pub mod vscode_marketplace;
@@ -144,6 +145,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(arxiv::ArxivHandler),
         Box::new(iacr::IacrHandler),
         Box::new(bluesky::BlueskyHandler),
+        Box::new(twitter::TwitterHandler),
         Box::new(vimeo::VimeoHandler),
         Box::new(spotify::SpotifyHandler),
         Box::new(musicbrainz::MusicBrainzHandler),

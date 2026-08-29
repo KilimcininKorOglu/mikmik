@@ -82,6 +82,7 @@ pub mod vscode_marketplace;
 pub mod w3c;
 pub mod wikidata;
 pub mod wikipedia;
+pub mod youtube;
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -166,6 +167,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(w3c::W3cHandler),
         Box::new(wikipedia::WikipediaHandler),
         Box::new(readthedocs::ReadTheDocsHandler),
+        Box::new(youtube::YouTubeHandler),
         Box::new(searchcode::SearchcodeHandler),
         Box::new(lemmy::LemmyHandler),
         Box::new(mastodon::MastodonHandler),

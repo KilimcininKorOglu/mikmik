@@ -86,22 +86,26 @@ fn project_key(project_root: &Path) -> String {
         .to_string()
 }
 
-/// Find the project root for `cwd`: the nearest ancestor directory that
-/// contains a `.mikmik/settings.json(c)` and is *not* the global config dir.
+/// Find the project root for `cwd`: the nearest ancestor directory whose
+/// `.mikmik/` holds a `settings.json(c)` or a `hooks/` directory, and that is
+/// *not* the global config dir.
 ///
-/// Returns `None` when there is no project-level settings file above `cwd`.
-/// This mirrors the walk in `Settings::find_project_settings` so trust
-/// approvals are keyed by the same directory the project config came from.
+/// Returns `None` when no such directory sits above `cwd`. This mirrors the
+/// walk in `Settings::find_project_settings` so trust approvals are keyed by
+/// the same directory the project config came from. A `hooks/` directory is a
+/// marker too, so a repository that ships `.mikmik/hooks/` but no settings file
+/// still resolves a root, which is what keys the approval of its folder hooks.
 pub fn project_root_for(cwd: &Path) -> Option<PathBuf> {
     let global = Settings::config_dir();
     let mut dir = cwd;
     loop {
         let mikmik = dir.join(".mikmik");
         if mikmik != global {
-            for name in ["settings.json", "settings.jsonc"] {
-                if mikmik.join(name).exists() {
-                    return Some(dir.to_path_buf());
-                }
+            let has_settings = ["settings.json", "settings.jsonc"]
+                .iter()
+                .any(|name| mikmik.join(name).exists());
+            if has_settings || mikmik.join("hooks").is_dir() {
+                return Some(dir.to_path_buf());
             }
         }
         dir = dir.parent()?;
@@ -346,5 +350,40 @@ mod tests {
         let json = serde_json::to_string(&store).unwrap();
         let restored: McpTrustStore = serde_json::from_str(&json).unwrap();
         assert!(restored.is_approved(&root, &server));
+    }
+
+    #[test]
+    fn a_settings_file_marks_the_project_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mikmik")).unwrap();
+        std::fs::write(tmp.path().join(".mikmik").join("settings.json"), "{}").unwrap();
+        let nested = tmp.path().join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+        assert_eq!(
+            project_root_for(&nested).and_then(|p| std::fs::canonicalize(p).ok()),
+            std::fs::canonicalize(tmp.path()).ok()
+        );
+    }
+
+    #[test]
+    fn a_hooks_folder_alone_marks_the_project_root() {
+        // A repository that ships .mikmik/hooks/ but no settings file must still
+        // resolve a root, because the folder hooks' approval is keyed by it.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mikmik").join("hooks")).unwrap();
+        let nested = tmp.path().join("src");
+        std::fs::create_dir_all(&nested).unwrap();
+        assert_eq!(
+            project_root_for(&nested).and_then(|p| std::fs::canonicalize(p).ok()),
+            std::fs::canonicalize(tmp.path()).ok()
+        );
+    }
+
+    #[test]
+    fn a_bare_mikmik_directory_is_not_a_root() {
+        // .mikmik/ with neither settings nor hooks is not a project root.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mikmik")).unwrap();
+        assert!(project_root_for(tmp.path()).is_none());
     }
 }

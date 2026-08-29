@@ -126,10 +126,13 @@ pub use types::{
 pub mod skill_discovery;
 // Agent discovery: filesystem sub-agent definition loading.
 pub mod agent_discovery;
+// Hook discovery: filesystem event-hook loading from a hooks/ folder.
+pub mod hook_discovery;
 pub use agent_discovery::{discover_agents, parse_agent_file, resolve_agents};
 pub use cost::CostTracker;
 pub use feature_flags::FeatureFlagManager;
 pub use history::ConversationSession;
+pub use hook_discovery::{load_hook_dir, load_project_hooks, HookMap};
 pub use paths::mikmik_home;
 pub use permissions::{
     format_permission_reason, AutoPermissionHandler, InteractivePermissionHandler,
@@ -3804,12 +3807,44 @@ pub mod config {
         ) -> anyhow::Result<(Self, Option<ProjectOverlay>)> {
             // 1. Load global settings.
             let mut merged = Self::load().await?;
+
+            // 1b. Global folder hooks (`~/.config/mikmik/hooks/`): the user's
+            //     own, applied ungated in the base layer so they survive
+            //     `merge_with` unconditionally, exactly like the user's
+            //     `settings.json` hooks.
+            let global_hooks =
+                crate::hook_discovery::load_hook_dir(&Self::config_dir().join("hooks"));
+            for (event, entries) in global_hooks {
+                merged
+                    .config
+                    .hooks
+                    .entry(event)
+                    .or_default()
+                    .extend(entries);
+            }
+
             // 2. Find and merge project settings (project wins, except for the
             //    fields it may not set and the ones it needs approval for).
-            let Some((project_settings, project_raw)) = Self::find_project_settings(cwd).await
-            else {
-                return Ok((Self::with_workspace_policy(merged), None));
+            // Project folder hooks (`<root>/.mikmik/hooks/`) are repo-controlled,
+            // so they are folded into the project settings and pass the same
+            // project-trust gate as `settings.json` hooks.
+            let project_hooks = crate::hook_discovery::load_project_hooks(cwd);
+            let (mut project_settings, project_raw) = match Self::find_project_settings(cwd).await {
+                Some(pair) => pair,
+                // A repository can ship `.mikmik/hooks/` without a settings file;
+                // synthesise an empty settings so the folder hooks still reach
+                // the trust gate instead of being dropped by the early return.
+                None if !project_hooks.is_empty() => (Self::default(), serde_json::Value::Null),
+                None => return Ok((Self::with_workspace_policy(merged), None)),
             };
+            for (event, entries) in project_hooks {
+                project_settings
+                    .config
+                    .hooks
+                    .entry(event)
+                    .or_default()
+                    .extend(entries);
+            }
 
             let root = crate::mcp_trust::project_root_for(cwd);
             let gated = crate::project_trust::GatedProjectSettings::extract(&project_settings);
@@ -11003,6 +11038,126 @@ mod credential_storage_tests {
                 .map(|t| &t.access_token),
             Some(&"token-work".to_string()),
             "and must not disturb what it moved the first time"
+        );
+    }
+}
+
+#[cfg(test)]
+mod hook_folder_tests {
+    //! Folder hooks reach the live `config.hooks` through the same trust gate as
+    //! `settings.json` hooks. A project's `.mikmik/hooks/` is repo-controlled, so
+    //! it must not run until approved; the user's own global hooks folder runs
+    //! ungated.
+    use crate::config::{HookEvent, Settings};
+
+    // `Settings::config_dir()` reads process-global env; serialise the tests
+    // that repoint it. Held across awaits, so async-aware.
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    struct HomeGuard {
+        saved: Option<std::ffi::OsString>,
+        _dir: tempfile::TempDir,
+    }
+
+    impl HomeGuard {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let saved = std::env::var_os("MIKMIK_HOME");
+            std::env::set_var("MIKMIK_HOME", dir.path());
+            Self { saved, _dir: dir }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match &self.saved {
+                Some(value) => std::env::set_var("MIKMIK_HOME", value),
+                None => std::env::remove_var("MIKMIK_HOME"),
+            }
+        }
+    }
+
+    fn write(path: &std::path::Path, content: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+
+    fn has_command(hooks: &crate::HookMap, event: &HookEvent, command: &str) -> bool {
+        hooks
+            .get(event)
+            .is_some_and(|list| list.iter().any(|h| h.command == command))
+    }
+
+    #[tokio::test]
+    async fn a_project_folder_hook_stays_denied_until_approved() {
+        let _lock = ENV_LOCK.lock().await;
+        let _home = HomeGuard::new();
+
+        let project = tempfile::tempdir().expect("project");
+        write(
+            &project
+                .path()
+                .join(".mikmik")
+                .join("hooks")
+                .join("hooks.json"),
+            r#"{ "UserPromptSubmit": [{ "command": "echo project-hook" }] }"#,
+        );
+
+        // Unapproved: the hook is carved into the gated set but not applied.
+        let (settings, overlay) = Settings::load_hierarchical_detailed(project.path())
+            .await
+            .expect("load");
+        let overlay = overlay.expect("a project overlay");
+        assert!(!overlay.approved);
+        assert!(!overlay.gated.is_empty(), "the hook must be gated");
+        assert!(
+            !has_command(
+                &settings.config.hooks,
+                &HookEvent::UserPromptSubmit,
+                "echo project-hook"
+            ),
+            "an unapproved repo hook must not reach config.hooks"
+        );
+
+        // Approve exactly what the overlay fingerprinted, then reload.
+        let root = overlay.root.expect("a project root");
+        let mut store = crate::project_trust::ProjectTrustStore::load();
+        store.approve(&root, &overlay.gated.fingerprint());
+        store.save().expect("save trust");
+
+        let (settings, overlay) = Settings::load_hierarchical_detailed(project.path())
+            .await
+            .expect("reload");
+        assert!(overlay.expect("overlay").approved);
+        assert!(
+            has_command(
+                &settings.config.hooks,
+                &HookEvent::UserPromptSubmit,
+                "echo project-hook"
+            ),
+            "an approved repo hook must reach config.hooks"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_global_folder_hook_runs_ungated() {
+        let _lock = ENV_LOCK.lock().await;
+        let _home = HomeGuard::new();
+
+        // The user's own hooks folder under the config dir.
+        write(
+            &Settings::config_dir().join("hooks").join("hooks.json"),
+            r#"{ "Stop": [{ "command": "echo global-hook" }] }"#,
+        );
+
+        // A project with nothing of its own: the global hook still applies.
+        let project = tempfile::tempdir().expect("project");
+        let (settings, _overlay) = Settings::load_hierarchical_detailed(project.path())
+            .await
+            .expect("load");
+        assert!(
+            has_command(&settings.config.hooks, &HookEvent::Stop, "echo global-hook"),
+            "a user's own global folder hook applies without approval"
         );
     }
 }

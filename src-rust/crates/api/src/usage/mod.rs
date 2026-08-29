@@ -9,6 +9,7 @@ mod anthropic;
 mod codex;
 mod github_copilot;
 mod google_antigravity;
+mod kimi;
 mod minimax_code;
 mod provider;
 mod registry;

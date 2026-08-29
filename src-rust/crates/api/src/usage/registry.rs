@@ -4,6 +4,7 @@ use super::anthropic::AnthropicUsage;
 use super::codex::CodexUsage;
 use super::github_copilot::GithubCopilotUsage;
 use super::google_antigravity::GoogleAntigravityUsage;
+use super::kimi::KimiUsage;
 use super::minimax_code::MinimaxCodeUsage;
 use super::provider::UsageProvider;
 use super::zai::ZaiUsage;
@@ -19,6 +20,7 @@ pub fn usage_provider_for(provider_id: &str) -> Option<Arc<dyn UsageProvider>> {
         "github-copilot" => Some(Arc::new(GithubCopilotUsage)),
         "google-antigravity" => Some(Arc::new(GoogleAntigravityUsage)),
         "minimax-code" => Some(Arc::new(MinimaxCodeUsage)),
+        "kimi-code" => Some(Arc::new(KimiUsage)),
         _ => None,
     }
 }

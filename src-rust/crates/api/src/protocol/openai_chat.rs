@@ -28,6 +28,25 @@ const THINKING_BLOCK_INDEX: usize = usize::MAX - 100;
 /// [`THINKING_BLOCK_INDEX`], so a stream carrying both kinds cannot collide.
 const DSML_BLOCK_INDEX_BASE: usize = 1 << 20;
 
+/// Extract Gemini's opaque thought signature from an OpenAI-compatible tool call.
+///
+/// Gemini served over `chat/completions` carries the signature as
+/// `extra_content.google.thought_signature` (Vertex uses the `vertex`
+/// namespace). The bare string is stored on `ContentBlock::ToolUse`, matching
+/// the native GenAI path, so the next turn's replay can re-emit it; without it
+/// a Gemini 3.x tool-call continuation fails with a missing-signature error.
+pub(crate) fn gemini_thought_signature(tool_call: &Value) -> Option<String> {
+    let extra = tool_call.get("extra_content")?;
+    ["google", "vertex"].into_iter().find_map(|namespace| {
+        extra
+            .get(namespace)
+            .and_then(|ns| ns.get("thought_signature"))
+            .and_then(|v| v.as_str())
+            .filter(|sig| !sig.is_empty())
+            .map(str::to_string)
+    })
+}
+
 /// Streaming decoder for the OpenAI Chat Completions SSE format.
 ///
 /// Construct with [`OpenAiChatDecoder::new`], feed each SSE line via
@@ -339,7 +358,7 @@ impl OpenAiChatDecoder {
                             id: tc_id.to_string(),
                             name,
                             input: json!({}),
-                            thought_signature: None,
+                            thought_signature: gemini_thought_signature(tc),
                         },
                     });
                 }
@@ -549,6 +568,61 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, StreamEvent::ContentBlockStop { index: 1 })));
+    }
+
+    /// The `thought_signature` carried by a `ContentBlockStart` tool block, if any.
+    fn opened_signature(events: &[StreamEvent]) -> Option<String> {
+        events.iter().find_map(|e| match e {
+            StreamEvent::ContentBlockStart {
+                content_block:
+                    ContentBlock::ToolUse {
+                        thought_signature, ..
+                    },
+                ..
+            } => thought_signature.clone(),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_gemini_tool_call_keeps_its_google_thought_signature() {
+        // Gemini over chat/completions rides the signature on the same delta as
+        // the tool-call id, under extra_content.google.
+        let mut d = OpenAiChatDecoder::new(None);
+        let (events, _done) = drain(
+            &mut d,
+            &[
+                r#"data: {"id":"c","model":"m","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":""},"extra_content":{"google":{"thought_signature":"sig-google"}}}]}}]}"#,
+                r#"data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ],
+        );
+        assert_eq!(opened_signature(&events).as_deref(), Some("sig-google"));
+    }
+
+    #[test]
+    fn a_gemini_tool_call_keeps_its_vertex_thought_signature() {
+        let mut d = OpenAiChatDecoder::new(None);
+        let (events, _done) = drain(
+            &mut d,
+            &[
+                r#"data: {"id":"c","model":"m","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":""},"extra_content":{"vertex":{"thought_signature":"sig-vertex"}}}]}}]}"#,
+                r#"data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ],
+        );
+        assert_eq!(opened_signature(&events).as_deref(), Some("sig-vertex"));
+    }
+
+    #[test]
+    fn a_plain_tool_call_has_no_thought_signature() {
+        let mut d = OpenAiChatDecoder::new(None);
+        let (events, _done) = drain(
+            &mut d,
+            &[
+                r#"data: {"id":"c","model":"m","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read","arguments":""}}]}}]}"#,
+                r#"data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ],
+        );
+        assert_eq!(opened_signature(&events), None);
     }
 
     #[test]

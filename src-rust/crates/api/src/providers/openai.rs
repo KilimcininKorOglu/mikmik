@@ -486,7 +486,7 @@ impl OpenAiProvider {
                     id,
                     name,
                     input,
-                    thought_signature: None,
+                    thought_signature: crate::protocol::openai_chat::gemini_thought_signature(tc),
                 });
             }
         }
@@ -984,7 +984,8 @@ impl LlmProvider for OpenAiProvider {
                                         id: tc_id.to_string(),
                                         name,
                                         input: json!({}),
-                                        thought_signature: None,
+                                        thought_signature:
+                                            crate::protocol::openai_chat::gemini_thought_signature(tc),
                                     },
                                 });
                             }

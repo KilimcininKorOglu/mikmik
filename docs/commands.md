@@ -180,6 +180,18 @@ Exit the MikMik REPL. Equivalent to pressing `Ctrl+D`. Unsaved session state is 
 
 ---
 
+### /restart
+
+Relaunch MikMik in place while keeping the current session. The terminal is torn down, then the binary re-executes itself with the same launch flags plus `--resume <session id>`, so the conversation, its file state and cost carry over. Use it after a change that only takes effect on startup, such as installing a plugin, editing an MCP server or setting an environment variable.
+
+The session-source flags from the original launch (`--resume`, `-c`/`--continue`, `--session-id`) are dropped and replaced with a resume of the live session; every other flag is preserved. On Unix the process image is replaced (the PID is unchanged); on Windows a replacement process is spawned and the old one exits.
+
+```
+/restart
+```
+
+---
+
 ### /resume
 **Aliases:** `continue`
 

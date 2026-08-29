@@ -389,6 +389,22 @@ pub fn format_epoch_millis(ms: i64) -> String {
         .unwrap_or_default()
 }
 
+/// Resolve an F-Droid/AppStream localized-text value to a single string.
+///
+/// A plain string passes through; a `{locale: text}` map prefers `en-US`,
+/// `en_US`, then `en`, then the first string value. Returns `None` when empty.
+pub fn localized_text(value: &serde_json::Value) -> Option<String> {
+    if let Some(s) = value.as_str() {
+        return (!s.is_empty()).then(|| s.to_string());
+    }
+    let map = value.as_object()?;
+    let pick = ["en-US", "en_US", "en"]
+        .iter()
+        .find_map(|k| map.get(*k).and_then(serde_json::Value::as_str))
+        .or_else(|| map.values().find_map(serde_json::Value::as_str))?;
+    (!pick.is_empty()).then(|| pick.to_string())
+}
+
 /// Compare two version strings, ported from omp's canonical `compareVersions`.
 ///
 /// Trims and strips one leading `v`/`V`, drops SemVer build metadata (`+...`),
@@ -577,6 +593,26 @@ mod tests {
         assert_eq!(format_bytes(1536), "1.5KB");
         assert_eq!(format_bytes(5 * 1024 * 1024), "5.0MB");
         assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.0GB");
+    }
+
+    #[test]
+    fn localized_text_prefers_english() {
+        use serde_json::json;
+        assert_eq!(localized_text(&json!("plain")), Some("plain".to_string()));
+        assert_eq!(
+            localized_text(&json!({ "de": "Hallo", "en": "Hello" })),
+            Some("Hello".to_string())
+        );
+        assert_eq!(
+            localized_text(&json!({ "en-US": "Color", "en": "Colour" })),
+            Some("Color".to_string())
+        );
+        // No English key falls back to the first string value.
+        assert_eq!(
+            localized_text(&json!({ "fr": "Bonjour" })),
+            Some("Bonjour".to_string())
+        );
+        assert_eq!(localized_text(&json!("")), None);
     }
 
     #[test]

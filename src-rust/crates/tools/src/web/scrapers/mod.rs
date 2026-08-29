@@ -17,6 +17,7 @@ pub mod crossref;
 pub mod devto;
 pub mod discogs;
 pub mod dockerhub;
+pub mod fdroid;
 pub mod hackage;
 pub mod hackernews;
 pub mod hex;
@@ -77,6 +78,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(dockerhub::DockerHubHandler),
         Box::new(artifacthub::ArtifactHubHandler),
         Box::new(repology::RepologyHandler),
+        Box::new(fdroid::FdroidHandler),
         Box::new(brew::BrewHandler),
         Box::new(snapcraft::SnapcraftHandler),
         Box::new(hackernews::HackerNewsHandler),

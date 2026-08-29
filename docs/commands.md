@@ -56,6 +56,24 @@ when typed.
 
 Everything after the command name arrives as a single string.
 
+### Chaining commands
+
+A slash line may chain several commands with `&&`, run left to right:
+
+```
+/model claude-haiku && /effort low && /clear
+```
+
+The first command runs at once; the rest run in turn, each waiting for the one
+before it to finish (including a picker it opened or a model turn it started).
+
+Chaining follows shell `&&`: a command that fails cancels the rest. In
+`/unknown && /help`, `/help` does not run.
+
+`&&` splits only a slash line. A bang line's `&&` is shell syntax, so `!make &&
+test` runs as one shell command, and a `&&` inside a quoted argument
+(`/echo "a && b"`) is left alone.
+
 ---
 
 ## Shell Commands

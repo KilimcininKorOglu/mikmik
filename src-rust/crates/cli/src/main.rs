@@ -3785,6 +3785,11 @@ async fn run_interactive(
     // later, where the synthesised Enter lands.
     let mut remote_submit = false;
 
+    // Remaining segments of a `/a && /b` slash-command chain, fed one at a time
+    // through the auto-submit path. Stop-on-error clears it: a failed segment
+    // cancels the rest, matching shell `&&`.
+    let mut command_chain: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+
     // Last busy state pushed to the remote client, so only transitions are
     // sent rather than one event per loop iteration.
     let mut bridge_busy_sent = false;
@@ -4122,6 +4127,22 @@ async fn run_interactive(
             );
         }
 
+        // Feed the next segment of a slash-command chain once the session is
+        // idle. Gating on not-streaming and no open modal lets the chain wait
+        // for a segment's turn or overlay to finish; the empty-prompt check
+        // keeps it from overwriting text the user is typing.
+        if !command_chain.is_empty()
+            && !app.pending_auto_submit
+            && !app.is_streaming
+            && !app.blocking_modal_open()
+            && app.prompt_input.text.is_empty()
+        {
+            if let Some(next) = command_chain.pop_front() {
+                app.set_prompt_text(next);
+                app.pending_auto_submit = true;
+            }
+        }
+
         // Poll for crossterm events (keyboard/mouse) with short timeout
         // unless an auto-submit (queued message) is pending — in which case
         // synthesize an Enter event to dequeue and submit it.
@@ -4274,9 +4295,24 @@ async fn run_interactive(
                             // Fall through to submit — no second Enter needed
                         }
 
-                        let input = app.take_input();
+                        let mut input = app.take_input();
                         if input.is_empty() {
                             continue;
+                        }
+
+                        // Command chaining: a slash line `/a && /b` runs each in
+                        // turn. Split only slash input — a bang line's `&&` is
+                        // shell syntax and stays intact. Run the first segment
+                        // now; the rest wait in `command_chain` and are fed one
+                        // at a time by the drain at the top of the loop. Guard on
+                        // an empty chain so an auto-submitted segment is not
+                        // re-split.
+                        if command_chain.is_empty() && mikmik_tui::input::is_slash_command(&input) {
+                            let mut segments = mikmik_tui::input::split_command_chain(&input);
+                            if segments.len() > 1 {
+                                input = segments.remove(0);
+                                command_chain.extend(segments);
+                            }
                         }
 
                         // Check for a shell command to run here, before the
@@ -5034,6 +5070,12 @@ async fn run_interactive(
                                         is_error: command_failed,
                                     });
                                 }
+                            }
+
+                            // Stop-on-error: a failed segment cancels the rest
+                            // of a `/a && /b` chain, matching shell `&&`.
+                            if command_failed {
+                                command_chain.clear();
                             }
 
                             // If a UserMessage was queued (e.g. /compact), submit it.

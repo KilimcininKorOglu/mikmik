@@ -87,24 +87,13 @@ fn trimmed_field(v: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Age in seconds from an ISO date string, or `None` when it does not parse.
-/// Mirrors omp's `dateToAgeSeconds`: `(now - date) / 1000`.
-fn date_to_age_seconds(date: &str) -> Option<f64> {
-    let millis = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(date) {
-        dt.timestamp_millis()
-    } else {
-        let day = chrono::NaiveDate::parse_from_str(date.get(..10)?, "%Y-%m-%d").ok()?;
-        day.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis()
-    };
-    let now = chrono::Utc::now().timestamp_millis();
-    Some(((now - millis) / 1000) as f64)
-}
-
 /// Map one Kimi result onto a source, or `None` when it carries no URL.
 fn result_to_source(result: &Value) -> Option<SearchSource> {
     let url = trimmed_field(result, "url")?;
     let published_date = trimmed_field(result, "date");
-    let age_seconds = published_date.as_deref().and_then(date_to_age_seconds);
+    let age_seconds = published_date
+        .as_deref()
+        .and_then(super::date_to_age_seconds);
     Some(SearchSource {
         title: trimmed_field(result, "title").unwrap_or_else(|| url.clone()),
         url,

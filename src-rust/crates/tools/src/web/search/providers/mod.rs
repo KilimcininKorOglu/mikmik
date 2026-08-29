@@ -17,6 +17,7 @@ pub mod searxng;
 pub mod synthetic;
 pub mod tavily;
 pub mod tinyfish;
+pub mod zai;
 
 use crate::web::search::types::SearchProviderId;
 
@@ -40,6 +41,21 @@ fn pick_key(stored: Option<String>, env: Option<String>) -> Option<String> {
     stored
         .filter(|k| !k.is_empty())
         .or_else(|| env.filter(|k| !k.is_empty()))
+}
+
+/// Age in seconds from an ISO date string, or `None` when it does not parse.
+///
+/// Mirrors omp's `dateToAgeSeconds`: `(now - date) / 1000`. Accepts an RFC 3339
+/// timestamp or a bare `YYYY-MM-DD` date (taken at UTC midnight).
+pub(crate) fn date_to_age_seconds(date: &str) -> Option<f64> {
+    let millis = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(date) {
+        dt.timestamp_millis()
+    } else {
+        let day = chrono::NaiveDate::parse_from_str(date.get(..10)?, "%Y-%m-%d").ok()?;
+        day.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis()
+    };
+    let now = chrono::Utc::now().timestamp_millis();
+    Some(((now - millis) / 1000) as f64)
 }
 
 /// Minimal percent-encoding for a URL query-parameter value.

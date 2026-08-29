@@ -106,6 +106,7 @@ pub fn provider_for(id: SearchProviderId) -> Option<Box<dyn SearchProvider>> {
     match id {
         SearchProviderId::Gemini => Some(Box::new(providers::gemini::GeminiProvider)),
         SearchProviderId::Anthropic => Some(Box::new(providers::anthropic::AnthropicProvider)),
+        SearchProviderId::Zai => Some(Box::new(providers::zai::ZaiProvider)),
         SearchProviderId::Exa => Some(Box::new(providers::exa::ExaProvider)),
         SearchProviderId::Tinyfish => Some(Box::new(providers::tinyfish::TinyFishProvider)),
         SearchProviderId::Jina => Some(Box::new(providers::jina::JinaProvider)),
@@ -189,6 +190,7 @@ mod tests {
             vec![
                 SearchProviderId::Gemini,
                 SearchProviderId::Anthropic,
+                SearchProviderId::Zai,
                 SearchProviderId::Exa,
                 SearchProviderId::Tinyfish,
                 SearchProviderId::Jina,

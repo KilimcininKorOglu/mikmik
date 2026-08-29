@@ -5,8 +5,46 @@
 // the body; plus `RenderResult` and the small formatting helpers the handlers
 // build their markdown with.
 
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::cmp::Ordering;
 use std::time::Duration;
+
+static SCRIPT_STYLE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?is)<(script|style)[^>]*>.*?</(script|style)>")
+        .expect("static script/style regex")
+});
+
+/// Shared HTML-to-markdown converter tuned to Turndown's defaults (ATX
+/// headings, `-` bullets with one trailing space) so output matches omp.
+static CONVERTER: Lazy<htmd::HtmlToMarkdown> = Lazy::new(|| {
+    let options = htmd::options::Options {
+        bullet_list_marker: htmd::options::BulletListMarker::Dash,
+        ul_bullet_spacing: 1,
+        ..Default::default()
+    };
+    htmd::HtmlToMarkdown::builder().options(options).build()
+});
+
+/// Convert an HTML fragment to markdown (script/style stripped first).
+///
+/// Mirrors omp's `htmlToBasicMarkdown`: drop `<script>`/`<style>` blocks, run
+/// the `htmd` HTML-to-markdown converter, and trim. On a converter error the
+/// stripped HTML tags are removed and the text is returned as a fallback.
+pub fn html_to_markdown(html: &str) -> String {
+    let cleaned = SCRIPT_STYLE.replace_all(html, "");
+    match CONVERTER.convert(&cleaned) {
+        Ok(md) => md.trim().to_string(),
+        Err(_) => strip_tags(&cleaned).trim().to_string(),
+    }
+}
+
+static ANY_TAG: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)<[^>]+>").expect("static tag regex"));
+
+/// Remove every HTML tag, leaving decoded text (a crude last-resort fallback).
+fn strip_tags(html: &str) -> String {
+    decode_html_entities(&ANY_TAG.replace_all(html, " "))
+}
 
 /// Largest markdown payload a handler returns; longer output is truncated.
 pub const MAX_OUTPUT_CHARS: usize = 500_000;
@@ -593,6 +631,24 @@ mod tests {
         assert_eq!(format_bytes(1536), "1.5KB");
         assert_eq!(format_bytes(5 * 1024 * 1024), "5.0MB");
         assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.0GB");
+    }
+
+    #[test]
+    fn html_to_markdown_converts_and_strips_scripts() {
+        let html = "<h1>Title</h1><script>evil()</script><p>A <strong>bold</strong> paragraph.</p>";
+        let md = html_to_markdown(html);
+        assert!(md.contains("# Title"));
+        assert!(md.contains("A **bold** paragraph."));
+        assert!(!md.contains("evil"));
+    }
+
+    #[test]
+    fn html_to_markdown_renders_lists_and_links() {
+        let html = "<ul><li>one</li><li>two</li></ul><a href=\"https://x.test\">link</a>";
+        let md = html_to_markdown(html);
+        assert!(md.contains("- one"));
+        assert!(md.contains("- two"));
+        assert!(md.contains("[link](https://x.test)"));
     }
 
     #[test]

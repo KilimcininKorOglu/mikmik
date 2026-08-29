@@ -3,6 +3,7 @@
 use super::anthropic::AnthropicUsage;
 use super::codex::CodexUsage;
 use super::github_copilot::GithubCopilotUsage;
+use super::google_antigravity::GoogleAntigravityUsage;
 use super::provider::UsageProvider;
 use super::zai::ZaiUsage;
 use std::sync::Arc;
@@ -15,6 +16,7 @@ pub fn usage_provider_for(provider_id: &str) -> Option<Arc<dyn UsageProvider>> {
         "codex" => Some(Arc::new(CodexUsage)),
         "zai" => Some(Arc::new(ZaiUsage)),
         "github-copilot" => Some(Arc::new(GithubCopilotUsage)),
+        "google-antigravity" => Some(Arc::new(GoogleAntigravityUsage)),
         _ => None,
     }
 }

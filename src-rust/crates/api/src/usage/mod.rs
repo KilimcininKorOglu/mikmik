@@ -11,6 +11,7 @@ mod cursor;
 mod github_copilot;
 mod google_antigravity;
 mod kimi;
+mod live;
 mod minimax_code;
 mod opencode_go;
 mod provider;
@@ -21,6 +22,7 @@ mod umans;
 mod xai_oauth;
 mod zai;
 
+pub use live::{record_headers, take_live_report};
 pub use provider::{UsageFetchContext, UsageProvider};
 pub use registry::usage_provider_for;
 pub use types::{

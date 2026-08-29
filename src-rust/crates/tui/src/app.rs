@@ -2022,6 +2022,9 @@ pub struct App {
     pub usage_rx: Option<tokio::sync::mpsc::Receiver<mikmik_api::usage::UsageReport>>,
     /// When the last usage fetch was started, to rate-limit refreshes.
     pub usage_last_fetch: Option<std::time::Instant>,
+    /// Set once a response's rate-limit headers fed the usage report; the free
+    /// header feed then replaces the endpoint fetch for this account.
+    pub usage_from_headers: bool,
     /// Active worktree name (if in a worktree).
     pub worktree_name: Option<String>,
     /// Active worktree branch (if in a worktree).
@@ -2455,6 +2458,7 @@ impl App {
             usage_report: None,
             usage_rx: None,
             usage_last_fetch: None,
+            usage_from_headers: false,
             worktree_name: None,
             worktree_branch: None,
             agent_type_badge: None,
@@ -9253,7 +9257,17 @@ impl App {
             }
         }
 
-        if !self.settings_screen.show_usage_limits || self.usage_rx.is_some() {
+        if !self.settings_screen.show_usage_limits {
+            return;
+        }
+        // The free header feed: whatever the active account returned on its last
+        // response. When it lands it replaces the endpoint fetch for this
+        // account.
+        if let Some(report) = mikmik_api::usage::take_live_report() {
+            self.apply_usage_report(report);
+            self.usage_from_headers = true;
+        }
+        if self.usage_from_headers || self.usage_rx.is_some() {
             return;
         }
         let due = self

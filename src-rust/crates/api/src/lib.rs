@@ -1161,6 +1161,10 @@ pub mod client {
 
                 // 200-299: success
                 if resp.status().is_success() {
+                    // Capture the account's rate-limit headers for the usage
+                    // sidebar (free, no extra request). This client speaks the
+                    // Anthropic wire, so its reporter parses the headers.
+                    crate::usage::record_headers("anthropic", resp.headers());
                     return Ok(resp);
                 }
 

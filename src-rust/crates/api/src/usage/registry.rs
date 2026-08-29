@@ -7,6 +7,7 @@ use super::github_copilot::GithubCopilotUsage;
 use super::google_antigravity::GoogleAntigravityUsage;
 use super::kimi::KimiUsage;
 use super::minimax_code::MinimaxCodeUsage;
+use super::ollama_cloud::OllamaCloudUsage;
 use super::opencode_go::OpencodeGoUsage;
 use super::provider::UsageProvider;
 use super::synthetic::SyntheticUsage;
@@ -28,6 +29,7 @@ pub fn usage_provider_for(provider_id: &str) -> Option<Arc<dyn UsageProvider>> {
         "minimax-code" => Some(Arc::new(MinimaxCodeUsage)),
         "kimi-code" => Some(Arc::new(KimiUsage)),
         "xai-oauth" => Some(Arc::new(XaiOAuthUsage)),
+        "ollama-cloud" => Some(Arc::new(OllamaCloudUsage)),
         "opencode-go" => Some(Arc::new(OpencodeGoUsage)),
         "umans" => Some(Arc::new(UmansUsage)),
         "synthetic" => Some(Arc::new(SyntheticUsage)),

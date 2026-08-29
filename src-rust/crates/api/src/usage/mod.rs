@@ -13,6 +13,7 @@ mod google_antigravity;
 mod kimi;
 mod live;
 mod minimax_code;
+mod ollama_cloud;
 mod opencode_go;
 mod provider;
 mod registry;

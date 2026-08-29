@@ -29,6 +29,7 @@ pub mod npm;
 pub mod nuget;
 pub mod nvd;
 pub mod openlibrary;
+pub mod orcid;
 pub mod osv;
 pub mod packagist;
 pub mod pub_dev;
@@ -89,6 +90,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(coingecko::CoinGeckoHandler),
         Box::new(semantic_scholar::SemanticScholarHandler),
         Box::new(crossref::CrossrefHandler),
+        Box::new(orcid::OrcidHandler),
         Box::new(musicbrainz::MusicBrainzHandler),
         Box::new(discogs::DiscogsHandler),
         Box::new(sec_edgar::SecEdgarHandler),

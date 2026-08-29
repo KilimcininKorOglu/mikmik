@@ -1714,6 +1714,65 @@ fn timeline_window(
 }
 
 /// Draw the timeline panel into `area`.
+/// The colour that stands for a usage meter's status, matching the footer's
+/// 90%-warning / at-cap-red convention.
+fn usage_status_color(status: Option<mikmik_api::usage::UsageStatus>) -> Color {
+    use mikmik_api::usage::UsageStatus;
+    match status {
+        Some(UsageStatus::Exhausted) => Color::Red,
+        Some(UsageStatus::Warning) => Color::Yellow,
+        Some(UsageStatus::Ok) => Color::Green,
+        _ => Color::DarkGray,
+    }
+}
+
+/// One usage meter as a panel row: label on the left, used percent on the
+/// right, coloured by status.
+fn usage_limit_line(limit: &mikmik_api::usage::UsageLimit, width: u16) -> Line<'static> {
+    let pct = limit
+        .amount
+        .used_fraction
+        .map(|f| format!("{:.0}%", f * 100.0))
+        .unwrap_or_else(|| "\u{2014}".to_string());
+    let color = usage_status_color(limit.status);
+    let reserved = pct.width() + 1;
+    let label_width = (width as usize).saturating_sub(reserved).max(1);
+    let label = truncate_end(&expand_tabs(&limit.label), label_width);
+    let padding = label_width.saturating_sub(label.width());
+    Line::from(vec![
+        Span::styled(label, Style::default().fg(Color::Gray)),
+        Span::raw(" ".repeat(padding + 1)),
+        Span::styled(pct, Style::default().fg(color)),
+    ])
+}
+
+/// The usage section shown at the top of the timeline panel when
+/// `show_usage_limits` is on and a report has landed. Empty otherwise, so the
+/// panel is unchanged when the feature is off.
+fn usage_panel_lines(app: &App, width: u16) -> Vec<Line<'static>> {
+    if !app.settings_screen.show_usage_limits {
+        return Vec::new();
+    }
+    let Some(report) = app.usage_report.as_ref() else {
+        return Vec::new();
+    };
+    if report.limits.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = Vec::with_capacity(report.limits.len() + 2);
+    lines.push(Line::from(Span::styled(
+        "Usage",
+        Style::default()
+            .fg(MIKMIK_ACCENT)
+            .add_modifier(Modifier::BOLD),
+    )));
+    for limit in &report.limits {
+        lines.push(usage_limit_line(limit, width));
+    }
+    lines.push(Line::from(""));
+    lines
+}
+
 fn render_timeline_panel(frame: &mut Frame, app: &App, area: Rect) {
     let focused = app.timeline_focused;
     let border_color = if focused {
@@ -1743,14 +1802,18 @@ fn render_timeline_panel(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    // The usage section rides at the top of the panel; it spends from the same
+    // row budget as the timeline below it.
+    let usage_lines = usage_panel_lines(app, inner.width);
+
     if app.timeline.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "No steps recorded yet.",
-                Style::default().fg(Color::DarkGray),
-            ))),
-            inner,
-        );
+        let mut lines = usage_lines;
+        lines.push(Line::from(Span::styled(
+            "No steps recorded yet.",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.truncate(inner.height as usize);
+        frame.render_widget(Paragraph::new(lines), inner);
         return;
     }
 
@@ -1766,12 +1829,14 @@ fn render_timeline_panel(frame: &mut Frame, app: &App, area: Rect) {
     // be pushed off the panel.
     let summary = timeline_summary_line(app, inner.width);
     let capacity = (inner.height as usize)
+        .saturating_sub(usage_lines.len())
         .saturating_sub(detail_lines.len())
         .saturating_sub(usize::from(summary.is_some()))
         .max(1);
 
     let window = timeline_window(app.timeline.len(), app.timeline.selected_idx, capacity);
-    let mut lines = Vec::with_capacity(window.len() + detail_lines.len());
+    let mut lines = Vec::with_capacity(usage_lines.len() + window.len() + detail_lines.len());
+    lines.extend(usage_lines);
     for idx in window {
         let Some(row) = app.timeline.rows.get(idx) else {
             continue;
@@ -6905,6 +6970,45 @@ mod timeline_panel_tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    fn app_with_usage(fraction: f64) -> App {
+        use mikmik_api::usage::{UsageAmount, UsageLimit, UsageReport};
+        let mut app = app_with_rows(3);
+        app.usage_report = Some(UsageReport::new(
+            "anthropic",
+            vec![UsageLimit {
+                id: "5h".into(),
+                label: "5 hour".into(),
+                scope: None,
+                window: None,
+                amount: UsageAmount::from_used_fraction(fraction),
+                status: None,
+                notes: Vec::new(),
+            }
+            .with_derived_status()],
+        ));
+        app
+    }
+
+    #[test]
+    fn the_sidebar_shows_usage_only_when_the_setting_is_on() {
+        // Wide enough (>=120) for a side timeline panel to appear.
+        let mut app = app_with_usage(0.42);
+
+        app.settings_screen.show_usage_limits = false;
+        let off = screen(&app, 130, 30).join("\n");
+        assert!(
+            !off.contains("Usage"),
+            "usage section must stay hidden while the setting is off:\n{off}"
+        );
+
+        app.settings_screen.show_usage_limits = true;
+        let on = screen(&app, 130, 30).join("\n");
+        assert!(
+            on.contains("Usage") && on.contains("42%"),
+            "usage section with its percentage must render when on:\n{on}"
+        );
     }
 
     /// A session that has just finished a turn, as the status row sees it.

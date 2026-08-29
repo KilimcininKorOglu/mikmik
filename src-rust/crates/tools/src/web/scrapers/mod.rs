@@ -14,6 +14,7 @@ pub mod bluesky;
 pub mod brew;
 pub mod cheatsh;
 pub mod chocolatey;
+pub mod choosealicense;
 pub mod cisa_kev;
 pub mod clojars;
 pub mod coingecko;
@@ -160,6 +161,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(cheatsh::CheatShHandler),
         Box::new(tldr::TldrHandler),
         Box::new(rfc::RfcHandler),
+        Box::new(choosealicense::ChooseALicenseHandler),
         Box::new(mdn::MdnHandler),
         Box::new(w3c::W3cHandler),
         Box::new(wikipedia::WikipediaHandler),

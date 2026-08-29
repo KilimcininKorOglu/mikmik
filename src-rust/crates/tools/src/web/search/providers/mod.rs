@@ -8,6 +8,7 @@ pub mod brave;
 pub mod duckduckgo;
 pub mod exa;
 pub mod firecrawl;
+pub mod gemini;
 pub mod jina;
 pub mod kagi;
 pub mod parallel;

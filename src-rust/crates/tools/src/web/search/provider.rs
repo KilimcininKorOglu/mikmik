@@ -104,6 +104,7 @@ pub trait SearchProvider: Send + Sync {
 pub fn provider_for(id: SearchProviderId) -> Option<Box<dyn SearchProvider>> {
     use super::providers;
     match id {
+        SearchProviderId::Gemini => Some(Box::new(providers::gemini::GeminiProvider)),
         SearchProviderId::Anthropic => Some(Box::new(providers::anthropic::AnthropicProvider)),
         SearchProviderId::Exa => Some(Box::new(providers::exa::ExaProvider)),
         SearchProviderId::Tinyfish => Some(Box::new(providers::tinyfish::TinyFishProvider)),
@@ -185,6 +186,7 @@ mod tests {
         assert_eq!(
             implemented,
             vec![
+                SearchProviderId::Gemini,
                 SearchProviderId::Anthropic,
                 SearchProviderId::Exa,
                 SearchProviderId::Tinyfish,

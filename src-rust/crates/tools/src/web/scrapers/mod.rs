@@ -65,6 +65,7 @@ pub mod tldr;
 pub mod util;
 pub mod vimeo;
 pub mod vscode_marketplace;
+pub mod w3c;
 pub mod wikidata;
 
 use async_trait::async_trait;
@@ -135,6 +136,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(cheatsh::CheatShHandler),
         Box::new(tldr::TldrHandler),
         Box::new(rfc::RfcHandler),
+        Box::new(w3c::W3cHandler),
         Box::new(searchcode::SearchcodeHandler),
         Box::new(lemmy::LemmyHandler),
         Box::new(mastodon::MastodonHandler),

@@ -59,6 +59,16 @@ mod tests {
     }
 
     #[test]
+    fn codex_headers_also_feed_the_slot() {
+        take_live_report();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-codex-primary-used-percent", "42".parse().unwrap());
+        record_headers("codex", &headers);
+        let report = take_live_report().expect("codex resolves to a reporter");
+        assert_eq!(report.provider, "codex");
+    }
+
+    #[test]
     fn a_provider_without_a_reporter_is_a_no_op() {
         take_live_report();
         record_headers("no-such-provider", &HeaderMap::new());

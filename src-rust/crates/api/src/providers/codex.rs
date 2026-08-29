@@ -605,6 +605,7 @@ impl LlmProvider for CodexProvider {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, ProviderError>
     {
         let resp = self.send_responses_streaming_request(&request).await?;
+        crate::usage::record_headers(&self.id, resp.headers());
         let provider_id = self.id.clone();
 
         let s = stream! {

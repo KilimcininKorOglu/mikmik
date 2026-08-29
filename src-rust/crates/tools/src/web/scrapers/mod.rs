@@ -59,6 +59,7 @@ pub mod pub_dev;
 pub mod pubmed;
 pub mod pypi;
 pub mod rawg;
+pub mod readthedocs;
 pub mod reddit;
 pub mod repology;
 pub mod rfc;
@@ -162,6 +163,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(mdn::MdnHandler),
         Box::new(w3c::W3cHandler),
         Box::new(wikipedia::WikipediaHandler),
+        Box::new(readthedocs::ReadTheDocsHandler),
         Box::new(searchcode::SearchcodeHandler),
         Box::new(lemmy::LemmyHandler),
         Box::new(mastodon::MastodonHandler),

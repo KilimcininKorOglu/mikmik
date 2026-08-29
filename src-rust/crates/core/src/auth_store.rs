@@ -16,7 +16,18 @@ use std::path::PathBuf;
 #[serde(tag = "type")]
 pub enum StoredCredential {
     #[serde(rename = "api")]
-    ApiKey { key: String },
+    ApiKey {
+        key: String,
+        /// The workspace server this key came from, if the organisation handed
+        /// it out rather than the user entering it.
+        ///
+        /// A web-search entitlement lives only here in `auth.json`; it has no
+        /// `settings.json` account the way an LLM provider does. This mark is
+        /// what lets a pull withdraw exactly the org's search keys, `workspace
+        /// logout` drop them, and a user's own key by the same id survive.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        managed_by: Option<String>,
+    },
     /// GitHub Copilot's device-flow token.
     #[serde(rename = "oauth")]
     OAuthToken {
@@ -69,6 +80,20 @@ pub enum StoredCredential {
         /// Seconds since the Unix epoch.
         expires: u64,
     },
+}
+
+impl StoredCredential {
+    /// An API-key credential the user owns, carrying no server mark.
+    ///
+    /// Every place a key is entered here or read from the environment uses
+    /// this, so a new construction site cannot forget `managed_by` and leave a
+    /// user's key looking like an organisation's.
+    pub fn api_key(key: impl Into<String>) -> Self {
+        Self::ApiKey {
+            key: key.into(),
+            managed_by: None,
+        }
+    }
 }
 
 /// Seconds since the Unix epoch.
@@ -508,7 +533,7 @@ impl AuthStore {
             if store.get(account_id).is_none() {
                 store
                     .credentials
-                    .insert(account_id.clone(), StoredCredential::ApiKey { key });
+                    .insert(account_id.clone(), StoredCredential::api_key(key));
             }
             moved.push(account_id.clone());
         }
@@ -654,7 +679,7 @@ impl AuthStore {
         // Check stored credentials first
         if let Some(stored) = self.get(account_id) {
             match stored {
-                StoredCredential::ApiKey { key } => {
+                StoredCredential::ApiKey { key, .. } => {
                     if !key.is_empty() {
                         return Some(key.clone());
                     }
@@ -811,10 +836,9 @@ mod tests {
         // The store is now the only place a credential lives, so a field lost
         // in serialisation is a credential the account can never present.
         let mut store = AuthStore::default();
-        store.credentials.insert(
-            "gateway".to_string(),
-            StoredCredential::ApiKey { key: "sk-1".into() },
-        );
+        store
+            .credentials
+            .insert("gateway".to_string(), StoredCredential::api_key("sk-1"));
         store.credentials.insert(
             "kerem".to_string(),
             StoredCredential::OAuthToken {
@@ -883,10 +907,9 @@ mod tests {
     #[test]
     fn accounts_are_grouped_by_the_credential_they_hold() {
         let mut store = AuthStore::default();
-        store.credentials.insert(
-            "gateway".to_string(),
-            StoredCredential::ApiKey { key: "sk-1".into() },
-        );
+        store
+            .credentials
+            .insert("gateway".to_string(), StoredCredential::api_key("sk-1"));
         store.credentials.insert(
             "personal".to_string(),
             StoredCredential::AnthropicOAuth(anthropic_tokens(&["user:inference"], None)),
@@ -934,12 +957,43 @@ mod tests {
         let mut store = AuthStore::default();
         store.credentials.insert(
             "openrouter".to_string(),
-            StoredCredential::ApiKey {
-                key: "or-key".to_string(),
-            },
+            StoredCredential::api_key("or-key"),
         );
 
         assert_eq!(store.api_key_for("openrouter").as_deref(), Some("or-key"));
+    }
+
+    #[test]
+    fn an_api_key_written_before_managed_by_still_loads() {
+        // An `auth.json` from a build without the field has no `managed_by`.
+        // It must load as a user-owned key, not fail to parse.
+        let old = r#"{"type":"api","key":"or-key"}"#;
+        let credential: StoredCredential =
+            serde_json::from_str(old).expect("old api credential parses");
+        match credential {
+            StoredCredential::ApiKey { key, managed_by } => {
+                assert_eq!(key, "or-key");
+                assert_eq!(managed_by, None);
+            }
+            other => panic!("expected an api key, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_user_owned_api_key_serialises_without_the_field() {
+        // A key the user entered carries no `managed_by`, so the on-disk shape
+        // stays exactly what earlier builds wrote and this omission is what a
+        // pull reads to leave it alone.
+        let owned = StoredCredential::api_key("or-key");
+        let json = serde_json::to_string(&owned).expect("serialises");
+        assert!(!json.contains("managed_by"), "unexpected field in {json}");
+
+        let managed = StoredCredential::ApiKey {
+            key: "org-key".to_string(),
+            managed_by: Some("https://mikmik.firma.com".to_string()),
+        };
+        let json = serde_json::to_string(&managed).expect("serialises");
+        assert!(json.contains("managed_by"), "field missing in {json}");
     }
 
     // -----------------------------------------------------------------------
@@ -1008,9 +1062,7 @@ mod tests {
         let mut store = AuthStore::default();
         store.credentials.insert(
             WORKSPACE_ACCOUNT.to_string(),
-            StoredCredential::ApiKey {
-                key: "not-a-session".to_string(),
-            },
+            StoredCredential::api_key("not-a-session"),
         );
         assert_eq!(store.workspace_session("https://mikmik.firma.com"), None);
     }

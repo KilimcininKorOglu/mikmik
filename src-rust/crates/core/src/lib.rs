@@ -10811,12 +10811,7 @@ mod credential_storage_tests {
             .save_sync()
             .expect("save settings");
         let mut store = crate::AuthStore::default();
-        store.set(
-            "is_gateway",
-            crate::StoredCredential::ApiKey {
-                key: "sk-current".to_string(),
-            },
-        );
+        store.set("is_gateway", crate::StoredCredential::api_key("sk-current"));
 
         let moved = crate::AuthStore::migrate_plaintext_provider_keys();
 

@@ -8103,7 +8103,7 @@ async fn auth_status(json_output: bool) {
     let stored_api_key_source = provider_status_lookup_keys(active_provider)
         .into_iter()
         .find_map(|provider_id| match auth_store.get(provider_id) {
-            Some(mikmik_core::StoredCredential::ApiKey { key }) if !key.is_empty() => {
+            Some(mikmik_core::StoredCredential::ApiKey { key, .. }) if !key.is_empty() => {
                 Some("stored credential".to_string())
             }
             Some(mikmik_core::StoredCredential::OAuthToken {
@@ -9853,9 +9853,7 @@ mod accounts_listing_tests {
         let mut store = AuthStore::default();
         store.credentials.insert(
             "kendi-openrouter".to_string(),
-            StoredCredential::ApiKey {
-                key: "a-key".to_string(),
-            },
+            StoredCredential::api_key("a-key"),
         );
         store.credentials.insert(
             mikmik_core::auth_store::WORKSPACE_ACCOUNT.to_string(),

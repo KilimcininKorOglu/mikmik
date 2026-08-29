@@ -1566,9 +1566,7 @@ mod account_registration_tests {
         for (account_id, key) in [("day-job", "gho_day"), ("side-project", "gho_side")] {
             store.set(
                 account_id,
-                mikmik_core::auth_store::StoredCredential::ApiKey {
-                    key: key.to_string(),
-                },
+                mikmik_core::auth_store::StoredCredential::api_key(key),
             );
         }
 

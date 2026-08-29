@@ -278,9 +278,7 @@ mod tests {
     const SERVER: &str = "https://mikmik.firma.com";
 
     fn key(value: &str) -> StoredCredential {
-        StoredCredential::ApiKey {
-            key: value.to_string(),
-        }
+        StoredCredential::api_key(value)
     }
 
     /// The key stored under `name`, if the account holds a plain one.
@@ -296,7 +294,7 @@ mod tests {
             .find(|(key, _)| key.as_str() == name)
             .map(|(_, credential)| credential)
         {
-            Some(StoredCredential::ApiKey { key }) => Some(key.clone()),
+            Some(StoredCredential::ApiKey { key, .. }) => Some(key.clone()),
             _ => None,
         }
     }

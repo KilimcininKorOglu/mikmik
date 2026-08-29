@@ -3018,10 +3018,8 @@ impl App {
                 Some(3),
             );
         } else {
-            self.auth_store.set(
-                provider_id,
-                mikmik_core::StoredCredential::ApiKey { key: api_key },
-            );
+            self.auth_store
+                .set(provider_id, mikmik_core::StoredCredential::api_key(api_key));
             self.push_notification(
                 NotificationKind::Success,
                 format!("Saved {provider_name} search key"),
@@ -5059,7 +5057,7 @@ impl App {
                                 expires: 0,
                             }
                         } else {
-                            mikmik_core::StoredCredential::ApiKey { key: token }
+                            mikmik_core::StoredCredential::api_key(token)
                         };
                         // File the credential under the account the flow
                         // named, so a second login for the same vendor is a
@@ -5212,10 +5210,8 @@ impl App {
                             // a second key for the same vendor is a second account
                             // instead of overwriting the first.
                             self.persist_account_protocol(&account_id, &protocol);
-                            self.auth_store.set(
-                                &account_id,
-                                mikmik_core::StoredCredential::ApiKey { key: api_key },
-                            );
+                            self.auth_store
+                                .set(&account_id, mikmik_core::StoredCredential::api_key(api_key));
                             self.queue_model_sync(&account_id, false);
                             self.pending_provider_reload = true;
                             self.activate_provider(account_id, provider_name, "Connected to");
@@ -5276,7 +5272,7 @@ impl App {
                         let values = self.free_mode_dialog.take_values();
                         for (provider_id, key) in values {
                             self.auth_store
-                                .set(provider_id, mikmik_core::StoredCredential::ApiKey { key });
+                                .set(provider_id, mikmik_core::StoredCredential::api_key(key));
                         }
                         self.activate_provider(
                             "free".to_string(),
@@ -5317,10 +5313,8 @@ impl App {
                         let (account_id, protocol, base_url, api_key) =
                             self.custom_provider_dialog.take_values();
                         self.persist_account(&account_id, &protocol, Some(&base_url));
-                        self.auth_store.set(
-                            &account_id,
-                            mikmik_core::StoredCredential::ApiKey { key: api_key },
-                        );
+                        self.auth_store
+                            .set(&account_id, mikmik_core::StoredCredential::api_key(api_key));
                         // Ask the endpoint what it serves once the refreshed
                         // registry can reach it, so the account's model list
                         // comes from the account rather than from a catalogue

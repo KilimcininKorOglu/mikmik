@@ -96,9 +96,7 @@ pub fn apply(
         );
         auth.credentials.insert(
             name.to_string(),
-            StoredCredential::ApiKey {
-                key: provider.api_key.clone(),
-            },
+            StoredCredential::api_key(provider.api_key.clone()),
         );
         result.written.push(name.to_string());
     }
@@ -159,7 +157,7 @@ mod tests {
 
     fn stored_key(auth: &AuthStore, name: &str) -> Option<String> {
         match auth.credentials.get(name) {
-            Some(StoredCredential::ApiKey { key }) => Some(key.clone()),
+            Some(StoredCredential::ApiKey { key, .. }) => Some(key.clone()),
             _ => None,
         }
     }
@@ -289,12 +287,8 @@ mod tests {
         settings
             .providers
             .insert("mine".to_string(), ProviderConfig::default());
-        auth.credentials.insert(
-            "mine".to_string(),
-            StoredCredential::ApiKey {
-                key: "my-own-key".to_string(),
-            },
-        );
+        auth.credentials
+            .insert("mine".to_string(), StoredCredential::api_key("my-own-key"));
 
         apply(&mut settings, &mut auth, SERVER, &[offered("firma-openai")]);
         apply(&mut settings, &mut auth, SERVER, &[]);

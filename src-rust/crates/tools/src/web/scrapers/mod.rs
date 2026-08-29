@@ -35,6 +35,7 @@ pub mod hackage;
 pub mod hackernews;
 pub mod hex;
 pub mod huggingface;
+pub mod iacr;
 pub mod jetbrains_marketplace;
 pub mod lemmy;
 pub mod lobsters;
@@ -141,6 +142,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(pubmed::PubMedHandler),
         Box::new(biorxiv::BiorxivHandler),
         Box::new(arxiv::ArxivHandler),
+        Box::new(iacr::IacrHandler),
         Box::new(bluesky::BlueskyHandler),
         Box::new(vimeo::VimeoHandler),
         Box::new(spotify::SpotifyHandler),

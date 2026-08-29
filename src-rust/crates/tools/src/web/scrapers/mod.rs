@@ -35,6 +35,7 @@ pub mod pub_dev;
 pub mod pypi;
 pub mod rawg;
 pub mod reddit;
+pub mod repology;
 pub mod rubygems;
 pub mod sec_edgar;
 pub mod semantic_scholar;
@@ -74,6 +75,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(aur::AurHandler),
         Box::new(dockerhub::DockerHubHandler),
         Box::new(artifacthub::ArtifactHubHandler),
+        Box::new(repology::RepologyHandler),
         Box::new(brew::BrewHandler),
         Box::new(snapcraft::SnapcraftHandler),
         Box::new(hackernews::HackerNewsHandler),

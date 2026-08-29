@@ -62,6 +62,7 @@ pub mod searchcode;
 pub mod sec_edgar;
 pub mod semantic_scholar;
 pub mod snapcraft;
+pub mod sourcegraph;
 pub mod spdx;
 pub mod spotify;
 pub mod stackoverflow;
@@ -116,6 +117,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(snapcraft::SnapcraftHandler),
         Box::new(github_gist::GitHubGistHandler),
         Box::new(gitlab::GitLabHandler),
+        Box::new(sourcegraph::SourcegraphHandler),
         Box::new(hackernews::HackerNewsHandler),
         Box::new(reddit::RedditHandler),
         Box::new(lobsters::LobstersHandler),

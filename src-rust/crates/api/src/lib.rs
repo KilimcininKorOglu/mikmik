@@ -66,6 +66,9 @@ pub mod error_handling;
 // Message transform layer — concrete transformers (Phase 4).
 pub mod transformers;
 
+// Account usage/limit reporting (ported from oh-my-pi packages/ai/src/usage).
+pub mod usage;
+
 // ---------------------------------------------------------------------------
 // Public re-exports
 // ---------------------------------------------------------------------------

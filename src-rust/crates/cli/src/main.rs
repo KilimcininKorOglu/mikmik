@@ -7060,6 +7060,66 @@ async fn run_interactive(
                         }
                     });
                 }
+                "zai-oauth" => {
+                    let tx2 = device_auth_tx.clone();
+                    // Z.AI browser flow: bind the fixed callback port Z.AI's OAuth
+                    // allowlist accepts (a conflict fails here rather than opening
+                    // the browser with a redirect_uri Z.AI would reject), open the
+                    // browser, capture the code, exchange it, and mint a durable
+                    // API key that is stored as an ordinary zai account.
+                    tokio::spawn(async move {
+                        let state = uuid::Uuid::new_v4().to_string();
+                        let port = mikmik_core::zai_oauth::CALLBACK_PORT;
+                        let listener =
+                            match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+                                Ok(l) => l,
+                                Err(e) => {
+                                    let _ = tx2
+                                        .send(DeviceAuthEvent::Error(format!(
+                                            "Z.AI callback server could not bind port {port}: {e}"
+                                        )))
+                                        .await;
+                                    return;
+                                }
+                            };
+                        let auth_url = mikmik_core::zai_oauth::authorize_url(&state);
+                        let _ = tx2
+                            .send(DeviceAuthEvent::GotBrowserUrl { url: auth_url })
+                            .await;
+
+                        let code = match oauth_flow::run_callback_server(listener, &state).await {
+                            Ok(code) => code,
+                            Err(e) => {
+                                let _ = tx2
+                                    .send(DeviceAuthEvent::Error(format!(
+                                        "Z.AI callback failed: {e}"
+                                    )))
+                                    .await;
+                                return;
+                            }
+                        };
+
+                        match mikmik_core::zai_oauth::login(&code, &state).await {
+                            Ok(login) => {
+                                let event =
+                                    match mikmik_core::zai_oauth::save_zai_key_and_register(&login)
+                                    {
+                                        Ok(account_id) => DeviceAuthEvent::TokenReceivedFor {
+                                            token: "connected".to_string(),
+                                            account_id,
+                                        },
+                                        Err(e) => DeviceAuthEvent::Error(format!(
+                                            "Z.AI login could not be saved: {e}"
+                                        )),
+                                    };
+                                let _ = tx2.send(event).await;
+                            }
+                            Err(e) => {
+                                let _ = tx2.send(DeviceAuthEvent::Error(e)).await;
+                            }
+                        }
+                    });
+                }
                 "cursor" => {
                     let tx2 = device_auth_tx.clone();
                     // Cursor PKCE poll flow: open the browser sign-in page, then

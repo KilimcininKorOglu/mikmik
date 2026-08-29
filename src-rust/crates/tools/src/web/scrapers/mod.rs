@@ -20,6 +20,7 @@ pub mod crates_io;
 pub mod crossref;
 pub mod devto;
 pub mod discogs;
+pub mod discourse;
 pub mod dockerhub;
 pub mod fdroid;
 pub mod flathub;
@@ -133,6 +134,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(searchcode::SearchcodeHandler),
         Box::new(lemmy::LemmyHandler),
         Box::new(mastodon::MastodonHandler),
+        Box::new(discourse::DiscourseHandler),
         Box::new(cisa_kev::CisaKevHandler),
         Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),

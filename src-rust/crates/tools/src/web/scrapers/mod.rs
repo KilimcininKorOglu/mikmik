@@ -60,6 +60,7 @@ pub mod tldr;
 pub mod util;
 pub mod vimeo;
 pub mod vscode_marketplace;
+pub mod wikidata;
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -121,6 +122,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(discogs::DiscogsHandler),
         Box::new(sec_edgar::SecEdgarHandler),
         Box::new(opencorporates::OpenCorporatesHandler),
+        Box::new(wikidata::WikidataHandler),
         Box::new(spdx::SpdxHandler),
         Box::new(cheatsh::CheatShHandler),
         Box::new(tldr::TldrHandler),

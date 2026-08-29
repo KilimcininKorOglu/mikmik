@@ -7,6 +7,7 @@ use super::google_antigravity::GoogleAntigravityUsage;
 use super::kimi::KimiUsage;
 use super::minimax_code::MinimaxCodeUsage;
 use super::provider::UsageProvider;
+use super::xai_oauth::XaiOAuthUsage;
 use super::zai::ZaiUsage;
 use std::sync::Arc;
 
@@ -21,6 +22,7 @@ pub fn usage_provider_for(provider_id: &str) -> Option<Arc<dyn UsageProvider>> {
         "google-antigravity" => Some(Arc::new(GoogleAntigravityUsage)),
         "minimax-code" => Some(Arc::new(MinimaxCodeUsage)),
         "kimi-code" => Some(Arc::new(KimiUsage)),
+        "xai-oauth" => Some(Arc::new(XaiOAuthUsage)),
         _ => None,
     }
 }

@@ -14,6 +14,7 @@ mod minimax_code;
 mod provider;
 mod registry;
 mod types;
+mod xai_oauth;
 mod zai;
 
 pub use provider::{UsageFetchContext, UsageProvider};

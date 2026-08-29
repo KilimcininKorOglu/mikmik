@@ -245,17 +245,29 @@ impl OpenAiProvider {
                     text_parts.push(text.as_str());
                 }
                 ContentBlock::ToolUse {
-                    id, name, input, ..
+                    id,
+                    name,
+                    input,
+                    thought_signature,
                 } => {
                     let args = serde_json::to_string(input).unwrap_or_default();
-                    tool_calls.push(json!({
+                    let mut call = json!({
                         "id": id,
                         "type": "function",
                         "function": {
                             "name": name,
                             "arguments": args
                         }
-                    }));
+                    });
+                    // Replay Gemini's thought signature so a 3.x tool-call
+                    // continuation is accepted. Absent for every other provider,
+                    // so a real OpenAI request is byte-for-byte unchanged.
+                    if let Some(sig) = thought_signature {
+                        call["extra_content"] = json!({
+                            "google": { "thought_signature": sig }
+                        });
+                    }
+                    tool_calls.push(call);
                 }
                 // Thinking is dropped — not supported by OpenAI.
                 _ => {}
@@ -655,6 +667,45 @@ mod tests {
             wire[1].get("content").and_then(|v| v.as_str()),
             Some("done")
         );
+    }
+
+    #[test]
+    fn a_thought_signature_is_replayed_as_extra_content() {
+        let messages = vec![Message::assistant_blocks(vec![ContentBlock::ToolUse {
+            id: "call_1".to_string(),
+            name: "read".to_string(),
+            input: json!({ "path": "README.md" }),
+            thought_signature: Some("sig-1".to_string()),
+        }])];
+
+        let wire = OpenAiProvider::to_openai_messages(&messages, None);
+        let call = &wire[0]
+            .get("tool_calls")
+            .and_then(|v| v.as_array())
+            .unwrap()[0];
+        assert_eq!(
+            call.pointer("/extra_content/google/thought_signature")
+                .and_then(|v| v.as_str()),
+            Some("sig-1")
+        );
+    }
+
+    #[test]
+    fn a_tool_call_without_a_signature_carries_no_extra_content() {
+        // A real OpenAI request must not gain a non-standard field.
+        let messages = vec![Message::assistant_blocks(vec![ContentBlock::ToolUse {
+            id: "call_1".to_string(),
+            name: "read".to_string(),
+            input: json!({ "path": "README.md" }),
+            thought_signature: None,
+        }])];
+
+        let wire = OpenAiProvider::to_openai_messages(&messages, None);
+        let call = &wire[0]
+            .get("tool_calls")
+            .and_then(|v| v.as_array())
+            .unwrap()[0];
+        assert!(call.get("extra_content").is_none());
     }
 
     #[test]

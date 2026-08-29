@@ -29,6 +29,7 @@ pub mod hackage;
 pub mod hackernews;
 pub mod hex;
 pub mod huggingface;
+pub mod jetbrains_marketplace;
 pub mod lemmy;
 pub mod lobsters;
 pub mod mastodon;
@@ -104,6 +105,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(open_vsx::OpenVsxHandler),
         Box::new(chocolatey::ChocolateyHandler),
         Box::new(vscode_marketplace::VscodeMarketplaceHandler),
+        Box::new(jetbrains_marketplace::JetBrainsMarketplaceHandler),
         Box::new(brew::BrewHandler),
         Box::new(snapcraft::SnapcraftHandler),
         Box::new(hackernews::HackerNewsHandler),

@@ -36,6 +36,7 @@ pub mod nuget;
 pub mod nvd;
 pub mod ollama;
 pub mod open_vsx;
+pub mod opencorporates;
 pub mod openlibrary;
 pub mod orcid;
 pub mod osv;
@@ -117,6 +118,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(musicbrainz::MusicBrainzHandler),
         Box::new(discogs::DiscogsHandler),
         Box::new(sec_edgar::SecEdgarHandler),
+        Box::new(opencorporates::OpenCorporatesHandler),
         Box::new(spdx::SpdxHandler),
         Box::new(cheatsh::CheatShHandler),
         Box::new(tldr::TldrHandler),

@@ -16,6 +16,7 @@ pub mod crossref;
 pub mod devto;
 pub mod discogs;
 pub mod dockerhub;
+pub mod hackage;
 pub mod hackernews;
 pub mod hex;
 pub mod huggingface;
@@ -60,6 +61,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(crates_io::CratesIoHandler),
         Box::new(rubygems::RubyGemsHandler),
         Box::new(hex::HexHandler),
+        Box::new(hackage::HackageHandler),
         Box::new(maven::MavenHandler),
         Box::new(nuget::NuGetHandler),
         Box::new(packagist::PackagistHandler),

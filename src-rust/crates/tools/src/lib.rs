@@ -1059,6 +1059,37 @@ pub fn find_tool(name: &str) -> Option<Box<dyn Tool>> {
     all_tools().into_iter().find(|t| t.name() == name)
 }
 
+/// The tool names an agent `access` level allows, or `None` for unrestricted.
+///
+/// `full` returns `None` (every tool). `read-only` returns the names of tools
+/// whose [`PermissionLevel`] is `ReadOnly`/`None`, plus `AskUserQuestion`.
+/// `search-only` returns a fixed search set. This is the canonical
+/// access-to-allowlist mapping; a sub-agent spawn feeds the result to its tool
+/// allowlist and the `/agent` session persona filters its tools the same way.
+pub fn access_tool_names(access: &str) -> Option<Vec<String>> {
+    match access {
+        "read-only" => Some(
+            all_tools()
+                .into_iter()
+                .filter(|t| {
+                    matches!(
+                        t.permission_level(),
+                        PermissionLevel::ReadOnly | PermissionLevel::None
+                    ) || t.name() == "AskUserQuestion"
+                })
+                .map(|t| t.name().to_string())
+                .collect(),
+        ),
+        "search-only" => Some(
+            ["Grep", "Glob", "Read", "WebSearch", "WebFetch"]
+                .iter()
+                .map(|n| n.to_string())
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1432,6 +1463,35 @@ mod tests {
     #[test]
     fn test_file_write_permission_level() {
         assert_eq!(FileWriteTool.permission_level(), PermissionLevel::Write);
+    }
+
+    // ---- access_tool_names --------------------------------------------------
+
+    #[test]
+    fn full_access_is_unrestricted() {
+        assert!(access_tool_names("full").is_none());
+        assert!(access_tool_names("anything-else").is_none());
+    }
+
+    #[test]
+    fn read_only_access_excludes_write_and_execute_tools() {
+        let names = access_tool_names("read-only").expect("read-only allowlist");
+        assert!(names.iter().any(|n| n == "Read"));
+        assert!(names.iter().any(|n| n == "AskUserQuestion"));
+        // A write tool and an execute tool are both filtered out.
+        assert!(!names.iter().any(|n| n == "Write"));
+        assert!(!names.iter().any(|n| n == "Bash"));
+    }
+
+    #[test]
+    fn search_only_access_is_the_fixed_search_set() {
+        let names = access_tool_names("search-only").expect("search-only allowlist");
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(
+            sorted,
+            vec!["Glob", "Grep", "Read", "WebFetch", "WebSearch"]
+        );
     }
 
     // ---- Tool to_definition tests ------------------------------------------

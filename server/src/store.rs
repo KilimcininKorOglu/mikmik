@@ -73,7 +73,30 @@ impl Store {
         for statements in SCHEMA {
             conn.execute_batch(statements)?;
         }
+        Self::migrate(conn)?;
         Ok(())
+    }
+
+    /// Bring a database opened from an earlier build up to the current schema.
+    ///
+    /// `CREATE TABLE IF NOT EXISTS` cannot add a column to a table that already
+    /// exists, so a column added after a table shipped needs an `ALTER`. A
+    /// fresh database already has the column from its `CREATE TABLE`, so the
+    /// `ALTER` fails there with a duplicate-column error that is expected and
+    /// swallowed; any other failure is real and returned.
+    fn migrate(conn: &Connection) -> anyhow::Result<()> {
+        match conn.execute(
+            "ALTER TABLE providers ADD COLUMN kind TEXT NOT NULL DEFAULT 'llm'",
+            [],
+        ) {
+            Ok(_) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+                if message.contains("duplicate column name") =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// Run `f` against the connection.
@@ -111,6 +134,44 @@ mod tests {
         let path = dir.path().join("server.sqlite");
         let _first = Store::open(&path).expect("first open");
         let _second = Store::open(&path).expect("second open");
+    }
+
+    #[test]
+    fn a_providers_table_without_kind_gains_it_with_an_llm_default() {
+        // A database from a build before `kind` shipped: the table exists
+        // without the column, so `CREATE TABLE IF NOT EXISTS` is a no-op and
+        // only the migration adds it. The existing row must read back as `llm`.
+        let conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE providers (
+                 id TEXT PRIMARY KEY,
+                 name TEXT NOT NULL UNIQUE,
+                 protocol TEXT,
+                 api_base TEXT,
+                 api_key TEXT NOT NULL,
+                 models_json TEXT NOT NULL DEFAULT '[]',
+                 created_at INTEGER NOT NULL
+             );",
+        )
+        .expect("old table");
+        conn.execute(
+            "INSERT INTO providers (id, name, api_key, created_at) VALUES ('1', 'openai', 'x', 0)",
+            [],
+        )
+        .expect("row");
+
+        Store::migrate(&conn).expect("migration adds the column");
+
+        let kind: String = conn
+            .query_row("SELECT kind FROM providers WHERE id = '1'", [], |row| {
+                row.get(0)
+            })
+            .expect("kind readable");
+        assert_eq!(kind, "llm");
+
+        // Running it again over a table that already has the column is a no-op,
+        // not an error, so opening an up-to-date database keeps working.
+        Store::migrate(&conn).expect("second run is a no-op");
     }
 
     #[test]

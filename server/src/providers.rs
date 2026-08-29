@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS providers (
     api_base    TEXT,
     api_key     TEXT NOT NULL,
     models_json TEXT NOT NULL DEFAULT '[]',
+    kind        TEXT NOT NULL DEFAULT 'llm',
     created_at  INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS user_groups (
@@ -44,6 +45,22 @@ CREATE INDEX IF NOT EXISTS idx_assignments_subject
     ON assignments(subject_kind, subject_id);
 ";
 
+/// The default provider kind, for an input or a row written before `kind`
+/// existed: an ordinary model vendor.
+pub const KIND_LLM: &str = "llm";
+/// A web-search provider. Its key is handed to the client's search tool, not
+/// used as a model account.
+pub const KIND_WEB_SEARCH: &str = "web_search";
+
+fn default_kind() -> String {
+    KIND_LLM.to_string()
+}
+
+/// Whether `kind` is one this server hands out.
+fn is_valid_kind(kind: &str) -> bool {
+    kind == KIND_LLM || kind == KIND_WEB_SEARCH
+}
+
 /// What an administrator writes when defining a provider.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProviderInput {
@@ -55,6 +72,10 @@ pub struct ProviderInput {
     pub api_key: String,
     #[serde(default)]
     pub models: Vec<String>,
+    /// `llm` (default) or `web_search`. An older admin client omits it, so it
+    /// defaults to an ordinary model vendor.
+    #[serde(default = "default_kind")]
+    pub kind: String,
 }
 
 /// A provider as the administration surface sees it: no key.
@@ -65,6 +86,7 @@ pub struct ProviderSummary {
     pub protocol: Option<String>,
     pub api_base: Option<String>,
     pub models: Vec<String>,
+    pub kind: String,
 }
 
 /// A provider as an entitled user receives it: with the key.
@@ -75,6 +97,8 @@ pub struct EntitledProvider {
     pub api_base: Option<String>,
     pub api_key: String,
     pub models: Vec<String>,
+    #[serde(default = "default_kind")]
+    pub kind: String,
 }
 
 /// A group.
@@ -125,14 +149,17 @@ pub fn create_provider(
     if input.api_key.trim().is_empty() {
         anyhow::bail!("a provider needs an api key");
     }
+    if !is_valid_kind(&input.kind) {
+        anyhow::bail!("a provider kind is either '{KIND_LLM}' or '{KIND_WEB_SEARCH}'");
+    }
     let id = new_id()?;
     let sealed = sealer.seal(&input.api_key)?;
     let models = serde_json::to_string(&input.models)?;
 
     store.with(|conn| {
         conn.execute(
-            "INSERT INTO providers (id, name, protocol, api_base, api_key, models_json, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO providers (id, name, protocol, api_base, api_key, models_json, kind, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 id,
                 name,
@@ -140,6 +167,7 @@ pub fn create_provider(
                 input.api_base,
                 sealed,
                 models,
+                input.kind,
                 now_secs()
             ],
         )
@@ -151,7 +179,7 @@ pub fn create_provider(
 pub fn list_providers(store: &Store) -> anyhow::Result<Vec<ProviderSummary>> {
     store.with(|conn| {
         let mut statement = conn.prepare(
-            "SELECT id, name, protocol, api_base, models_json FROM providers ORDER BY name",
+            "SELECT id, name, protocol, api_base, models_json, kind FROM providers ORDER BY name",
         )?;
         let rows = statement
             .query_map([], |row| {
@@ -162,6 +190,7 @@ pub fn list_providers(store: &Store) -> anyhow::Result<Vec<ProviderSummary>> {
                     protocol: row.get(2)?,
                     api_base: row.get(3)?,
                     models: serde_json::from_str(&models).unwrap_or_default(),
+                    kind: row.get(5)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -313,11 +342,12 @@ pub fn entitled_for_user(
         api_base: Option<String>,
         sealed_key: String,
         models_json: String,
+        kind: String,
     }
 
     let rows: Vec<SealedRow> = store.with(|conn| {
         let mut statement = conn.prepare(
-            "SELECT DISTINCT p.name, p.protocol, p.api_base, p.api_key, p.models_json
+            "SELECT DISTINCT p.name, p.protocol, p.api_base, p.api_key, p.models_json, p.kind
              FROM providers p
              JOIN assignments a ON a.provider_id = p.id
              WHERE (a.subject_kind = 'user' AND a.subject_id = ?1)
@@ -333,6 +363,7 @@ pub fn entitled_for_user(
                     api_base: row.get(2)?,
                     sealed_key: row.get(3)?,
                     models_json: row.get(4)?,
+                    kind: row.get(5)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -347,6 +378,7 @@ pub fn entitled_for_user(
             api_base: row.api_base,
             api_key: sealer.open(&row.sealed_key)?,
             models: serde_json::from_str(&row.models_json).unwrap_or_default(),
+            kind: row.kind,
         });
     }
     Ok(out)
@@ -409,6 +441,7 @@ mod tests {
             api_base: Some("https://api.example".to_string()),
             api_key: format!("key-for-{name}"),
             models: vec!["gpt-x".to_string()],
+            kind: KIND_LLM.to_string(),
         }
     }
 
@@ -434,6 +467,44 @@ mod tests {
         assert!(!json.contains("key-for-openai"), "a key leaked: {json}");
         assert_eq!(listed[0].name, "openai");
         assert_eq!(listed[0].models, vec!["gpt-x"]);
+    }
+
+    #[test]
+    fn a_web_search_kind_reaches_the_user_intact() {
+        let (store, sealer) = fixture();
+        let user = accounts::create_user(&store, "ayse@firma.com", PASSWORD, false).expect("user");
+        let mut input = provider("tavily");
+        input.kind = KIND_WEB_SEARCH.to_string();
+        let id = create_provider(&store, &sealer, &input).expect("created");
+        assign(&store, &id, SubjectKind::User, &user).expect("assigned");
+
+        let entitled = entitled_for_user(&store, &sealer, &user).expect("query");
+        assert_eq!(entitled.len(), 1);
+        assert_eq!(entitled[0].kind, KIND_WEB_SEARCH);
+        assert_eq!(entitled[0].api_key, "key-for-tavily");
+    }
+
+    #[test]
+    fn a_provider_defined_without_a_kind_is_an_llm() {
+        // An older admin client omits the field. The row must still be created
+        // and read back as an ordinary model vendor.
+        let (store, sealer) = fixture();
+        let json = r#"{"name":"openai","api_key":"sk-1"}"#;
+        let input: ProviderInput = serde_json::from_str(json).expect("parses");
+        assert_eq!(input.kind, KIND_LLM);
+
+        let id = create_provider(&store, &sealer, &input).expect("created");
+        let listed = list_providers(&store).expect("listed");
+        let row = listed.iter().find(|p| p.id == id).expect("row");
+        assert_eq!(row.kind, KIND_LLM);
+    }
+
+    #[test]
+    fn a_provider_kind_outside_the_set_is_refused() {
+        let (store, sealer) = fixture();
+        let mut input = provider("openai");
+        input.kind = "database".to_string();
+        assert!(create_provider(&store, &sealer, &input).is_err());
     }
 
     #[test]

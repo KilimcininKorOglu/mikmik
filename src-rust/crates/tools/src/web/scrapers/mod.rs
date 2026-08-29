@@ -56,6 +56,7 @@ pub mod spdx;
 pub mod terraform;
 pub mod tldr;
 pub mod util;
+pub mod vimeo;
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -110,6 +111,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(pubmed::PubMedHandler),
         Box::new(biorxiv::BiorxivHandler),
         Box::new(bluesky::BlueskyHandler),
+        Box::new(vimeo::VimeoHandler),
         Box::new(musicbrainz::MusicBrainzHandler),
         Box::new(discogs::DiscogsHandler),
         Box::new(sec_edgar::SecEdgarHandler),

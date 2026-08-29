@@ -66,6 +66,15 @@ yours to take the company's.
 An entitlement the organisation withdraws takes its key with it on the next
 pull.
 
+The company can also hand out a web-search key. It is not an account: it has no
+`settings.json` entry and does not show in `mikmik accounts`. Its key lands in
+`auth.json` under the provider id the search tool reads (`tavily`, `brave`,
+`exa`, ...), marked with the server it came from. `/workspace` lists these
+under "Company search providers", `mikmik workspace logout` drops them, and a
+withdrawn one goes on the next pull, the same as any other entitlement. A
+search key you entered yourself, or one in an environment variable, is left
+alone; the company's key never overwrites it.
+
 ### The policy
 
 The organisation's policy is the last settings layer, so whatever it names,

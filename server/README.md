@@ -80,7 +80,7 @@ use it. A user reaches a provider either because it is assigned to them
 directly or because it is assigned to a group they belong to.
 
 ```
-POST   /api/v1/admin/providers          define a provider (name, protocol, api_base, api_key, models)
+POST   /api/v1/admin/providers          define a provider (name, kind, protocol, api_base, api_key, models)
 GET    /api/v1/admin/providers          list them, with who they are assigned to, never with a key
 DELETE /api/v1/admin/providers/{id}     remove one; its assignments go with it
 POST   /api/v1/admin/groups             create a group
@@ -111,6 +111,24 @@ Provider keys are stored encrypted with XChaCha20-Poly1305 under a key derived
 from `MIKMIK_SERVER_SECRET`. The server can read them, which is what lets it
 hand them out; what this buys is that a copied `.sqlite` file is not enough on
 its own. Changing the secret makes every stored key unreadable.
+
+### Web-search providers
+
+A provider has a `kind`, `llm` by default. Set it to `web_search` to hand out a
+web-search key instead of a model account. The client writes an `llm` provider
+into its `settings.json` as an account; it writes a `web_search` provider's key
+into `auth.json` alone, under the provider id its search tool reads.
+
+For a `web_search` provider the `name` is the search provider id (`tavily`,
+`brave`, `exa`, `jina`, `kagi`, `firecrawl`, `tinyfish`, `parallel`,
+`synthetic`), and only `name` and `api_key` matter; `protocol`, `api_base` and
+`models` are ignored. Omitting `kind` keeps the old behaviour, so a provider
+defined before this field existed is still an `llm` account.
+
+Do not define a `web_search` provider for `anthropic`, `gemini`/`google`,
+`xai`, `zai`, `kimi` or `codex`. Their search uses the same account as the LLM
+provider, so hand those out as ordinary `llm` providers and the search works
+from the one key.
 
 ## Settings policy
 

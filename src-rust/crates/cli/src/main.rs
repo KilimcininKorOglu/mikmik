@@ -4128,13 +4128,14 @@ async fn run_interactive(
         }
 
         // Feed the next segment of a slash-command chain once the session is
-        // idle. Gating on not-streaming and no open modal lets the chain wait
-        // for a segment's turn or overlay to finish; the empty-prompt check
-        // keeps it from overwriting text the user is typing.
+        // idle. `any_modal_open` is the same gate a plain Enter submit uses, so
+        // the chain waits for a segment's overlay, picker or turn to finish
+        // before the next runs; the empty-prompt check keeps it from
+        // overwriting text the user is typing.
         if !command_chain.is_empty()
             && !app.pending_auto_submit
             && !app.is_streaming
-            && !app.blocking_modal_open()
+            && !app.any_modal_open()
             && app.prompt_input.text.is_empty()
         {
             if let Some(next) = command_chain.pop_front() {

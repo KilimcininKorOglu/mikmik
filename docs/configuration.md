@@ -82,6 +82,7 @@ than dropping them silently.
   "showMessageTimestamps": false,
   "showToolDuration": false,
   "showTurnDuration": false,
+  "showUsageLimits": false,
   "advisorModel": "claude-opus-4-6",
   "advisorMode": "tool",
   "memoryModel": "claude-haiku-4-5",
@@ -182,6 +183,7 @@ spawn sets explicitly still wins.
 | `showMessageTimestamps` | boolean | false   | Print the local time beneath each message. Times are stored in UTC and converted using the machine's time zone. Messages from an earlier day also show their date (`13 Aug 14:32`). |
 | `showToolDuration`      | boolean | false   | Print how long each tool call took, at the bottom right of the tool block. Reads `240ms`, `1.4s` or `2m05s`. |
 | `showTurnDuration`      | boolean | false   | Keep a line under the input box after a turn finishes, reading `✻ Worked for 2m 5s`. It stays until the next message is sent. |
+| `showUsageLimits`       | boolean | false   | Show the active account's quota/rate limits in the timeline sidebar: one row per meter (a 5-hour window, a 7-day window, and so on) with its used percent. Turning it on lets the app fetch the account's usage from its own endpoint, at most once a minute while the panel is open. |
 
 Toggle them from the TUI with `/config` → **Show message timestamps**, **Show
 tool duration** and **Show turn duration**. All three take effect on the next

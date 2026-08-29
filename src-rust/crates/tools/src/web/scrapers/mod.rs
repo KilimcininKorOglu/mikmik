@@ -23,6 +23,7 @@ pub mod discogs;
 pub mod discourse;
 pub mod dockerhub;
 pub mod docs_rs;
+pub mod dom;
 pub mod fdroid;
 pub mod firefox_addons;
 pub mod flathub;
@@ -74,6 +75,7 @@ pub mod vimeo;
 pub mod vscode_marketplace;
 pub mod w3c;
 pub mod wikidata;
+pub mod wikipedia;
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -151,6 +153,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(rfc::RfcHandler),
         Box::new(mdn::MdnHandler),
         Box::new(w3c::W3cHandler),
+        Box::new(wikipedia::WikipediaHandler),
         Box::new(searchcode::SearchcodeHandler),
         Box::new(lemmy::LemmyHandler),
         Box::new(mastodon::MastodonHandler),

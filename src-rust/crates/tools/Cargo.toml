@@ -22,6 +22,7 @@ tracing = { workspace = true }
 async-trait = { workspace = true }
 regex = { workspace = true }
 htmd = { workspace = true }
+scraper = { workspace = true }
 flate2 = { workspace = true }
 glob = { workspace = true }
 walkdir = { workspace = true }

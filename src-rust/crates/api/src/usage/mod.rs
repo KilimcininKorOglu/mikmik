@@ -7,6 +7,7 @@
 
 mod anthropic;
 mod codex;
+mod github_copilot;
 mod provider;
 mod registry;
 mod types;

@@ -7,6 +7,7 @@
 
 mod anthropic;
 mod codex;
+mod cursor;
 mod github_copilot;
 mod google_antigravity;
 mod kimi;

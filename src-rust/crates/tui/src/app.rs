@@ -408,6 +408,13 @@ fn provider_picker_items() -> Vec<SelectItem> {
             badge: None,
         },
         SelectItem {
+            id: "zai-oauth".into(),
+            title: "Z.AI".into(),
+            description: "GLM Coding Plan (browser login)".into(),
+            category: "Popular".into(),
+            badge: None,
+        },
+        SelectItem {
             id: "opencode-go".into(),
             title: "OpenCode Go".into(),
             description: "$10/mo flat-rate · Kimi · DeepSeek · GLM · MiniMax".into(),
@@ -5034,6 +5041,7 @@ impl App {
                             || provider_id == "google-antigravity"
                             || provider_id == "devin"
                             || provider_id == "cursor"
+                            || provider_id == "zai-oauth"
                         {
                             // These OAuth flows persist their own tokens (via
                             // save_*_tokens_and_register); switch to the account
@@ -5490,6 +5498,13 @@ impl App {
                                 self.device_auth_dialog
                                     .open("gitlab-duo".into(), "GitLab Duo".into());
                                 self.device_auth_pending = Some("gitlab-duo".to_string());
+                            }
+                            "zai-oauth" => {
+                                // Z.AI: OAuth loopback (browser) flow that mints a
+                                // durable API key and persists it as a zai account.
+                                self.device_auth_dialog
+                                    .open("zai-oauth".into(), "Z.AI".into());
+                                self.device_auth_pending = Some("zai-oauth".to_string());
                             }
                             // AWS Bedrock — accept a bearer token via key input dialog
                             "amazon-bedrock" => {

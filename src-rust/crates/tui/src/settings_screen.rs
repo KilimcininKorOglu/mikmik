@@ -537,6 +537,12 @@ impl SettingsScreen {
                         saved.max_tokens = Some(n);
                     }
                 }
+                "max_concurrent_subagents" => {
+                    if let Ok(n) = value.parse::<u32>() {
+                        config.max_concurrent_subagents = Some(n);
+                        saved.max_concurrent_subagents = Some(n);
+                    }
+                }
                 "output_style" => {
                     let style = if value.is_empty() {
                         None
@@ -691,6 +697,19 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             value: screen.settings_snapshot.config.max_tokens
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| mikmik_core::constants::DEFAULT_MAX_TOKENS.to_string()),
+        },
+        SettingsEntry {
+            key: "max_concurrent_subagents".into(),
+            label: "Max concurrent sub-agents".into(),
+            description: "How many sub-agents may run at once in a session (0 = unlimited)."
+                .into(),
+            kind: SettingKind::Number,
+            value: screen
+                .settings_snapshot
+                .config
+                .max_concurrent_subagents
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "0".to_string()),
         },
         SettingsEntry {
             key: "auto_compact".into(),

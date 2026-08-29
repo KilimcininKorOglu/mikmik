@@ -580,9 +580,11 @@ their server name (`myserver_toolname`).
 | `includeIgnoredFiles` | boolean         | false   | Let `Glob` and `Grep` search files that `.gitignore` and `.ignore` exclude. Off by default, so a build directory does not drown the results.                                     |
 | `searxngUrl`          | string \| unset | unset   | Base address of the SearXNG instance `WebSearch` prefers, for example `http://localhost:8080`. Overrides the `SEARXNG_URL` environment variable. Unset means no instance.        |
 | `webSearchFallback`   | boolean         | false   | Let `WebSearch` continue with Brave or DuckDuckGo when the SearXNG instance is unreachable. Off by default, so a query aimed at a private instance stays there.                  |
+| `maxConcurrentSubagents` | integer      | 0       | Ceiling on how many sub-agents (the `Agent` tool) run at once in a session. `0` means unlimited, so the default changes nothing. A higher value queues extra spawns, including a foreground batch fan-out, at the limit. Managed-orchestrator mode uses its own `max_concurrent_executors` instead. |
 
-All three are editable from `/settings`. Turning **SearXNG** on there prompts for
+All four are editable from `/settings`. Turning **SearXNG** on there prompts for
 the address and writes it to `searxngUrl`; turning it off clears the key.
+**Max concurrent sub-agents** is a plain number, `0` for unlimited.
 
 ### Interface
 

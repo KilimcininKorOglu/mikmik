@@ -126,24 +126,36 @@ pub(crate) fn subagent_context(
 /// `SessionRegistry` and a limit set in one session must not throttle another.
 static EXECUTOR_SLOTS: Lazy<DashMap<String, Arc<Semaphore>>> = Lazy::new(DashMap::new);
 
-/// A permit to run as one of a session's concurrent executors.
+/// This session's ceiling on concurrently running sub-agents, or `None` when
+/// unbounded.
 ///
-/// `None` unless managed mode is on: with no configured limit there is nothing
-/// to bound, and taking a permit would only add a wait to today's behaviour.
+/// Managed-orchestrator mode carries its own `max_concurrent_executors` and
+/// takes precedence, because that limit is the orchestration's explicit intent.
+/// Otherwise the general `maxConcurrentSubagents` setting applies, where `0`
+/// (and unset) means unlimited so the default changes nothing.
+fn resolve_subagent_limit(ctx: &ToolContext) -> Option<usize> {
+    if let Some(managed) = ctx.managed_agent_config.as_ref().filter(|m| m.enabled) {
+        return Some(managed.max_concurrent_executors.max(1) as usize);
+    }
+    match ctx.config.max_concurrent_subagents.unwrap_or(0) {
+        0 => None,
+        n => Some(n as usize),
+    }
+}
+
+/// A permit to run as one of a session's concurrent sub-agents.
 ///
-/// Only an agent that runs *beside* its parent takes one. A foreground
-/// sub-agent blocks its parent for its whole run, so it is already alone.
+/// `None` when no limit is configured: with nothing to bound, taking a permit
+/// would only add a wait to today's behaviour. Both a foreground and a
+/// background sub-agent take one, so a batch fan-out queues at the ceiling.
 /// Nothing that holds a permit can ask for a second one, because a sub-agent
 /// receives no tool that spawns agents; that is what makes this deadlock-free.
 ///
-/// The limit is read when a session first spawns an executor. Changing
-/// `concurrent` afterwards reaches the next session, not this one.
+/// The limit is read when a session first spawns a sub-agent. Changing it
+/// afterwards reaches the next session, not this one, because the semaphore is
+/// sized once per session id.
 async fn executor_permit(ctx: &ToolContext) -> Option<OwnedSemaphorePermit> {
-    let limit = ctx
-        .managed_agent_config
-        .as_ref()
-        .filter(|managed| managed.enabled)
-        .map(|managed| managed.max_concurrent_executors.max(1) as usize)?;
+    let limit = resolve_subagent_limit(ctx)?;
 
     // Clone the Arc out from under the shard guard, then await on it: never
     // hold a DashMap lock across an `.await`.
@@ -763,6 +775,10 @@ impl Tool for AgentTool {
         let _ = mikmik_core::tasks::global_registry().register(task);
 
         let sub_ctx = subagent_context(ctx, sub_address);
+        // Wait for a concurrency slot before running, so a foreground batch
+        // fan-out queues at the ceiling instead of every task running at once.
+        // Held across the run and released when it returns.
+        let _slot = executor_permit(&sub_ctx).await;
         let outcome = run_query_loop(
             client.as_ref(),
             &mut messages,
@@ -1124,6 +1140,59 @@ pub(crate) mod tests {
             matches!(after, Ok(Some(_))),
             "the slot was not released when the first finished"
         );
+    }
+
+    /// A non-managed context whose session caps concurrent sub-agents at `limit`.
+    fn general_context(session: &str, limit: u32) -> ToolContext {
+        let mut ctx = parent_context();
+        ctx.session_id = session.to_string();
+        ctx.managed_agent_config = None;
+        ctx.config.max_concurrent_subagents = Some(limit);
+        ctx
+    }
+
+    #[test]
+    fn the_limit_prefers_managed_then_the_general_setting_then_unlimited() {
+        // Managed mode wins with its own executor ceiling.
+        assert_eq!(
+            resolve_subagent_limit(&managed_context("s1", true, 2)),
+            Some(2)
+        );
+        // Managed disabled falls through to the general setting.
+        let mut ctx = managed_context("s2", false, 2);
+        ctx.config.max_concurrent_subagents = Some(3);
+        assert_eq!(resolve_subagent_limit(&ctx), Some(3));
+        // The general setting bounds a plain session.
+        assert_eq!(resolve_subagent_limit(&general_context("s3", 4)), Some(4));
+        // Unset and zero both mean unlimited.
+        assert_eq!(resolve_subagent_limit(&general_context("s4", 0)), None);
+        assert_eq!(resolve_subagent_limit(&parent_context()), None);
+    }
+
+    #[tokio::test]
+    async fn a_general_limit_queues_a_second_subagent() {
+        // The limit now bounds an ordinary session, not only managed mode.
+        let ctx = general_context("sess-general-one", 1);
+        let first = executor_permit(&ctx).await;
+        assert!(first.is_some(), "the first sub-agent took a slot");
+
+        let waited =
+            tokio::time::timeout(std::time::Duration::from_millis(50), executor_permit(&ctx)).await;
+        assert!(waited.is_err(), "a second sub-agent ran past the limit");
+
+        drop(first);
+        let after =
+            tokio::time::timeout(std::time::Duration::from_millis(500), executor_permit(&ctx))
+                .await;
+        assert!(matches!(after, Ok(Some(_))), "the slot was not released");
+    }
+
+    #[tokio::test]
+    async fn an_unlimited_session_takes_no_permit() {
+        // Zero means unlimited, so a permit is never taken and nothing waits.
+        let ctx = general_context("sess-unlimited", 0);
+        assert!(executor_permit(&ctx).await.is_none());
+        assert!(executor_permit(&ctx).await.is_none());
     }
 
     #[tokio::test]

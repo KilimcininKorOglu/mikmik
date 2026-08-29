@@ -4101,6 +4101,7 @@ async fn run_interactive(
         // welcome screen's recent activity blank.
         app.pump_session_list();
         app.pump_recent_sessions();
+        app.pump_usage();
         app.pump_stats();
         app.pump_branch_list();
         app.pump_voice_events();

@@ -2015,6 +2015,13 @@ pub struct App {
     pub rate_limit_5h_pct: Option<f32>,
     /// Rate limit info — 7-day window usage percentage (0–100).
     pub rate_limit_7day_pct: Option<f32>,
+    /// The active account's latest usage/quota snapshot, shown in the timeline
+    /// sidebar when `show_usage_limits` is on. `None` until a fetch lands.
+    pub usage_report: Option<mikmik_api::usage::UsageReport>,
+    /// Receiver for a background usage fetch; `Some` while one is in flight.
+    pub usage_rx: Option<tokio::sync::mpsc::Receiver<mikmik_api::usage::UsageReport>>,
+    /// When the last usage fetch was started, to rate-limit refreshes.
+    pub usage_last_fetch: Option<std::time::Instant>,
     /// Active worktree name (if in a worktree).
     pub worktree_name: Option<String>,
     /// Active worktree branch (if in a worktree).
@@ -2445,6 +2452,9 @@ impl App {
             context_used_tokens: 0,
             rate_limit_5h_pct: None,
             rate_limit_7day_pct: None,
+            usage_report: None,
+            usage_rx: None,
+            usage_last_fetch: None,
             worktree_name: None,
             worktree_branch: None,
             agent_type_badge: None,
@@ -9223,6 +9233,74 @@ impl App {
     // per iteration of whichever loop is driving the terminal, or the flag is
     // set and nothing ever answers it.
 
+    /// Drain a landed usage fetch and, when due, start the next one.
+    ///
+    /// Runs every event-loop tick. It only fetches while `show_usage_limits` is
+    /// on and the active provider has a usage reporter, and no more than once a
+    /// minute, so an idle session with the panel open makes at most one request
+    /// per minute.
+    pub fn pump_usage(&mut self) {
+        if let Some(rx) = self.usage_rx.as_mut() {
+            match rx.try_recv() {
+                Ok(report) => {
+                    self.apply_usage_report(report);
+                    self.usage_rx = None;
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    self.usage_rx = None;
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
+            }
+        }
+
+        if !self.settings_screen.show_usage_limits || self.usage_rx.is_some() {
+            return;
+        }
+        let due = self
+            .usage_last_fetch
+            .map(|t| t.elapsed() >= std::time::Duration::from_secs(60))
+            .unwrap_or(true);
+        if !due {
+            return;
+        }
+        let Some(provider_id) = self.config.provider.clone() else {
+            return;
+        };
+        let Some(reporter) = mikmik_api::usage::usage_provider_for(&provider_id) else {
+            return;
+        };
+        self.usage_last_fetch = Some(std::time::Instant::now());
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        self.usage_rx = Some(rx);
+        tokio::spawn(async move {
+            let token = mikmik_core::AuthStore::load().api_key_for(&provider_id);
+            let ctx = mikmik_api::usage::UsageFetchContext {
+                client: reqwest::Client::new(),
+                access_token: token.clone(),
+                api_key: token,
+                base_url: None,
+            };
+            if let Ok(Some(report)) = reporter.fetch_usage(&ctx).await {
+                let _ = tx.send(report).await;
+            }
+        });
+    }
+
+    /// Stores a usage report and derives the footer's 5h/7d percentages from it.
+    fn apply_usage_report(&mut self, report: mikmik_api::usage::UsageReport) {
+        let pct_for = |id: &str| -> Option<f32> {
+            report
+                .limits
+                .iter()
+                .find(|l| l.id == id)
+                .and_then(|l| l.amount.used_fraction)
+                .map(|f| (f * 100.0) as f32)
+        };
+        self.rate_limit_5h_pct = pct_for("5h").or(self.rate_limit_5h_pct);
+        self.rate_limit_7day_pct = pct_for("7d").or(self.rate_limit_7day_pct);
+        self.usage_report = Some(report);
+    }
+
     /// Load the session list for the browser, and take the result when it lands.
     ///
     /// `/session`, `/resume` and `/rename` all open the browser and set
@@ -10626,6 +10704,28 @@ mod tests {
             app.restart_requested,
             "restart must flag a relaunch so main does not just quit"
         );
+    }
+
+    #[test]
+    fn a_usage_report_fills_the_footer_percentages() {
+        use mikmik_api::usage::{UsageAmount, UsageLimit, UsageReport};
+        let limit = |id: &str, frac: f64| UsageLimit {
+            id: id.into(),
+            label: id.into(),
+            scope: None,
+            window: None,
+            amount: UsageAmount::from_used_fraction(frac),
+            status: None,
+            notes: Vec::new(),
+        };
+        let mut app = make_app();
+        app.apply_usage_report(UsageReport::new(
+            "anthropic",
+            vec![limit("5h", 0.42), limit("7d", 0.9)],
+        ));
+        assert_eq!(app.rate_limit_5h_pct, Some(42.0));
+        assert_eq!(app.rate_limit_7day_pct, Some(90.0));
+        assert!(app.usage_report.is_some());
     }
 
     #[test]

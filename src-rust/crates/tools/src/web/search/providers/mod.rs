@@ -17,6 +17,7 @@ pub mod searxng;
 pub mod synthetic;
 pub mod tavily;
 pub mod tinyfish;
+pub mod xai;
 pub mod zai;
 
 use crate::web::search::types::SearchProviderId;

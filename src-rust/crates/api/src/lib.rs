@@ -1480,6 +1480,9 @@ enum PartialBlock {
         id: String,
         name: String,
         json_buf: String,
+        /// An opaque provider signature (Gemini's `thoughtSignature`) captured
+        /// from the block's `ContentBlockStart`, kept so replay can send it back.
+        thought_signature: Option<String>,
     },
     Thinking {
         thinking_buf: String,
@@ -1521,10 +1524,16 @@ impl StreamAccumulator {
             } => {
                 let partial = match content_block {
                     ContentBlock::Text { text } => PartialBlock::Text(text.clone()),
-                    ContentBlock::ToolUse { id, name, .. } => PartialBlock::ToolUse {
+                    ContentBlock::ToolUse {
+                        id,
+                        name,
+                        thought_signature,
+                        ..
+                    } => PartialBlock::ToolUse {
                         id: id.clone(),
                         name: name.clone(),
                         json_buf: String::new(),
+                        thought_signature: thought_signature.clone(),
                     },
                     ContentBlock::Thinking {
                         thinking,
@@ -1571,14 +1580,19 @@ impl StreamAccumulator {
                 if let Some(partial) = self.partials.remove(index) {
                     let block = match partial {
                         PartialBlock::Text(text) => ContentBlock::Text { text },
-                        PartialBlock::ToolUse { id, name, json_buf } => {
+                        PartialBlock::ToolUse {
+                            id,
+                            name,
+                            json_buf,
+                            thought_signature,
+                        } => {
                             let input = serde_json::from_str(&json_buf)
                                 .unwrap_or(Value::Object(Default::default()));
                             ContentBlock::ToolUse {
                                 id,
                                 name,
                                 input,
-                                thought_signature: None,
+                                thought_signature,
                             }
                         }
                         PartialBlock::Thinking {
@@ -1717,6 +1731,46 @@ mod tests {
         let (msg, _usage, stop) = acc.finish();
         assert_eq!(msg.get_text(), Some("Hello world!"));
         assert_eq!(stop.as_deref(), Some("end_turn"));
+    }
+
+    #[test]
+    fn a_tool_use_block_keeps_its_thought_signature_through_the_accumulator() {
+        // The signature rides on the opening ContentBlockStart. The accumulator
+        // must carry it to the finished block, or a Gemini replay loses it.
+        let mut acc = StreamAccumulator::new();
+        acc.on_event(&streaming::AnthropicStreamEvent::ContentBlockStart {
+            index: 1,
+            content_block: ContentBlock::ToolUse {
+                id: "call_1".into(),
+                name: "read".into(),
+                input: serde_json::json!({}),
+                thought_signature: Some("sig-1".into()),
+            },
+        });
+        acc.on_event(&streaming::AnthropicStreamEvent::ContentBlockDelta {
+            index: 1,
+            delta: streaming::ContentDelta::InputJsonDelta {
+                partial_json: r#"{"path":"README.md"}"#.into(),
+            },
+        });
+        acc.on_event(&streaming::AnthropicStreamEvent::ContentBlockStop { index: 1 });
+
+        let (msg, _usage, _stop) = acc.finish();
+        let blocks = match msg.content {
+            MessageContent::Blocks(b) => b,
+            MessageContent::Text(_) => panic!("expected blocks"),
+        };
+        match blocks.first() {
+            Some(ContentBlock::ToolUse {
+                input,
+                thought_signature,
+                ..
+            }) => {
+                assert_eq!(thought_signature.as_deref(), Some("sig-1"));
+                assert_eq!(input["path"], "README.md");
+            }
+            other => panic!("expected a tool use, got {other:?}"),
+        }
     }
 
     // -----------------------------------------------------------------------

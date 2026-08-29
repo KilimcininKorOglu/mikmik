@@ -64,15 +64,17 @@ fn status(
     settings: &mikmik_core::config::Settings,
     workspace: &mikmik_core::config::WorkspaceSettings,
 ) -> CommandResult {
-    use mikmik_core::workspace_server::{policy, providers};
+    use mikmik_core::workspace_server::{policy, providers, search_providers};
 
-    let signed_in = mikmik_core::AuthStore::load()
-        .workspace_session(workspace.base())
-        .is_some();
+    let auth = mikmik_core::AuthStore::load();
+    let signed_in = auth.workspace_session(workspace.base()).is_some();
 
     // The company's providers listed apart from the user's own. Editing one of
     // these is wasted work: the next pull overwrites it.
     let managed = providers::managed_by(settings, workspace.base());
+    // Search providers live in auth.json alone, not settings.providers, so they
+    // are listed from there.
+    let search = search_providers::managed(&auth, workspace.base());
     let own: Vec<&String> = settings
         .providers
         .iter()
@@ -99,6 +101,7 @@ fn status(
          Session:  {session}\n\n\
          Company providers: {managed}\n\
          (these are refreshed from the server; editing one is undone by the next pull)\n\
+         Company search providers: {search}\n\
          Your own providers: {own}\n\n\
          Policy decides: {policy_line}\n\
          (whatever the policy names, this machine cannot override)\n\n\
@@ -112,6 +115,7 @@ fn status(
             "none — run `mikmik workspace login`"
         },
         managed = list(&managed),
+        search = list(&search),
         own = list_refs(&own),
         on_change = on_off(workspace.sync.on_change),
         at_startup = on_off(workspace.sync.pull_at_startup),

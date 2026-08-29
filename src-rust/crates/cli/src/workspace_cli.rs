@@ -8,7 +8,8 @@ use std::io::{IsTerminal, Read};
 
 use mikmik_core::config::{ProjectRunnables, Settings, WorkspaceSettings};
 use mikmik_core::workspace_server::{
-    policy, providers, session, sync, BackupWrite, WorkspaceClient, WorkspaceError,
+    policy, providers, search_providers, session, sync, BackupWrite, WorkspaceClient,
+    WorkspaceError,
 };
 use mikmik_core::AuthStore;
 
@@ -228,7 +229,9 @@ async fn logout() -> anyhow::Result<()> {
 
     let mut auth = AuthStore::load();
     auth.clear_workspace_session();
-    let gone = providers::forget(&mut settings, &mut auth, workspace.base());
+    let mut gone = providers::forget(&mut settings, &mut auth, workspace.base());
+    gone.extend(search_providers::forget(&mut auth, workspace.base()));
+    gone.sort();
     settings.save_sync()?;
     auth.save();
     policy::clear_cache();
@@ -272,6 +275,16 @@ async fn status() -> anyhow::Result<()> {
             "no providers assigned".to_string()
         } else {
             managed.join(", ")
+        }
+    );
+
+    let search = search_providers::managed(&AuthStore::load(), workspace.base());
+    println!(
+        "Search:  {}",
+        if search.is_empty() {
+            "no search providers assigned".to_string()
+        } else {
+            search.join(", ")
         }
     );
 

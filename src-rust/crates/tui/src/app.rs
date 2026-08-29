@@ -109,6 +109,7 @@ const PROMPT_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("quit", "Exit MikMik"),
     ("refresh", "Clear saved provider auth and model caches"),
     ("rename", "Rename this session"),
+    ("restart", "Restart MikMik, keeping the session"),
     ("resume", "Resume a previous session"),
     ("review", "Review changes (git diff)"),
     ("rewind", "Rewind to an earlier turn"),
@@ -158,7 +159,7 @@ fn help_command_category(name: &str) -> &'static str {
         }
         "agent" | "agents" | "memory" | "plugin" | "survey" => "Tools",
         "session" | "resume" | "rename" | "fork" | "clear" | "new" | "move" | "compact"
-        | "quit" | "exit" => "Session",
+        | "quit" | "exit" | "restart" => "Session",
         _ => "Commands",
     }
 }
@@ -1581,6 +1582,9 @@ pub struct App {
     /// Randomly chosen thinking verb shown next to the spinner while streaming.
     pub spinner_verb: Option<String>,
     pub should_exit: bool,
+    /// Set with `should_exit` by `/restart`: the CLI relaunches itself with the
+    /// original flags and `--resume <session_id>` instead of exiting.
+    pub restart_requested: bool,
     pub show_help: bool,
     /// Whether the terminal speaks the kitty keyboard protocol (progressive
     /// keyboard enhancement is active). When `false` — e.g. Windows conhost /
@@ -2227,6 +2231,7 @@ impl App {
             status_message: None,
             spinner_verb: None,
             should_exit: false,
+            restart_requested: false,
             show_help: false,
             kitty_keyboard_active: true,
             tool_use_blocks: Vec::new(),
@@ -3650,6 +3655,11 @@ impl App {
             }
             "exit" | "quit" => {
                 self.should_exit = true;
+                true
+            }
+            "restart" => {
+                self.should_exit = true;
+                self.restart_requested = true;
                 true
             }
             "vim" => {
@@ -10600,6 +10610,22 @@ mod tests {
         assert!(!app.should_exit);
         assert!(app.intercept_slash_command("exit"));
         assert!(app.should_exit);
+    }
+
+    #[test]
+    fn test_restart_slash_command_sets_restart_flag() {
+        let mut app = make_app();
+        assert!(!app.should_exit);
+        assert!(!app.restart_requested);
+        assert!(app.intercept_slash_command("restart"));
+        assert!(
+            app.should_exit,
+            "restart must break the event loop like exit"
+        );
+        assert!(
+            app.restart_requested,
+            "restart must flag a relaunch so main does not just quit"
+        );
     }
 
     #[test]

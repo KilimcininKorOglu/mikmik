@@ -352,6 +352,18 @@ fn decode_numeric_entity(entity: &str) -> Option<char> {
     char::from_u32(code)
 }
 
+/// Format a duration as `M:SS`, or `H:MM:SS` once it reaches an hour.
+pub fn format_media_duration(total_seconds: u64) -> String {
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let secs = total_seconds % 60;
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{secs:02}")
+    } else {
+        format!("{minutes}:{secs:02}")
+    }
+}
+
 /// Format a byte count as `B`/`KB`/`MB`/`GB` (1024-based, one decimal above 1K).
 pub fn format_bytes(bytes: u64) -> String {
     const KB: f64 = 1024.0;
@@ -460,6 +472,13 @@ mod tests {
             "5 &unknown; & plain"
         );
         assert_eq!(decode_html_entities("no entity here"), "no entity here");
+    }
+
+    #[test]
+    fn media_duration_switches_to_hours() {
+        assert_eq!(format_media_duration(185), "3:05");
+        assert_eq!(format_media_duration(3661), "1:01:01");
+        assert_eq!(format_media_duration(0), "0:00");
     }
 
     #[test]

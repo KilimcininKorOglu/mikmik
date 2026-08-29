@@ -21,6 +21,7 @@ pub mod huggingface;
 pub mod lobsters;
 pub mod maven;
 pub mod metacpan;
+pub mod musicbrainz;
 pub mod npm;
 pub mod nuget;
 pub mod nvd;
@@ -75,6 +76,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(coingecko::CoinGeckoHandler),
         Box::new(semantic_scholar::SemanticScholarHandler),
         Box::new(crossref::CrossrefHandler),
+        Box::new(musicbrainz::MusicBrainzHandler),
         Box::new(cisa_kev::CisaKevHandler),
         Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),

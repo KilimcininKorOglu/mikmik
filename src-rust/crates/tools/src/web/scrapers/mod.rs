@@ -31,6 +31,7 @@ pub mod musicbrainz;
 pub mod npm;
 pub mod nuget;
 pub mod nvd;
+pub mod open_vsx;
 pub mod openlibrary;
 pub mod orcid;
 pub mod osv;
@@ -84,6 +85,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(artifacthub::ArtifactHubHandler),
         Box::new(repology::RepologyHandler),
         Box::new(fdroid::FdroidHandler),
+        Box::new(open_vsx::OpenVsxHandler),
         Box::new(brew::BrewHandler),
         Box::new(snapcraft::SnapcraftHandler),
         Box::new(hackernews::HackerNewsHandler),

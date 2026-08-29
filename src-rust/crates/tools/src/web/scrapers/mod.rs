@@ -22,6 +22,7 @@ pub mod devto;
 pub mod discogs;
 pub mod dockerhub;
 pub mod fdroid;
+pub mod flathub;
 pub mod hackage;
 pub mod hackernews;
 pub mod hex;
@@ -95,6 +96,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(artifacthub::ArtifactHubHandler),
         Box::new(repology::RepologyHandler),
         Box::new(fdroid::FdroidHandler),
+        Box::new(flathub::FlathubHandler),
         Box::new(open_vsx::OpenVsxHandler),
         Box::new(chocolatey::ChocolateyHandler),
         Box::new(vscode_marketplace::VscodeMarketplaceHandler),

@@ -34,6 +34,7 @@ pub mod orcid;
 pub mod osv;
 pub mod packagist;
 pub mod pub_dev;
+pub mod pubmed;
 pub mod pypi;
 pub mod rawg;
 pub mod reddit;
@@ -93,6 +94,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(semantic_scholar::SemanticScholarHandler),
         Box::new(crossref::CrossrefHandler),
         Box::new(orcid::OrcidHandler),
+        Box::new(pubmed::PubMedHandler),
         Box::new(musicbrainz::MusicBrainzHandler),
         Box::new(discogs::DiscogsHandler),
         Box::new(sec_edgar::SecEdgarHandler),

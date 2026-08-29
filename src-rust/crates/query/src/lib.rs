@@ -2018,6 +2018,10 @@ async fn run_query_loop_inner(
         // out early leaves nothing behind.
         let mut prose_interrupt = false;
         let mut advisor_interrupt: Vec<mikmik_core::advisor::AdvisorNote> = Vec::new();
+        // Set when the stream yields an `error` frame or the client's
+        // truncation sentinel. The accumulated data is then incomplete and MUST
+        // NOT assemble into a "completed" turn; retry it instead.
+        let mut stream_error: Option<String> = None;
         prose_watch.start_turn();
 
         let stream_stalled = loop {
@@ -2069,6 +2073,8 @@ async fn run_query_loop_inner(
                                         warn!(model = %effective_model, "API overloaded");
                                     }
                                     error!(error_type, message, "Stream error");
+                                    stream_error = Some(message.clone());
+                                    break false;
                                 }
                                 AnthropicStreamEvent::MessageStop => break false,
                                 _ => {}
@@ -2121,6 +2127,28 @@ async fn run_query_loop_inner(
             }
             turn -= 1; // don't count this stalled attempt
             continue;
+        }
+
+        // A stream error (an `error` frame or a truncated stream) means the
+        // accumulated turn is incomplete. Retry it if the budget allows,
+        // otherwise surface the failure rather than assemble a truncated turn.
+        if let Some(err) = stream_error {
+            if retries_left > 0 {
+                retries_left -= 1;
+                warn!(model = %effective_model, retries_left, error = %err, "Stream error — retrying turn");
+                if let Some(ref tx) = event_tx {
+                    let _ = tx.send(QueryEvent::Status(format!(
+                        "Stream error — retrying ({} left)…",
+                        retries_left + 1
+                    )));
+                }
+                turn -= 1;
+                continue;
+            }
+            error!(model = %effective_model, error = %err, "Stream error — retries exhausted; aborting turn");
+            return QueryOutcome::Error(ClaudeError::Api(format!(
+                "Anthropic stream error (model '{effective_model}'): {err}"
+            )));
         }
 
         let (mut assistant_msg, usage, stop_reason) = accumulator.finish();
@@ -4112,6 +4140,207 @@ mod tests {
 
         let recorded = recorded.lock().unwrap().clone();
         (outcome, recorded, messages)
+    }
+
+    /// A provider double whose first `truncate_first` streams begin then end
+    /// before `message_stop` (a truncated turn, surfaced as a `StreamError`),
+    /// and every stream after that is a clean text turn. `calls` counts every
+    /// stream request so a test can prove the retry count.
+    struct TruncatingProvider {
+        id: mikmik_core::provider_id::ProviderId,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        truncate_first: usize,
+    }
+
+    #[async_trait::async_trait]
+    impl mikmik_api::LlmProvider for TruncatingProvider {
+        fn id(&self) -> &mikmik_core::provider_id::ProviderId {
+            &self.id
+        }
+        fn name(&self) -> &str {
+            "truncating-mock"
+        }
+
+        async fn create_message(
+            &self,
+            _request: mikmik_api::ProviderRequest,
+        ) -> Result<mikmik_api::ProviderResponse, mikmik_api::ProviderError> {
+            unimplemented!("these tests only use create_message_stream")
+        }
+
+        async fn create_message_stream(
+            &self,
+            _request: mikmik_api::ProviderRequest,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures::Stream<
+                            Item = Result<mikmik_api::StreamEvent, mikmik_api::ProviderError>,
+                        > + Send,
+                >,
+            >,
+            mikmik_api::ProviderError,
+        > {
+            use mikmik_api::provider_types::StopReason;
+            use mikmik_api::StreamEvent;
+
+            let n = self.calls.fetch_add(1, AtomicOrdering::SeqCst);
+            let msg_id = uuid::Uuid::new_v4().to_string();
+            let events: Vec<Result<StreamEvent, mikmik_api::ProviderError>> =
+                if n < self.truncate_first {
+                    vec![
+                        Ok(StreamEvent::MessageStart {
+                            id: msg_id,
+                            model: "mock-model".to_string(),
+                            usage: UsageInfo::default(),
+                        }),
+                        Err(mikmik_api::ProviderError::StreamError {
+                            provider: self.id.clone(),
+                            message: "[stream_error] Anthropic stream ended before message_stop"
+                                .to_string(),
+                            partial_response: None,
+                        }),
+                    ]
+                } else {
+                    vec![
+                        Ok(StreamEvent::MessageStart {
+                            id: msg_id,
+                            model: "mock-model".to_string(),
+                            usage: UsageInfo::default(),
+                        }),
+                        Ok(StreamEvent::TextDelta {
+                            index: 0,
+                            text: "Recovered.".to_string(),
+                        }),
+                        Ok(StreamEvent::MessageDelta {
+                            stop_reason: Some(StopReason::EndTurn),
+                            usage: Some(UsageInfo::default()),
+                        }),
+                        Ok(StreamEvent::MessageStop),
+                    ]
+                };
+
+            Ok(Box::pin(futures::stream::iter(events)))
+        }
+
+        async fn health_check(
+            &self,
+        ) -> Result<mikmik_api::ProviderStatus, mikmik_api::ProviderError> {
+            Ok(mikmik_api::ProviderStatus::Healthy)
+        }
+
+        fn capabilities(&self) -> mikmik_api::ProviderCapabilities {
+            mikmik_api::ProviderCapabilities {
+                streaming: true,
+                tool_calling: false,
+                thinking: false,
+                image_input: false,
+                pdf_input: false,
+                audio_input: false,
+                video_input: false,
+                caching: false,
+                structured_output: false,
+                system_prompt_style: mikmik_api::SystemPromptStyle::TopLevel,
+            }
+        }
+    }
+
+    /// Drive `run_query_loop` against `provider` with no tools, from one user
+    /// message, and return the outcome.
+    async fn drive_loop_with_provider(
+        provider: Arc<dyn mikmik_api::LlmProvider>,
+        provider_id: &str,
+        max_turns: u32,
+    ) -> QueryOutcome {
+        let mut registry = mikmik_api::ProviderRegistry::new();
+        registry.register(provider);
+        let registry = Arc::new(registry);
+
+        let client = mikmik_api::AnthropicClient::new(mikmik_api::client::ClientConfig {
+            api_key: "test-key".to_string(),
+            ..Default::default()
+        })
+        .expect("build test client");
+
+        let mut ctx = deny_all_context();
+        ctx.session_id = "truncation-test".to_string();
+        ctx.config.provider = Some(provider_id.to_string());
+
+        let mut config = make_config(None, None);
+        config.model = "mock-model".to_string();
+        config.max_turns = max_turns;
+        config.provider_registry = Some(registry);
+
+        let cost = mikmik_core::cost::CostTracker::new();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let tools: Vec<Box<dyn Tool>> = vec![];
+        let mut messages = vec![Message::user("start")];
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            run_query_loop(
+                &client,
+                &mut messages,
+                &tools,
+                &ctx,
+                &config,
+                cost,
+                None,
+                cancel,
+                None,
+            ),
+        )
+        .await
+        .expect("loop must not hang")
+    }
+
+    /// A stream that ends before `message_stop` used to assemble a silent,
+    /// possibly empty, "completed" turn. It must retry within the budget and
+    /// recover instead.
+    #[tokio::test]
+    async fn a_truncated_provider_stream_retries_and_recovers() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = Arc::new(TruncatingProvider {
+            id: mikmik_core::provider_id::ProviderId::new("mockprov"),
+            calls: calls.clone(),
+            truncate_first: 2,
+        });
+
+        let outcome = drive_loop_with_provider(provider, "mockprov", 3).await;
+
+        assert!(
+            matches!(outcome, QueryOutcome::EndTurn { .. }),
+            "a truncation within budget must retry and recover, got {outcome:?}"
+        );
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            3,
+            "two truncations then a clean turn is three attempts"
+        );
+    }
+
+    /// A truncation that outlasts the retry budget must surface an error, never
+    /// a truncated turn.
+    #[tokio::test]
+    async fn a_persistent_truncation_aborts_after_retries() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = Arc::new(TruncatingProvider {
+            id: mikmik_core::provider_id::ProviderId::new("mockprov"),
+            calls: calls.clone(),
+            truncate_first: 99,
+        });
+
+        let outcome = drive_loop_with_provider(provider, "mockprov", 3).await;
+
+        assert!(
+            matches!(outcome, QueryOutcome::Error(_)),
+            "a truncation that outlasts the retry budget must surface an error, got {outcome:?}"
+        );
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            3,
+            "the initial attempt plus two retries"
+        );
     }
 
     /// A `PostModelTurn` hook with the given command, declared as the session's

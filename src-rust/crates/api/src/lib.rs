@@ -1244,6 +1244,11 @@ pub mod client {
             // network chunk boundary is never corrupted.
             let mut decoder = crate::SseByteDecoder::new();
             let mut byte_stream = resp.bytes_stream();
+            // A well-formed Anthropic stream always ends with `message_stop`. If
+            // the byte stream closes without it, the response was truncated
+            // mid-flight, so report an error the turn loop can retry instead of
+            // assembling a silent, possibly empty, "completed" turn.
+            let mut saw_message_stop = false;
 
             while let Some(chunk_result) = byte_stream.next().await {
                 let chunk =
@@ -1253,6 +1258,9 @@ pub mod client {
                     let line = line.trim_end_matches('\r');
                     if let Some(frame) = parser.feed_line(line) {
                         if let Some(event) = Self::frame_to_event(&frame.event, &frame.data) {
+                            if matches!(event, streaming::AnthropicStreamEvent::MessageStop) {
+                                saw_message_stop = true;
+                            }
                             handler.on_event(&event);
                             if tx.send(event).await.is_err() {
                                 // Receiver dropped – stop reading.
@@ -1261,6 +1269,12 @@ pub mod client {
                         }
                     }
                 }
+            }
+
+            if !saw_message_stop {
+                return Err(ClaudeError::Api(
+                    "Anthropic stream ended before message_stop".to_string(),
+                ));
             }
 
             Ok(())

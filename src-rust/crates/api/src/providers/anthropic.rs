@@ -292,6 +292,19 @@ impl LlmProvider for AnthropicProvider {
 
         let s = stream! {
             while let Some(anthropic_evt) = rx.recv().await {
+                // A stream error (an `error` frame, or the client's truncation
+                // sentinel) means the accumulated text and tool-call JSON are
+                // incomplete. Surface it as a `Err` so the turn loop retries
+                // instead of assembling a truncated turn, matching the Codex
+                // provider's premature-end handling.
+                if let AnthropicStreamEvent::Error { error_type, message } = &anthropic_evt {
+                    yield Err(ProviderError::StreamError {
+                        provider: provider_id.clone(),
+                        message: format!("[{error_type}] {message}"),
+                        partial_response: None,
+                    });
+                    return;
+                }
                 if let Some(unified_evt) = AnthropicProvider::map_stream_event(anthropic_evt) {
                     yield Ok(unified_evt);
                 }

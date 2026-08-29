@@ -114,6 +114,7 @@ async function loadProviders() {
   for (const provider of providers) {
     const row = document.createElement('tr');
     cell(row, provider.name);
+    cell(row, provider.kind || 'llm');
     cell(row, provider.protocol || '');
     cell(row, provider.api_base || '');
     const subjects = provider.assigned_users
@@ -357,6 +358,7 @@ document.addEventListener('DOMContentLoaded', () => {
         .filter((name) => name.length > 0);
       await call('POST', '/api/v1/admin/providers', {
         name: $('provider-name').value,
+        kind: $('provider-kind').value,
         protocol: $('provider-protocol').value || null,
         api_base: $('provider-base').value || null,
         api_key: $('provider-key').value,

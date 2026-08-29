@@ -36,6 +36,7 @@ pub mod lemmy;
 pub mod lobsters;
 pub mod mastodon;
 pub mod maven;
+pub mod mdn;
 pub mod metacpan;
 pub mod musicbrainz;
 pub mod npm;
@@ -141,6 +142,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(cheatsh::CheatShHandler),
         Box::new(tldr::TldrHandler),
         Box::new(rfc::RfcHandler),
+        Box::new(mdn::MdnHandler),
         Box::new(w3c::W3cHandler),
         Box::new(searchcode::SearchcodeHandler),
         Box::new(lemmy::LemmyHandler),

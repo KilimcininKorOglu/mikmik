@@ -3,6 +3,7 @@
 // Each implements the `SearchProvider` trait from the parent `provider`
 // module, mapping its native wire response onto a `SearchResponse`.
 
+pub mod anthropic;
 pub mod brave;
 pub mod duckduckgo;
 pub mod exa;

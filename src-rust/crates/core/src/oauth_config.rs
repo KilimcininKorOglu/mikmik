@@ -144,6 +144,24 @@ pub fn claude_code_billing_header(first_user_text: &str) -> String {
 pub const CLAUDE_CODE_SYSTEM_PROMPT_PREFIX: &str =
     "You are Claude Code, Anthropic's official CLI for Claude.";
 
+/// Stable per-install device id for the OAuth `metadata.user_id`:
+/// `sha256(user:home)` in hex. Deterministic across a machine so a request's
+/// attribution matches the streaming client for the same account.
+pub fn anthropic_device_id() -> String {
+    use sha2::{Digest, Sha256};
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_default();
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    let mut h = Sha256::new();
+    h.update(user.as_bytes());
+    h.update(b":");
+    h.update(home.as_bytes());
+    format!("{:x}", h.finalize())
+}
+
 // ---------------------------------------------------------------------------
 // OAuthConfig struct
 // ---------------------------------------------------------------------------

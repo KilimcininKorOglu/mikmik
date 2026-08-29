@@ -1051,20 +1051,7 @@ pub mod client {
             let body_str = if use_oauth {
                 let mut body_val = body.clone();
                 if let serde_json::Value::Object(map) = &mut body_val {
-                    let device_id = {
-                        use sha2::{Digest, Sha256};
-                        let user = std::env::var("USER")
-                            .or_else(|_| std::env::var("USERNAME"))
-                            .unwrap_or_default();
-                        let home = std::env::var("HOME")
-                            .or_else(|_| std::env::var("USERPROFILE"))
-                            .unwrap_or_default();
-                        let mut h = Sha256::new();
-                        h.update(user.as_bytes());
-                        h.update(b":");
-                        h.update(home.as_bytes());
-                        format!("{:x}", h.finalize())
-                    };
+                    let device_id = mikmik_core::oauth_config::anthropic_device_id();
                     let user_id = serde_json::json!({
                         "device_id": device_id,
                         "account_uuid": account_uuid,

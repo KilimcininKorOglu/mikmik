@@ -507,6 +507,108 @@ fn split_tool_names(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// Build the argument list for a `/restart` relaunch of this binary.
+///
+/// Keeps every configuration flag the user launched with, but drops the ones
+/// that pick which session to open (`--resume`, `-c`/`--continue`,
+/// `--session-id`), then appends `--resume <session_id>` so the relaunched
+/// process reopens the live session. The first item (argv[0]) is skipped
+/// because the caller execs `current_exe()`.
+///
+/// `/restart` only fires from the interactive TUI, and a launch with a
+/// positional prompt runs headless instead (`cli.prompt.is_some()` forces
+/// `is_headless`), so the argv here never carries a positional; every bare
+/// token is a flag value and is kept.
+///
+/// `args` is the process argv, typically `std::env::args_os()`.
+fn restart_argv(
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+    session_id: &str,
+) -> Vec<std::ffi::OsString> {
+    let mut out: Vec<std::ffi::OsString> = Vec::new();
+    let mut iter = args.into_iter().peekable();
+    // Skip argv[0]: the relaunch names the executable through current_exe().
+    iter.next();
+    while let Some(arg) = iter.next() {
+        match arg.to_str() {
+            // `--resume` takes an optional value: swallow a following token only
+            // when it is not another flag, matching clap's num_args(0..=1).
+            Some("--resume") => {
+                let next_is_value = iter
+                    .peek()
+                    .is_some_and(|next| !next.to_string_lossy().starts_with('-'));
+                if next_is_value {
+                    iter.next();
+                }
+            }
+            // `--session-id` takes a mandatory value: always drop both tokens.
+            Some("--session-id") => {
+                iter.next();
+            }
+            Some("-c") | Some("--continue") => {}
+            _ => out.push(arg),
+        }
+    }
+    out.push(std::ffi::OsString::from("--resume"));
+    out.push(std::ffi::OsString::from(session_id));
+    out
+}
+
+#[cfg(test)]
+mod restart_argv_tests {
+    use super::restart_argv;
+
+    fn run(tokens: &[&str], session_id: &str) -> Vec<String> {
+        let args = tokens.iter().map(std::ffi::OsString::from);
+        restart_argv(args, session_id)
+            .into_iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn keeps_configuration_flags() {
+        let out = run(&["mikmik", "--model", "gpt-x", "--yolo"], "sid");
+        assert_eq!(out, ["--model", "gpt-x", "--yolo", "--resume", "sid"]);
+    }
+
+    #[test]
+    fn appends_resume_and_drops_the_old_resume_with_its_id() {
+        let out = run(&["mikmik", "--resume", "old", "--model", "m"], "sid");
+        assert_eq!(out, ["--model", "m", "--resume", "sid"]);
+    }
+
+    #[test]
+    fn drops_continue_in_both_forms() {
+        assert_eq!(run(&["mikmik", "-c"], "sid"), ["--resume", "sid"]);
+        assert_eq!(run(&["mikmik", "--continue"], "sid"), ["--resume", "sid"]);
+    }
+
+    #[test]
+    fn drops_session_id_with_its_value() {
+        let out = run(&["mikmik", "--session-id", "foo", "--fast"], "sid");
+        assert_eq!(out, ["--fast", "--resume", "sid"]);
+    }
+
+    #[test]
+    fn keeps_a_space_separated_flag_value() {
+        // An interactive launch has no positional prompt (that forces headless),
+        // so a bare token can only be a flag value and must survive.
+        let out = run(&["mikmik", "--append-system-prompt", "be terse"], "sid");
+        assert_eq!(
+            out,
+            ["--append-system-prompt", "be terse", "--resume", "sid"]
+        );
+    }
+
+    #[test]
+    fn valueless_resume_at_the_end_does_not_swallow_a_following_flag() {
+        // `--resume` with no id, then another flag: the flag must survive.
+        let out = run(&["mikmik", "--resume", "--fast"], "sid");
+        assert_eq!(out, ["--fast", "--resume", "sid"]);
+    }
+}
+
 /// Tells the model that the tools it can see are not all the tools there are.
 ///
 /// Added only while `schemaDeferral` is on.
@@ -7694,6 +7796,27 @@ async fn run_interactive(
     .await;
 
     restore_terminal(&mut terminal)?;
+
+    // `/restart`: relaunch this binary with the original flags plus
+    // `--resume <session_id>`. The terminal is already restored and the
+    // SessionEnd hook has run, so the child inherits a clean terminal.
+    if app.restart_requested {
+        let args = restart_argv(std::env::args_os(), &app.session_id);
+        let exe = std::env::current_exe()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // exec() replaces this process image and only returns on failure.
+            let err = std::process::Command::new(&exe).args(&args).exec();
+            return Err(anyhow::anyhow!("restart exec failed: {err}"));
+        }
+        #[cfg(not(unix))]
+        {
+            std::process::Command::new(&exe).args(&args).spawn()?;
+            std::process::exit(0);
+        }
+    }
+
     Ok(())
 }
 

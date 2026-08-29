@@ -29,6 +29,7 @@ pub mod hex;
 pub mod huggingface;
 pub mod lemmy;
 pub mod lobsters;
+pub mod mastodon;
 pub mod maven;
 pub mod metacpan;
 pub mod musicbrainz;
@@ -131,6 +132,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(rfc::RfcHandler),
         Box::new(searchcode::SearchcodeHandler),
         Box::new(lemmy::LemmyHandler),
+        Box::new(mastodon::MastodonHandler),
         Box::new(cisa_kev::CisaKevHandler),
         Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),

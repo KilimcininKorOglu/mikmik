@@ -81,8 +81,10 @@ mikmik --agent plan --provider openai --model o3 "review this architecture"
 /agents delete <name>
 ```
 
-Definitions live in `.mikmik/agents/` and in `settings.json`. Agents with
-`visible: false` are left out of the listing.
+Definitions come from the built-in set, the `agents` map in `settings.json`,
+and markdown files in the agents folders (see [Custom Agent
+Definitions](#custom-agent-definitions)). Agents with `visible: false` are left
+out of the listing.
 
 ### What "Active now" shows
 
@@ -104,7 +106,50 @@ stream events back to the session.
 
 ## Custom Agent Definitions
 
-Define custom agents in `~/.config/mikmik/settings.json` under the `agents` key. Custom definitions override built-in agents of the same name.
+Define custom agents two ways: the `agents` key in a settings file, or a
+markdown file in an agents folder. Both override built-in agents of the same
+name.
+
+### Agents folders
+
+Drop a `<name>.md` file in any of these folders:
+
+| Folder                                     | Scope                              |
+|--------------------------------------------|------------------------------------|
+| `~/.claude/agents/`                        | Global, Claude Code compatibility  |
+| `~/.config/mikmik/agents/`                 | Global                             |
+| `.claude/agents/` (walking up from cwd)    | Project, Claude Code compatibility |
+| `.mikmik/agents/` (walking up from cwd)    | Project                           |
+
+A later source overrides an earlier one of the same name: a project
+`.mikmik/agents/` file wins over a `settings.json` entry, which wins over a
+built-in, and `.mikmik` wins over `.claude` at the same level.
+
+The file is optional `---` frontmatter plus a body. The frontmatter keys are the
+[AgentDefinition fields](#agentdefinition-fields) below; the body after the
+frontmatter is the agent's `prompt`. `name:` names the agent, falling back to
+the file stem. For Claude Code compatibility a `tools:` list is read too: when
+`access:` is absent, an all-search list infers `search-only`, and anything else
+stays `full`.
+
+```markdown
+---
+name: reviewer
+description: Senior code reviewer focused on correctness and security
+model: anthropic/claude-opus-4-6
+access: read-only
+max_turns: 30
+color: magenta
+---
+
+You are a senior software engineer performing code review. Focus on
+correctness, security vulnerabilities, performance issues, and maintainability.
+Be specific about problems and suggest concrete fixes.
+```
+
+### In settings.json
+
+Define custom agents in `~/.config/mikmik/settings.json` under the `agents` key.
 
 ```json
 {
@@ -170,6 +215,12 @@ Sub-agents are spawned by the model, with the `Agent` tool, not by a mode you
 switch on. Each one gets a fresh context, its own turn limit, and reports back a
 single result. `isolation: "worktree"` gives an agent its own git worktree, which
 is what stops two agents writing over each other.
+
+The `Agent` tool's `agent` parameter runs a named custom agent (a built-in, a
+`settings.json` entry, or a folder file) as the sub-agent: its prompt, model,
+`max_turns` and access-derived tool set become the sub-agent's defaults, and any
+field the spawn sets explicitly still wins. An unknown name is refused with the
+list of available agents.
 
 | Tool          | Purpose                                          |
 |---------------|--------------------------------------------------|

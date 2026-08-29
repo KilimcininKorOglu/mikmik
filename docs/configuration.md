@@ -139,6 +139,42 @@ then `skills.urls`. Each installed plugin's `skills/` directory is added to the
 search at startup. Run a skill by its name as a slash command, and list them
 all with `/skills`.
 
+### Agents
+
+An agent is a named persona: a system-prompt prefix, an optional model and
+turn budget, and a tool-access level. Three come built in (`build`, `plan`,
+`explore`). Define more in the `config.agents` map of a settings file, or drop
+a markdown file in an agents folder.
+
+An agent file is `<name>.md` with optional `---` frontmatter. The `name:` field
+names the agent (the file stem is the fallback); the body after the frontmatter
+is the agent's prompt. Recognised keys:
+
+| Key           | Description                                                                 |
+|---------------|-----------------------------------------------------------------------------|
+| `name`        | Agent name; falls back to the file stem.                                    |
+| `description` | One-line summary shown by `/agent`.                                         |
+| `model`       | Model override, e.g. `anthropic/claude-haiku-4-5`.                          |
+| `access`      | Tool access: `full`, `read-only`, or `search-only`.                        |
+| `max_turns`   | Turn budget for this agent.                                                 |
+| `temperature` | Sampling temperature override.                                              |
+| `color`       | Display colour.                                                             |
+| `visible`     | `false` hides the agent from `@agent` autocomplete.                        |
+| `tools`       | Claude Code compatibility: a comma-separated tool list. When `access` is absent, an all-search list infers `search-only`, anything else stays `full`. |
+
+Searched folders, lowest priority first: `~/.claude/agents/`,
+`<mikmik home>/agents/` (`~/.config/mikmik/agents/`), then `.claude/agents/`
+and `.mikmik/agents/` walking up from the working directory. A later source
+overrides an earlier one of the same name, so a project `.mikmik/agents/` file
+wins over a `settings.json` entry, which wins over a built-in. `.claude/agents/`
+files are read for Claude Code compatibility.
+
+Select an agent for the session with `/agent <name>` or the `--agent` flag; list
+them with `/agent`. The `Agent` tool also takes an `agent` parameter, so the
+model can spawn any named agent as a sub-agent: its prompt, model, `max_turns`
+and access-derived tool set become the sub-agent's defaults, and any field the
+spawn sets explicitly still wins.
+
 ### Transcript display
 
 | Key                     | Type    | Default | Description                                                                                                                                                                    |

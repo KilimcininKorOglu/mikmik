@@ -10,6 +10,7 @@ pub mod artifacthub;
 pub mod aur;
 pub mod biorxiv;
 pub mod brew;
+pub mod cheatsh;
 pub mod cisa_kev;
 pub mod clojars;
 pub mod coingecko;
@@ -46,6 +47,7 @@ pub mod semantic_scholar;
 pub mod snapcraft;
 pub mod spdx;
 pub mod terraform;
+pub mod tldr;
 pub mod util;
 
 use async_trait::async_trait;
@@ -101,6 +103,8 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(discogs::DiscogsHandler),
         Box::new(sec_edgar::SecEdgarHandler),
         Box::new(spdx::SpdxHandler),
+        Box::new(cheatsh::CheatShHandler),
+        Box::new(tldr::TldrHandler),
         Box::new(cisa_kev::CisaKevHandler),
         Box::new(nvd::NvdHandler),
         Box::new(osv::OsvHandler),

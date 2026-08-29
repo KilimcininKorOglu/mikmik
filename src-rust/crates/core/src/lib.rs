@@ -124,6 +124,9 @@ pub use types::{
 
 // Skill discovery: filesystem and git URL skill loading.
 pub mod skill_discovery;
+// Agent discovery: filesystem sub-agent definition loading.
+pub mod agent_discovery;
+pub use agent_discovery::{discover_agents, parse_agent_file, resolve_agents};
 pub use cost::CostTracker;
 pub use feature_flags::FeatureFlagManager;
 pub use history::ConversationSession;

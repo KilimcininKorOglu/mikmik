@@ -9665,6 +9665,8 @@ mod permission_mode_tests {
             "ExitPlanMode",
             "AskUserQuestion",
             "Do not plan when",
+            // An approved plan must be driven through the task tools.
+            "task list with TaskCreate",
         ] {
             assert!(
                 BASE_SYSTEM_PROMPT.contains(needle),

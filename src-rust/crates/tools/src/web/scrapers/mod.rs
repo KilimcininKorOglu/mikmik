@@ -59,6 +59,7 @@ pub mod terraform;
 pub mod tldr;
 pub mod util;
 pub mod vimeo;
+pub mod vscode_marketplace;
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -95,6 +96,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(fdroid::FdroidHandler),
         Box::new(open_vsx::OpenVsxHandler),
         Box::new(chocolatey::ChocolateyHandler),
+        Box::new(vscode_marketplace::VscodeMarketplaceHandler),
         Box::new(brew::BrewHandler),
         Box::new(snapcraft::SnapcraftHandler),
         Box::new(hackernews::HackerNewsHandler),

@@ -7,6 +7,7 @@
 // web-fetch path.
 
 pub mod artifacthub;
+pub mod arxiv;
 pub mod aur;
 pub mod biorxiv;
 pub mod bluesky;
@@ -139,6 +140,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(orcid::OrcidHandler),
         Box::new(pubmed::PubMedHandler),
         Box::new(biorxiv::BiorxivHandler),
+        Box::new(arxiv::ArxivHandler),
         Box::new(bluesky::BlueskyHandler),
         Box::new(vimeo::VimeoHandler),
         Box::new(spotify::SpotifyHandler),

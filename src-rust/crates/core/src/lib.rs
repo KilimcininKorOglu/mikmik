@@ -1667,6 +1667,17 @@ pub mod config {
             skip_serializing_if = "Option::is_none"
         )]
         pub advisor_immune_turns: Option<u32>,
+        /// How many sub-agents a session may run at once. `None` (unset) and `0`
+        /// both mean unlimited, so the default preserves today's behaviour; any
+        /// higher value caps concurrent `Agent` runs through a per-session
+        /// semaphore. Managed-orchestrator mode uses its own
+        /// `max_concurrent_executors` instead.
+        #[serde(
+            default,
+            rename = "maxConcurrentSubagents",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub max_concurrent_subagents: Option<u32>,
         /// Live copy of [`Settings::companion`], merged in by
         /// [`Settings::effective_config`] so `/buddy on` takes effect without a
         /// restart.
@@ -2344,6 +2355,14 @@ pub mod config {
             skip_serializing_if = "Option::is_none"
         )]
         pub advisor_immune_turns: Option<u32>,
+        /// Ceiling on concurrently running sub-agents in a session.
+        /// Mirrors [`Config::max_concurrent_subagents`].
+        #[serde(
+            default,
+            rename = "maxConcurrentSubagents",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub max_concurrent_subagents: Option<u32>,
         /// Active provider ID at the settings level (e.g. "anthropic", "openai").
         #[serde(default)]
         pub provider: Option<String>,
@@ -3667,6 +3686,9 @@ pub mod config {
             if config.advisor_immune_turns.is_none() {
                 config.advisor_immune_turns = self.advisor_immune_turns;
             }
+            if config.max_concurrent_subagents.is_none() {
+                config.max_concurrent_subagents = self.max_concurrent_subagents;
+            }
             // Same precedence again for the companion.
             if config.companion.is_none() {
                 config.companion = self.companion.clone();
@@ -4132,6 +4154,9 @@ pub mod config {
                 advisor_mode: base.config.advisor_mode,
                 advisor_sync_backlog: base.config.advisor_sync_backlog,
                 advisor_immune_turns: base.config.advisor_immune_turns,
+                // The user's own concurrency ceiling wins; a cloned repository
+                // must not raise how many sub-agents run on this machine.
+                max_concurrent_subagents: base.config.max_concurrent_subagents,
                 // SECURITY: same reasoning. This names a model that runs on
                 // its own after every turn, on the user's account. A
                 // repository does not choose it.
@@ -4397,6 +4422,7 @@ pub mod config {
                 advisor_mode: base.advisor_mode.clone(),
                 advisor_sync_backlog: base.advisor_sync_backlog,
                 advisor_immune_turns: base.advisor_immune_turns,
+                max_concurrent_subagents: base.max_concurrent_subagents,
                 memory_model: base.memory_model.clone(),
                 companion: over.companion.clone().or(base.companion.clone()),
                 reduce_motion: base.reduce_motion,
@@ -6141,6 +6167,30 @@ pub mod config {
             let config = settings.effective_config();
             assert_eq!(config.resolve_request_timeout_secs("ollama"), 3600);
             assert_eq!(config.resolve_request_timeout_secs("openai"), 1200);
+        }
+
+        #[test]
+        fn effective_config_carries_the_subagent_ceiling() {
+            let mut settings = Settings::default();
+            settings.max_concurrent_subagents = Some(3);
+            assert_eq!(
+                settings.effective_config().max_concurrent_subagents,
+                Some(3)
+            );
+            // Unset stays unlimited, so the default changes nothing.
+            assert_eq!(
+                Settings::default()
+                    .effective_config()
+                    .max_concurrent_subagents,
+                None
+            );
+        }
+
+        #[test]
+        fn max_concurrent_subagents_reads_its_camel_case_key() {
+            let settings: Settings =
+                serde_json::from_str(r#"{"maxConcurrentSubagents": 5}"#).expect("parse settings");
+            assert_eq!(settings.max_concurrent_subagents, Some(5));
         }
 
         #[test]

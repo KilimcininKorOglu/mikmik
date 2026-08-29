@@ -1023,6 +1023,12 @@ have seen the command and approved it; see [Per-project
 settings](#per-project-settings). The same applies to `formatter`,
 `lsp_servers` and `skills`.
 
+Hooks may also live in a folder instead of this key: any `*.json`/`*.jsonc`
+file in `~/.config/mikmik/hooks/` (user) or a project's `.mikmik/hooks/`
+carries the same event-to-entries shape and merges into the same map. Project
+folder hooks pass the same trust gate as project `settings.json` hooks; the
+user's own folder runs directly. See [Hooks](hooks#where-settings-hooks-come-from).
+
 ---
 
 ## Permission Modes

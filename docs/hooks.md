@@ -135,7 +135,16 @@ Fires when MikMik raises a notification.
 
 ### Where settings hooks come from
 
-A hook declared in a repository's `.mikmik/settings.json` runs commands from that repository. It is gated behind project trust: opening a cloned repo does not run its hooks until you approve them.
+Settings hooks reach the session from two places: the `hooks` key of a `settings.json`, and any `*.json`/`*.jsonc` file in a `hooks/` folder. A folder file carries the same shape as the `hooks` key, so you can lift the object out of `settings.json` into a file unchanged. A folder may hold several files; they merge, event by event.
+
+| Source                              | Scope   | Trust                                   |
+|-------------------------------------|---------|-----------------------------------------|
+| `hooks` in `~/.config/mikmik/settings.json` | user    | the user's own, runs directly           |
+| `~/.config/mikmik/hooks/*.json`     | user    | the user's own, runs directly           |
+| `hooks` in `<repo>/.mikmik/settings.json`   | project | gated behind project trust              |
+| `<repo>/.mikmik/hooks/*.json`       | project | gated behind project trust              |
+
+A hook declared in a repository (its `.mikmik/settings.json` or its `.mikmik/hooks/` folder) runs commands from that repository. It is gated behind project trust: opening a cloned repo does not run its hooks until you approve them, the approval shows each command verbatim, and changing a command asks again. The user's own global hooks run without a prompt. A project's `.mikmik/hooks/` folder is found even when the repository ships no `settings.json`.
 
 `--bare` clears the hook map entirely, so nothing runs.
 

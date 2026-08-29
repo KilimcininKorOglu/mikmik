@@ -11,6 +11,7 @@ pub mod aur;
 pub mod biorxiv;
 pub mod brew;
 pub mod cheatsh;
+pub mod chocolatey;
 pub mod cisa_kev;
 pub mod clojars;
 pub mod coingecko;
@@ -86,6 +87,7 @@ static HANDLERS: Lazy<Vec<Box<dyn SpecialHandler>>> = Lazy::new(|| {
         Box::new(repology::RepologyHandler),
         Box::new(fdroid::FdroidHandler),
         Box::new(open_vsx::OpenVsxHandler),
+        Box::new(chocolatey::ChocolateyHandler),
         Box::new(brew::BrewHandler),
         Box::new(snapcraft::SnapcraftHandler),
         Box::new(hackernews::HackerNewsHandler),

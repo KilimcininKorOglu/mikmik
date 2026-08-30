@@ -1117,25 +1117,30 @@ impl SlashCommand for InitCommand {
     }
 
     async fn execute(&self, _args: &str, ctx: &mut CommandContext) -> CommandResult {
+        // Hand the model a task rather than writing a fixed template: a useful
+        // AGENTS.md comes from reading the actual build commands, architecture
+        // and conventions, and an existing one has to be refreshed, not left as
+        // it was. `UserMessage` runs it as a turn so the model can explore and
+        // write the file itself.
         let path = ctx.working_dir.join("AGENTS.md");
-        if path.exists() {
-            return CommandResult::Message(format!(
-                "AGENTS.md already exists at {}",
-                path.display()
-            ));
-        }
-
-        let default_content = "# Project Instructions\n\n\
-            Add project-specific instructions and context here.\n\n\
-            ## Guidelines\n\n\
-            - Describe your project structure\n\
-            - Note any coding conventions\n\
-            - List important files and their purposes\n";
-
-        match tokio::fs::write(&path, default_content).await {
-            Ok(()) => CommandResult::Message(format!("Created AGENTS.md at {}", path.display())),
-            Err(e) => CommandResult::Error(format!("Failed to create AGENTS.md: {}", e)),
-        }
+        let prompt = if path.exists() {
+            "Review and update the AGENTS.md at the root of this project. Read the \
+             current file, then explore the codebase: the build, lint and test \
+             commands (including how to run a single test), the high-level \
+             architecture that spans several files, and the conventions a new \
+             contributor needs. Rewrite stale or wrong entries, add what is \
+             missing, and delete anything that is no longer true. Keep it concise \
+             and factual, with no generic or obvious advice. Write the result back \
+             to AGENTS.md."
+        } else {
+            "Analyse this codebase and create an AGENTS.md file at the project \
+             root. Cover the build, lint and test commands (including how to run a \
+             single test), the high-level architecture that spans several files, \
+             and any key conventions. Read the README and the build files first. \
+             Keep it concise and factual, with no generic or obvious advice, and \
+             do not list every file. Write it to AGENTS.md."
+        };
+        CommandResult::UserMessage(prompt.to_string())
     }
 }
 

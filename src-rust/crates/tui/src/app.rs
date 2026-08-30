@@ -3282,6 +3282,7 @@ impl App {
         // list; without it the turn would keep the tools plan mode withholds.
         self.agent_mode_changed = true;
         self.accent_color = accent_for_mode(Some("plan"));
+        self.timeline_plan_note("Entered plan mode");
     }
 
     /// Take the session back out of plan mode.
@@ -3293,6 +3294,7 @@ impl App {
     /// so a session that planned from bypass returns to bypass.
     pub fn leave_plan_mode(&mut self) {
         use mikmik_core::config::PermissionMode;
+        let was_planning = self.plan_mode;
         self.config.permission_mode = self
             .permission_mode_before_plan
             .take()
@@ -3301,6 +3303,9 @@ impl App {
         self.agent_mode = Some("build".to_string());
         self.agent_mode_changed = true;
         self.accent_color = accent_for_mode(Some("build"));
+        if was_planning {
+            self.timeline_plan_note("Left plan mode");
+        }
     }
 
     /// Cycle to the next agent mode: build → plan → build.
@@ -8708,6 +8713,35 @@ impl App {
         let input: serde_json::Value =
             serde_json::from_str(input_json).unwrap_or(serde_json::Value::Null);
         let normalized = tool_name.to_ascii_lowercase();
+
+        // A TodoWrite reads as its progress ("Todos (2/5)"), a Todo-kind row,
+        // rather than a raw tool call. `finish_tool` closes it under this id.
+        if matches!(normalized.as_str(), "todowrite" | "todo_write" | "todo") {
+            let todos = input.get("todos").and_then(|v| v.as_array());
+            let total = todos.map_or(0, Vec::len);
+            let done = todos.map_or(0, |todos| {
+                todos
+                    .iter()
+                    .filter(|todo| todo.get("status").and_then(|s| s.as_str()) == Some("completed"))
+                    .count()
+            });
+            let details = if input_json.trim().is_empty() {
+                String::new()
+            } else {
+                input_json.to_string()
+            };
+            let idx = self.timeline.add_running_todo(
+                tool_id,
+                format!("Todos ({done}/{total})"),
+                started_at_ms,
+                format!("{done}/{total} done"),
+                details,
+            );
+            self.follow_latest_timeline_row(idx);
+            self.publish_timeline_row(idx);
+            return;
+        }
+
         let action = crate::render::tool_running_label(&normalized, tool_name);
         let summary = crate::messages::extract_tool_summary(tool_name, &input);
         let title = if summary.is_empty() {
@@ -8827,6 +8861,25 @@ impl App {
         let idx =
             self.timeline
                 .add_status_note(id, title.to_string(), at_ms, status, preview, detail);
+        self.follow_latest_timeline_row(idx);
+        self.publish_timeline_row(idx);
+    }
+
+    /// Record a plan-mode transition on the timeline (entered / left).
+    fn timeline_plan_note(&mut self, title: &str) {
+        if !self.timeline_recording() {
+            return;
+        }
+        let at_ms = self.timeline_now_ms();
+        let id = self.next_timeline_id("plan");
+        let idx = self.timeline.add_plan_note(
+            id,
+            title.to_string(),
+            at_ms,
+            TimelineStatus::Done,
+            String::new(),
+            String::new(),
+        );
         self.follow_latest_timeline_row(idx);
         self.publish_timeline_row(idx);
     }

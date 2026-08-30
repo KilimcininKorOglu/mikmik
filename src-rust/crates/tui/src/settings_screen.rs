@@ -1135,7 +1135,7 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             key: "timeline_enabled".into(),
             label: "Execution timeline".into(),
             description:
-                "Record each tool call and turn, and offer the panel through /timeline and Ctrl+Shift+L."
+                "Record each tool call, turn, todo update, and plan-mode change, and offer the panel through /timeline and Ctrl+Shift+L."
                     .into(),
             kind: SettingKind::Bool,
             value: if screen.timeline_enabled {

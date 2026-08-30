@@ -29,6 +29,11 @@ pub enum TimelineKind {
     ToolCall,
     TurnSummary,
     Status,
+    /// A change to the session's todo list (a `TodoWrite` call), summarised as
+    /// its progress rather than shown as a raw tool call.
+    Todo,
+    /// A plan-mode transition (entered or left).
+    Plan,
 }
 
 /// One visible timeline row.
@@ -130,10 +135,50 @@ impl Timeline {
         detail_preview: impl Into<String>,
         expandable_details: impl Into<String>,
     ) -> usize {
+        self.push_running(
+            TimelineKind::ToolCall,
+            id,
+            title,
+            started_at_ms,
+            detail_preview,
+            expandable_details,
+        )
+    }
+
+    /// Start a todo-list row (a `TodoWrite`), closed later by `finish_tool`
+    /// under the same `id`, so it reads as its progress instead of a raw call.
+    pub fn add_running_todo(
+        &mut self,
+        id: impl Into<String>,
+        title: impl Into<String>,
+        started_at_ms: u64,
+        detail_preview: impl Into<String>,
+        expandable_details: impl Into<String>,
+    ) -> usize {
+        self.push_running(
+            TimelineKind::Todo,
+            id,
+            title,
+            started_at_ms,
+            detail_preview,
+            expandable_details,
+        )
+    }
+
+    /// Push a running row of `kind`; `finish_tool` closes it by `id`.
+    fn push_running(
+        &mut self,
+        kind: TimelineKind,
+        id: impl Into<String>,
+        title: impl Into<String>,
+        started_at_ms: u64,
+        detail_preview: impl Into<String>,
+        expandable_details: impl Into<String>,
+    ) -> usize {
         self.push_row(TimelineRow {
             id: id.into(),
             title: title.into(),
-            kind: TimelineKind::ToolCall,
+            kind,
             status: TimelineStatus::Running,
             started_at_ms,
             finished_at_ms: None,
@@ -206,10 +251,54 @@ impl Timeline {
         detail_preview: impl Into<String>,
         expandable_details: impl Into<String>,
     ) -> usize {
+        self.push_note(
+            TimelineKind::Status,
+            id,
+            title,
+            at_ms,
+            status,
+            detail_preview,
+            expandable_details,
+        )
+    }
+
+    /// Record a one-shot plan-mode transition (entered or left).
+    pub fn add_plan_note(
+        &mut self,
+        id: impl Into<String>,
+        title: impl Into<String>,
+        at_ms: u64,
+        status: TimelineStatus,
+        detail_preview: impl Into<String>,
+        expandable_details: impl Into<String>,
+    ) -> usize {
+        self.push_note(
+            TimelineKind::Plan,
+            id,
+            title,
+            at_ms,
+            status,
+            detail_preview,
+            expandable_details,
+        )
+    }
+
+    /// Push a completed one-shot row of `kind` (start and finish at `at_ms`).
+    #[allow(clippy::too_many_arguments)]
+    fn push_note(
+        &mut self,
+        kind: TimelineKind,
+        id: impl Into<String>,
+        title: impl Into<String>,
+        at_ms: u64,
+        status: TimelineStatus,
+        detail_preview: impl Into<String>,
+        expandable_details: impl Into<String>,
+    ) -> usize {
         self.push_row(TimelineRow {
             id: id.into(),
             title: title.into(),
-            kind: TimelineKind::Status,
+            kind,
             status,
             started_at_ms: at_ms,
             finished_at_ms: Some(at_ms),
@@ -407,6 +496,39 @@ mod tests {
         assert_eq!(row.status, TimelineStatus::Cancelled);
         assert_eq!(row.duration_ms(), Some(0));
         assert!(!row.has_expandable_details());
+    }
+
+    #[test]
+    fn a_todo_row_is_a_running_todo_that_finish_tool_closes() {
+        let mut timeline = Timeline::new(8);
+
+        timeline.add_running_todo("todo-1", "Todos (1/3)", 100, "1/3 done", "");
+        let row = &timeline.rows[0];
+        assert_eq!(row.kind, TimelineKind::Todo);
+        assert_eq!(row.status, TimelineStatus::Running);
+
+        // `finish_tool` is kind-agnostic and closes the todo under its id.
+        timeline.finish_tool("todo-1", 200, TimelineStatus::Done, "3/3 done", "");
+        let row = &timeline.rows[0];
+        assert_eq!(row.status, TimelineStatus::Done);
+        assert_eq!(row.duration_ms(), Some(100));
+    }
+
+    #[test]
+    fn a_plan_note_is_a_one_shot_plan_row() {
+        let mut timeline = Timeline::new(8);
+
+        timeline.add_plan_note(
+            "plan-1",
+            "Entered plan mode",
+            300,
+            TimelineStatus::Done,
+            "",
+            "",
+        );
+        let row = &timeline.rows[0];
+        assert_eq!(row.kind, TimelineKind::Plan);
+        assert_eq!(row.duration_ms(), Some(0));
     }
 
     fn note(timeline: &mut Timeline, id: &str) {

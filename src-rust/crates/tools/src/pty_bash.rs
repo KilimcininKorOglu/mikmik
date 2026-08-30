@@ -21,6 +21,7 @@ use crate::{session_shell_state, PermissionLevel, Tool, ToolContext, ToolResult}
 use async_trait::async_trait;
 use mikmik_core::bash_classifier::{classify_bash_command, BashRiskLevel};
 use mikmik_core::config::BashEngine;
+use mikmik_core::cost::CostTracker;
 use mikmik_core::tasks::{global_registry, BackgroundTask};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -584,12 +585,22 @@ fn truncate_output(
     exit_code: i32,
     command: &str,
     filter_enabled: bool,
+    cost_tracker: Option<&CostTracker>,
 ) -> ToolResult {
     // Compress noisy command output (make, terraform, ping, …) before the model
     // reads it. Runs upstream of the hard character cap below, which stays as a
     // backstop for output the filter left large or did not match.
     if filter_enabled {
+        let pre_len = output.len();
         output = crate::output_filter::filter_command_output(command, &output, exit_code);
+        if let Some(tracker) = cost_tracker {
+            // Estimate tokens saved as bytes-saved / 4, matching the filter's own
+            // token estimate. A filter that grew the output saves nothing.
+            let saved = pre_len.saturating_sub(output.len());
+            if saved > 0 {
+                tracker.add_filter_savings((saved / 4) as u64);
+            }
+        }
     }
 
     const MAX_OUTPUT_LEN: usize = 100_000;
@@ -796,6 +807,7 @@ async fn run_bash(params: BashInput, ctx: &ToolContext) -> ToolResult {
                     ran.exit_code,
                     &params.command,
                     ctx.config.effective_output_filter(),
+                    Some(ctx.cost_tracker.as_ref()),
                 )
             }
             Err(error) => {
@@ -854,6 +866,7 @@ async fn run_bash(params: BashInput, ctx: &ToolContext) -> ToolResult {
                 &params.command,
                 &shell_state_arc,
                 ctx.config.effective_output_filter(),
+                Some(ctx.cost_tracker.as_ref()),
             ),
             PtyOutcome::Failed(e) => ToolResult::error(format!("PTY execution failed: {}", e)),
             PtyOutcome::TimedOut => {
@@ -914,6 +927,7 @@ async fn run_in_client_terminal(
             command,
             shell_state,
             ctx.config.effective_output_filter(),
+            Some(ctx.cost_tracker.as_ref()),
         ),
         Some(Err(e)) => ToolResult::error(format!("The editor's terminal failed: {e}")),
         None => {
@@ -950,6 +964,7 @@ fn finish_run(
     command: &str,
     shell_state: &std::sync::Arc<parking_lot::Mutex<ShellState>>,
     filter_enabled: bool,
+    cost_tracker: Option<&CostTracker>,
 ) -> ToolResult {
     let cleaned = strip_ansi(raw_output);
     let all_lines: Vec<String> = cleaned.lines().map(|l| l.to_string()).collect();
@@ -986,7 +1001,7 @@ fn finish_run(
     if output.is_empty() {
         output = "(no output)".to_string();
     }
-    truncate_output(output, exit_code, command, filter_enabled)
+    truncate_output(output, exit_code, command, filter_enabled, cost_tracker)
 }
 
 // ---------------------------------------------------------------------------

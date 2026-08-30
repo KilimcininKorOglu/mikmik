@@ -8188,6 +8188,10 @@ pub mod cost {
         output_tokens: AtomicU64,
         cache_creation_tokens: AtomicU64,
         cache_read_tokens: AtomicU64,
+        /// Tokens the command-output filter kept out of the model context,
+        /// estimated as bytes-saved / 4. Not billed (these tokens were never
+        /// sent), so it is tracked apart from the priced counters above.
+        filter_saved_tokens: AtomicU64,
         per_model: parking_lot::RwLock<std::collections::HashMap<String, Totals>>,
     }
 
@@ -8325,6 +8329,17 @@ pub mod cost {
 
         pub fn cache_read_tokens(&self) -> u64 {
             self.cache_read_tokens.load(Ordering::Relaxed)
+        }
+
+        /// Record tokens the command-output filter kept out of context.
+        pub fn add_filter_savings(&self, tokens: u64) {
+            self.filter_saved_tokens
+                .fetch_add(tokens, Ordering::Relaxed);
+        }
+
+        /// Tokens the command-output filter has saved this session.
+        pub fn filter_saved_tokens(&self) -> u64 {
+            self.filter_saved_tokens.load(Ordering::Relaxed)
         }
 
         /// Produce a human-readable summary string, e.g. for display in the TUI.
@@ -10172,6 +10187,18 @@ mod tests {
         let tracker = CostTracker::new();
         assert_eq!(tracker.input_tokens(), 0);
         assert_eq!(tracker.output_tokens(), 0);
+        assert_eq!(tracker.total_cost_usd(), 0.0);
+    }
+
+    #[test]
+    fn filter_savings_accumulate_apart_from_billed_tokens() {
+        let tracker = CostTracker::new();
+        assert_eq!(tracker.filter_saved_tokens(), 0);
+        tracker.add_filter_savings(100);
+        tracker.add_filter_savings(50);
+        assert_eq!(tracker.filter_saved_tokens(), 150);
+        // Filter savings are unbilled and never touch the priced counters.
+        assert_eq!(tracker.total_tokens(), 0);
         assert_eq!(tracker.total_cost_usd(), 0.0);
     }
 

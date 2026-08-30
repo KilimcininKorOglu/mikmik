@@ -12,7 +12,7 @@
 
 <br />
 
-<img src="public/screenshot.png" alt="MIKMIK in action" width="1080" />
+<img src="public/mikmik.png" alt="MIKMIK in action" width="1080" />
 </div>
 
 ---

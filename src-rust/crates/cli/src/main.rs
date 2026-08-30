@@ -453,28 +453,29 @@ enum BypassGate {
     Warn,
 }
 
-/// Carry a permission mode the session changed onto the shared manager.
+/// Push the session's desired mode onto the shared manager, the single source
+/// the running turn decides by (`PermissionManager::evaluate` reads it).
 ///
-/// The running turn decides by `PermissionManager::mode`, which is shared, and
-/// by its own `ToolContext` copy, which is not. Syncing only after a key press
-/// leaves a mode the model set itself, through `EnterPlanMode`, unseen until
-/// the user types something: the turn keeps deciding by the mode it started in.
+/// It watches `manager.mode` itself, not a second copy of the mode. A config
+/// that already moved to the desired mode still corrects a manager left at its
+/// startup mode, which is the gap `/yolo` fell through: the mode reached the
+/// config but never the manager, and the turn kept asking on every command.
 ///
 /// Returns whether the mode moved, so a caller can report the switch once.
-fn sync_permission_mode(
+fn apply_permission_mode(
     manager: Option<&Arc<std::sync::Mutex<PermissionManager>>>,
-    observed: &mut PermissionMode,
     desired: PermissionMode,
 ) -> bool {
-    if *observed == desired {
+    let Some(manager) = manager else {
+        return false;
+    };
+    let Ok(mut manager) = manager.lock() else {
+        return false;
+    };
+    if manager.mode == desired {
         return false;
     }
-    *observed = desired;
-    if let Some(manager) = manager {
-        if let Ok(mut manager) = manager.lock() {
-            manager.mode = desired;
-        }
-    }
+    manager.mode = desired;
     true
 }
 
@@ -4993,15 +4994,14 @@ async fn run_interactive(
                                     tool_ctx.config = applied_cfg.clone();
                                     app.config = applied_cfg.clone();
                                     // Push the mode straight to the manager the
-                                    // handler reads: this arm set
-                                    // tool_ctx.config.permission_mode, so
-                                    // sync_permission_mode below sees observed ==
-                                    // desired and skips the manager otherwise.
-                                    if let Some(manager) = tool_ctx.permission_manager.as_ref() {
-                                        if let Ok(mut manager) = manager.lock() {
-                                            manager.mode = applied_cfg.permission_mode;
-                                        }
-                                    }
+                                    // handler reads. The per-frame sync watches
+                                    // manager.mode and would set the same value a
+                                    // frame later; doing it here reports the
+                                    // switch at once.
+                                    apply_permission_mode(
+                                        tool_ctx.permission_manager.as_ref(),
+                                        applied_cfg.permission_mode,
+                                    );
                                     // Sync model/provider shown in the TUI header.
                                     if let Some(ref model) = applied_cfg.model {
                                         app.set_model(model.clone());
@@ -5032,23 +5032,24 @@ async fn run_interactive(
                                     app.config = applied_cfg.clone();
                                     // Same sync the `Config` arm above does.
                                     app.plan_mode = plan_badge_for(applied_cfg.permission_mode);
+                                    // Push the mode straight to the manager the
+                                    // handler reads. `/yolo` sets the config here
+                                    // but the manager decides, so without this the
+                                    // turn keeps asking on every command.
+                                    apply_permission_mode(
+                                        tool_ctx.permission_manager.as_ref(),
+                                        applied_cfg.permission_mode,
+                                    );
                                     // `/permissions allow|deny` writes a rule to
-                                    // settings.json and holds no manager, so the
-                                    // running turn would keep deciding by the
-                                    // rules it started with. Same problem
-                                    // `sync_permission_mode` solves for the mode.
+                                    // settings.json, so the manager reloads its
+                                    // persistent rules from disk; otherwise the
+                                    // running turn keeps deciding by the rules it
+                                    // started with.
                                     if let (Some(manager), Ok(settings)) = (
                                         tool_ctx.permission_manager.as_ref(),
                                         mikmik_core::Settings::load_sync(),
                                     ) {
                                         if let Ok(mut manager) = manager.lock() {
-                                            // Push the mode straight to the manager
-                                            // the handler reads. This arm already
-                                            // set tool_ctx.config.permission_mode, so
-                                            // sync_permission_mode below sees observed
-                                            // == desired and skips the manager, which
-                                            // is how `/yolo` never reached it.
-                                            manager.mode = applied_cfg.permission_mode;
                                             manager.reload_persistent_rules(&settings);
                                         }
                                     }
@@ -5600,11 +5601,10 @@ async fn run_interactive(
                     app.handle_key_event(key);
                     cmd_ctx.config = app.config.clone();
                     tool_ctx.config = app.config.clone();
-                    if let Some(manager) = tool_ctx.permission_manager.as_ref() {
-                        if let Ok(mut manager) = manager.lock() {
-                            manager.mode = tool_ctx.config.permission_mode;
-                        }
-                    }
+                    apply_permission_mode(
+                        tool_ctx.permission_manager.as_ref(),
+                        tool_ctx.config.permission_mode,
+                    );
                     if !app.model_name.is_empty() {
                         session.model = app.model_name.clone();
                     }
@@ -6548,12 +6548,13 @@ async fn run_interactive(
 
         // Carry a mode the model set itself onto the running turn. The key arm
         // below syncs the whole config, but only after a key press, and a
-        // model-driven switch has none behind it.
-        if sync_permission_mode(
+        // model-driven switch has none behind it. When the manager moves, the
+        // config copies follow it so the PowerShell gate reads the same mode.
+        if apply_permission_mode(
             tool_ctx.permission_manager.as_ref(),
-            &mut tool_ctx.config.permission_mode,
             app.config.permission_mode,
         ) {
+            tool_ctx.config.permission_mode = app.config.permission_mode;
             cmd_ctx.config.permission_mode = app.config.permission_mode;
         }
 
@@ -9938,15 +9939,9 @@ mod permission_mode_tests {
         // press behind it, so without this the turn kept allowing writes while
         // the model believed it was planning.
         let manager = manager(PermissionMode::BypassPermissions);
-        let mut observed = PermissionMode::BypassPermissions;
 
-        assert!(sync_permission_mode(
-            Some(&manager),
-            &mut observed,
-            PermissionMode::Plan
-        ));
+        assert!(apply_permission_mode(Some(&manager), PermissionMode::Plan));
 
-        assert_eq!(observed, PermissionMode::Plan);
         assert_eq!(
             manager.lock().expect("manager").mode,
             PermissionMode::Plan,
@@ -9958,13 +9953,30 @@ mod permission_mode_tests {
     fn an_unchanged_mode_touches_nothing() {
         // Called every frame, so it has to be free when nothing moved.
         let manager = manager(PermissionMode::Default);
-        let mut observed = PermissionMode::Default;
 
-        assert!(!sync_permission_mode(
+        assert!(!apply_permission_mode(
             Some(&manager),
-            &mut observed,
             PermissionMode::Default
         ));
+    }
+
+    #[test]
+    fn a_manager_left_at_its_startup_mode_still_catches_up() {
+        // The `/yolo` bug: the config moved to bypass but the manager stayed at
+        // its startup mode. Watching manager.mode, not a config copy, means the
+        // desired mode still reaches the manager even when a config copy already
+        // holds it.
+        let manager = manager(PermissionMode::Default);
+
+        assert!(apply_permission_mode(
+            Some(&manager),
+            PermissionMode::BypassPermissions
+        ));
+
+        assert_eq!(
+            manager.lock().expect("manager").mode,
+            PermissionMode::BypassPermissions
+        );
     }
 
     #[test]

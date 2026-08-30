@@ -7111,7 +7111,7 @@ pub mod permissions {
         ///
         /// A slash command writes `settings.json` and holds no manager, so the
         /// running turn keeps deciding by the rules it started with until this
-        /// runs. `sync_permission_mode` in the CLI solves the same problem for
+        /// runs. `apply_permission_mode` in the CLI solves the same problem for
         /// `mode`.
         pub fn reload_persistent_rules(&mut self, settings: &crate::config::Settings) {
             self.persistent_rules = settings

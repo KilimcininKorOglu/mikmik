@@ -1,6 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 72" width="384" height="288" role="img" aria-label="MikMik">
   <title>MikMik</title>
-  <rect x="6" y="26" width="84" height="20" fill="#000000"/>
+  <rect x="30" y="26" width="12" height="20" fill="#000000"/>
+  <rect x="54" y="26" width="12" height="20" fill="#000000"/>
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-weight="700" font-size="18" text-anchor="middle">
     <text x="24" y="20" fill="#E91E63">/</text>
     <text x="36" y="20" fill="#E91E63">\</text>

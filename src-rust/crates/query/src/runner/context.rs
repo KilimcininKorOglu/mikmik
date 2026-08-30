@@ -847,19 +847,21 @@ mod tests {
         compact::forget_compact_state(session);
     }
 
-    /// Both dispatch arms book their turn through that one function.
+    /// Every dispatch path books its turn through that one function.
     ///
     /// The provider arm silently skipped it once already, which is how a
     /// registry-served session came to run uncompacted while the Anthropic one
-    /// behaved. A grep is the only thing that can tell the two call sites apart
-    /// without running a live turn against each provider.
+    /// behaved. There are three mutually exclusive per-turn paths: the Cursor
+    /// agent-executor, the general provider registry, and the raw Anthropic
+    /// client. A grep is the only thing that can tell the call sites apart
+    /// without running a live turn against each.
     #[test]
     fn both_dispatch_arms_book_their_turn() {
         const LOOP_SRC: &str = include_str!("../lib.rs");
         let calls = LOOP_SRC.matches("runner::record_turn_usage(").count();
         assert_eq!(
-            calls, 2,
-            "the provider arm and the raw Anthropic arm each book exactly once"
+            calls, 3,
+            "the Cursor, general-provider and raw Anthropic paths each book exactly once"
         );
     }
 

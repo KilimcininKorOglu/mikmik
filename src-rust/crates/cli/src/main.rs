@@ -47,7 +47,9 @@ use mikmik_core::{
     constants::APP_VERSION,
     context::ContextBuilder,
     cost::CostTracker,
-    permissions::{AutoPermissionHandler, InteractivePermissionHandler, PermissionManager},
+    permissions::{
+        ManagedAutoPermissionHandler, ManagedInteractivePermissionHandler, PermissionManager,
+    },
 };
 use mikmik_tools::ToolContext;
 use parking_lot::Mutex as ParkingMutex;
@@ -1079,11 +1081,11 @@ async fn main() -> anyhow::Result<()> {
     )));
 
     let permission_handler: Arc<dyn mikmik_core::PermissionHandler> = if is_headless {
-        Arc::new(AutoPermissionHandler::with_manager(
+        Arc::new(ManagedAutoPermissionHandler::new(
             permission_manager.clone(),
         ))
     } else {
-        Arc::new(InteractivePermissionHandler::with_manager(
+        Arc::new(ManagedInteractivePermissionHandler::new(
             permission_manager.clone(),
         ))
     };

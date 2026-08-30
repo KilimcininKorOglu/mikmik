@@ -135,10 +135,10 @@ pub use history::ConversationSession;
 pub use hook_discovery::{load_hook_dir, load_project_hooks, HookMap};
 pub use paths::mikmik_home;
 pub use permissions::{
-    format_permission_reason, AutoPermissionHandler, InteractivePermissionHandler,
-    ManagedAutoPermissionHandler, ManagedInteractivePermissionHandler, PermissionAction,
-    PermissionDecision, PermissionHandler, PermissionLevel, PermissionManager, PermissionRequest,
-    PermissionRule, PermissionScope, SerializedPermissionRule,
+    format_permission_reason, AutoPermissionHandler, ManagedAutoPermissionHandler,
+    ManagedInteractivePermissionHandler, PermissionAction, PermissionDecision, PermissionHandler,
+    PermissionLevel, PermissionManager, PermissionRequest, PermissionRule, PermissionScope,
+    SerializedPermissionRule,
 };
 pub use skill_discovery::{
     discover_skills, parse_skill_file, strip_frontmatter, DiscoveredSkill, ResolvedSkill,
@@ -6215,8 +6215,10 @@ pub mod config {
 
         #[test]
         fn effective_config_carries_the_subagent_ceiling() {
-            let mut settings = Settings::default();
-            settings.max_concurrent_subagents = Some(3);
+            let settings = Settings {
+                max_concurrent_subagents: Some(3),
+                ..Default::default()
+            };
             assert_eq!(
                 settings.effective_config().max_concurrent_subagents,
                 Some(3)
@@ -7207,10 +7209,12 @@ pub mod permissions {
         fn request_permission(&self, request: &PermissionRequest) -> PermissionDecision;
     }
 
-    /// Handler for non-interactive / headless modes.
+    /// Simple mode-based handler kept as a test fixture.
     ///
-    /// Uses simple mode-based rules.  For rule-based evaluation backed by a
-    /// `PermissionManager`, use `ManagedAutoPermissionHandler` instead.
+    /// Production decides through `ManagedAutoPermissionHandler` /
+    /// `ManagedInteractivePermissionHandler`, which delegate to
+    /// `PermissionManager::evaluate`. This one applies mode-only rules without a
+    /// manager, which the tool tests use as a lightweight allow/deny stand-in.
     pub struct AutoPermissionHandler {
         pub mode: crate::config::PermissionMode,
     }
@@ -7241,36 +7245,6 @@ pub mod permissions {
                         PermissionDecision::Deny
                     }
                 }
-            }
-        }
-
-        fn request_permission(&self, request: &PermissionRequest) -> PermissionDecision {
-            self.check_permission(request)
-        }
-    }
-
-    /// Permission handler for interactive (TUI) mode.
-    ///
-    /// Uses simple mode-based rules.  For rule-based evaluation backed by a
-    /// `PermissionManager`, use `ManagedInteractivePermissionHandler`.
-    pub struct InteractivePermissionHandler {
-        pub mode: crate::config::PermissionMode,
-    }
-
-    impl PermissionHandler for InteractivePermissionHandler {
-        fn check_permission(&self, request: &PermissionRequest) -> PermissionDecision {
-            use crate::config::PermissionMode;
-            match self.mode {
-                PermissionMode::Plan => {
-                    if request.is_read_only {
-                        PermissionDecision::Allow
-                    } else {
-                        PermissionDecision::Deny
-                    }
-                }
-                // In Default / AcceptEdits / BypassPermissions the user is
-                // watching the TUI so we allow all.
-                _ => PermissionDecision::Allow,
             }
         }
 
@@ -7349,25 +7323,6 @@ pub mod permissions {
 
         fn request_permission(&self, request: &PermissionRequest) -> PermissionDecision {
             self.check_permission(request)
-        }
-    }
-
-    // Convenience constructor aliases used by the spec
-    impl InteractivePermissionHandler {
-        /// Build a manager-backed interactive handler.
-        pub fn with_manager(
-            manager: Arc<Mutex<PermissionManager>>,
-        ) -> ManagedInteractivePermissionHandler {
-            ManagedInteractivePermissionHandler::new(manager)
-        }
-    }
-
-    impl AutoPermissionHandler {
-        /// Build a manager-backed auto handler.
-        pub fn with_manager(
-            manager: Arc<Mutex<PermissionManager>>,
-        ) -> ManagedAutoPermissionHandler {
-            ManagedAutoPermissionHandler::new(manager)
         }
     }
 
@@ -10101,18 +10056,6 @@ mod tests {
     }
 
     #[test]
-    fn test_interactive_handler_default_allows_writes() {
-        // Legacy InteractivePermissionHandler still allows everything outside Plan.
-        let handler = crate::permissions::InteractivePermissionHandler {
-            mode: crate::config::PermissionMode::Default,
-        };
-        assert_eq!(
-            handler.check_permission(&make_req("FileWrite", false)),
-            crate::permissions::PermissionDecision::Allow
-        );
-    }
-
-    #[test]
     fn test_managed_interactive_default_asks_for_write() {
         let manager = std::sync::Arc::new(std::sync::Mutex::new(
             crate::permissions::PermissionManager::new(
@@ -10120,7 +10063,7 @@ mod tests {
                 &crate::config::Settings::default(),
             ),
         ));
-        let handler = crate::permissions::InteractivePermissionHandler::with_manager(manager);
+        let handler = crate::permissions::ManagedInteractivePermissionHandler::new(manager);
         match handler.check_permission(&make_req("FileWrite", false)) {
             crate::permissions::PermissionDecision::Ask { .. } => {}
             other => panic!("Expected Ask, got {:?}", other),
@@ -10135,7 +10078,7 @@ mod tests {
                 &crate::config::Settings::default(),
             ),
         ));
-        let handler = crate::permissions::InteractivePermissionHandler::with_manager(manager);
+        let handler = crate::permissions::ManagedInteractivePermissionHandler::new(manager);
         let mut req = make_req("Read", true);
         req.path = Some("/workspace/src/lib.rs".to_string());
         req.working_dir = Some(std::path::PathBuf::from("/workspace"));

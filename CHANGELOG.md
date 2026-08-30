@@ -1,0 +1,918 @@
+# Changelog
+
+All notable changes to MikMik are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.0.0] - 2026-08-30
+
+### Added
+
+- count tokens the output filter kept out of context
+- add Rust-native output filters for tsc, pytest, mypy, prettier
+- ship the full built-in output-filter set (63 commands)
+- recover dropped output with a tee file and hint
+- filter noisy command output before it reaches the model
+- make /init research the codebase instead of writing a stub
+- use the cat mascot in the terminal title instead of the crab
+- align the settings screen with the real config surface
+- add the browser tool toggle to the settings screen
+- record todos and plan-mode changes on the timeline
+- add public/mikmik.svg from the ASCII mascot
+- add public/Rustle.svg, a vector MikMik icon
+- add a /retry command to re-run an interrupted turn
+- add an Ollama Cloud usage reporter
+- feed Codex usage from its streaming response headers
+- feed usage from response rate-limit headers, no extra request
+- add a Synthetic.new usage reporter
+- add an Umans usage reporter
+- add an OpenCode Go usage reporter
+- add a Cursor usage reporter
+- add an xAI (SuperGrok) usage reporter
+- add a Kimi Code usage reporter
+- add a MiniMax Coding Plan usage reporter
+- add a Google Antigravity usage reporter
+- add a GitHub Copilot usage reporter
+- add a Z.AI usage reporter
+- add a Codex usage reporter
+- show account usage limits in the timeline sidebar
+- fetch the active account's usage into the sidebar state
+- add a showUsageLimits setting
+- usage-report foundation with an Anthropic reporter
+- relaunch on /restart, resuming the current session
+- add a /restart command that keeps the session
+- offer Z.AI browser login in the connect menu
+- drive the Z.AI browser login from the device-auth loop
+- add Z.AI browser login that mints a durable API key
+- drop and list the company search providers
+- apply a web search entitlement into auth.json alone
+- let the admin surface pick a provider kind
+- give a provider a kind so web search keys can be handed out
+- mark an api key with the workspace server that handed it out
+- require driving an approved plan through the task tools
+- chain slash commands with && and stop on the first failure
+- load project and global event hooks from a hooks/ folder
+- resolve session-persona agents from folders as well as settings
+- let the Agent tool spawn a named custom agent via the agent param
+- add access_tool_names mapping access level to a tool allowlist
+- discover custom sub-agents from .mikmik/agents and .claude/agents folders
+- expose maxConcurrentSubagents in settings and docs
+- bound concurrent sub-agents in any session
+- add maxConcurrentSubagents setting
+- add xAI web_search provider
+- add Z.AI web_search provider
+- add Kimi web_search provider
+- add Gemini web_search provider (developer-key transport)
+- add Anthropic web_search provider
+- add YouTube web-fetch scraper
+- add Choose a License web-fetch scraper
+- add Read the Docs web-fetch scraper
+- add pkg.go.dev web-fetch scraper
+- add Twitter/Nitter web-fetch scraper
+- add IACR ePrint web-fetch scraper
+- add arXiv web-fetch scraper
+- add Wikipedia web-fetch scraper with DOM support
+- add GitHub web-fetch scraper
+- add docs.rs rustdoc web-fetch scraper
+- add Sourcegraph web-fetch scraper
+- add GitLab web-fetch scraper
+- add MDN web-fetch scraper
+- add Stack Exchange web-fetch scraper
+- add GitHub Gist web-fetch scraper
+- add W3C specification web-fetch scraper
+- add JetBrains Marketplace web-fetch scraper
+- add Firefox Add-ons web-fetch scraper
+- add Discourse web-fetch scraper
+- add Mastodon web-fetch scraper
+- add Flathub web-fetch scraper
+- add HTML-to-markdown helper for scrapers
+- add Wikidata web-fetch scraper
+- add VS Code Marketplace web-fetch scraper
+- add OpenCorporates web-fetch scraper
+- add Spotify web-fetch scraper
+- add Vimeo web-fetch scraper
+- add Bluesky web-fetch scraper
+- add Lemmy web-fetch scraper
+- add searchcode web-fetch scraper
+- add Ollama web-fetch scraper
+- add Chocolatey web-fetch scraper
+- add Open VSX web-fetch scraper
+- add RFC web-fetch scraper
+- add cheat.sh and tldr web-fetch scrapers
+- add bioRxiv/medRxiv web-fetch scraper
+- add PubMed web-fetch scraper
+- add F-Droid web-fetch scraper
+- add ORCID web-fetch scraper
+- add Repology web-fetch scraper
+- add RAWG web-fetch scraper
+- add Artifact Hub web-fetch scraper
+- add Snapcraft web-fetch scraper
+- add Hackage web-fetch scraper
+- add SPDX license web-fetch scraper
+- add SEC EDGAR web-fetch scraper
+- add Discogs web-fetch scraper
+- add MusicBrainz web-fetch scraper
+- add CrossRef web-fetch scraper
+- add Semantic Scholar web-fetch scraper
+- add CoinGecko web-fetch scraper
+- add Open Library web-fetch scraper
+- add Lobsters and Hugging Face web-fetch scrapers
+- add dev.to web-fetch scraper
+- add Terraform Registry web-fetch scraper
+- add Reddit web-fetch scraper
+- add Hacker News web-fetch scraper
+- add Homebrew web-fetch scraper
+- add AUR and Docker Hub web-fetch scrapers
+- add MetaCPAN and Clojars web-fetch scrapers
+- enter web-search backend API keys from the connect dialog
+- read web-search API keys from the auth store, env as fallback
+- add maven, nuget, packagist and pub.dev web-fetch scrapers
+- RubyGems and Hex.pm web-fetch handlers
+- NVD CVE web-fetch handler
+- CISA KEV and OSV security-database handlers
+- PyPI and crates.io web-fetch handlers
+- site-aware web-fetch scraper dispatch
+- Parallel web-search provider
+- Kagi web-search provider
+- Firecrawl web-search provider
+- Exa neural-search web-search provider
+- Synthetic and TinyFish web-search providers
+- Jina Reader web-search provider
+- auto-fallback web-search provider chain
+- structured web-search query pipeline
+- show the task in a task-tool call header
+- drive Cursor agent turns and bind its exec channel
+- Cursor agent-executor transport, request and dispatcher
+- hand-written codec for the Cursor agent wire
+- Cursor OAuth login and account wiring
+- add Devin / Windsurf Cascade provider
+- add protobuf codec and Connect framing
+- add Google Antigravity provider (Google OAuth + Cloud Code)
+- add GitLab Duo provider (PKCE loopback + direct access)
+- add xAI Grok SuperGrok OAuth provider
+- add Xiaomi MiMo provider
+- add Kimi Code device-flow OAuth provider
+- add MiniMax Token Plan coding-plan providers
+- add Tavily as a WebSearch backend
+- add cloudflare-ai-gateway and bedrock-mantle
+- add litellm, vllm and ollama-cloud
+- add ten OpenAI-compatible API-key providers
+- tag every discovered skill by source and keep clashing ones
+- vibe tool for persistent worker sessions
+- hub tool for supervising long-lived processes
+- generate_image and inspect_image
+- browser tool driving a real browser over CDP
+- batch spawn and shared context for the Agent tool
+- replace GoalComplete with a Goal tool that carries ops
+- give REPL reset, timeout and title
+- give web_search a recency window
+- implement the Linux accessibility backend over AT-SPI2
+- implement the Windows accessibility backend over UI Automation
+- read and write the accessibility tree from a script
+- script the desktop in a session that keeps its variables
+- build computer-use by default, and make it build at all
+- carry a tool call's duration to the remote client
+- let a tool block open, and scroll inside itself
+- draw the finished turn's duration behind its setting
+- declare only the tools a session has reached for
+- stop offering tools the session cannot use
+- let --allowed-tools decide which tools the session offers
+- let /commit see the whole working tree
+- tell the model GitHub is reached through gh
+- fetch a GitHub file page as the file
+- draw how long each tool call took
+- add the showToolDuration setting
+- keep a tool call's duration with the transcript
+- measure how long each tool call takes
+- hold the PowerShell interpreter open for the session
+- run a background command in the embedded shell
+- let a user choose which utilities a command reaches for
+- run the bundled utilities in this process
+- let a bundled utility write where the shell tells it
+- ship the command-line utilities inside the binary
+- run Bash in the embedded shell, with a way back to the system one
+- embed brush as the shell instead of spawning bash
+- show the workspace server from inside a session
+- run the workspace pull and triggers with the session
+- keep the backup current without being asked each time
+- connect an installation to its organisation's server
+- make a restore show what it would run before it runs it
+- back up what belongs to the user and nothing else
+- apply the organisation's settings policy
+- hand the organisation's providers to the installation
+- let an installation hold a workspace server
+- give the organisation a page to run itself from
+- record who took what, and when
+- hold each user's settings backup with a version
+- push a settings policy the client cannot override
+- hand each user the providers they are entitled to
+- open accounts and let them log in
+- start the self-hosted configuration server
+- mask a Stripe key the way the other vendors are masked
+- fill the agent menu from the running agents
+- hold executors to the concurrency limit that was configured
+- take the working tools off a manager that is told not to work
+- enforce the managed-agent budget instead of describing it
+- deliver the messages agents send each other
+- let the background memory jobs run on a cheaper model
+- take one lesson and do the filing that goes with it
+- show the memory directory the model writes on its own
+- choose the edit guard from the settings screen
+- hold an edit to what the session actually read
+- record what the session has read from each file
+- report and switch the advisor from the prompt
+- give a watching advisor a transcript of its own
+- choose the advisor from the settings screen
+- run the advisor as a watcher, not a tool
+- the tool a watching advisor speaks through
+- the parts a watching advisor is built from
+- lift a rule out of an AGENTS.md
+- cover six more languages in the rule catalogue
+- ship the five rules that needed a syntax tree
+- stop the turn when a rule matches what is written
+- ship a catalogue of rules and a way to try them
+- remember which rules already spoke
+- let a rule wait for the model to break it
+- read the answer a slow server gave too late
+- connect to a language server that is already running
+- let language servers start with the session
+- fold a one-line language-server answer onto its header
+- name what the language server was asked
+- show what a rename would change
+- report a batch of edits on one wait
+- read the report of a linter that speaks no LSP
+- report on more than one file at a time
+- configure language servers outside the settings file
+- format a file and remember what was already reported
+- tell the model what its edit broke, on the edit
+- give the LSP tool the actions the protocol already offers
+- find the language server a project already uses
+- describe a language server the way its config needs
+- notify when a tool is waiting for permission
+- tell the model when to plan and how to finish a plan
+- let a remote client answer the bypass warning
+- make the theme setting change what is on screen
+- add a writing style and three intensities per persona
+- give /copy the formats it already had implementations for
+- show a running command's output as it arrives
+- add a setting for showing a tool's output as it arrives
+- rule off a tool's output from the command that produced it
+- ask the bypass warning of the mode, not of the entry point
+- let the bypass warning be refused without ending the session
+- add rows for the two memory filenames
+- load the memory scopes the docs describe
+- switch AGENTS.md and CLAUDE.md on independently
+- show the auto memory directory in /memory
+- add an auto memory row to the settings screen
+- send extracted memories where something reads them
+- let the model read a memory file it saw in the manifest
+- put the memory directory in the system prompt
+- describe the memory directory to the model
+- give the memory directory a setting and one project path
+- ask each platform for its own default alert sound
+- add a notification sound row to the settings screen
+- play a sound with a notification when asked
+- open the plan in an editor with ctrl+g
+- clear the context when the plan answer asks for it
+- offer the four plan answers
+- write the plan to a file the user can edit
+- remember the mode plan mode was entered from
+- wire the plan dialog to the session
+- add the plan approval dialog
+- let ExitPlanMode ask before it leaves plan mode
+- notify when a question waits and when a turn ends
+- list the three notification switches
+- send desktop notifications
+- add the three notification event settings
+- rename the environment variables to MIKMIK_*
+- move the project scope and the data paths to mikmik
+- move the config root to mikmik
+- honour the compact model on /compact and in ACP
+- pick the compact model from the model picker
+- send the summary to the model the user chose for it
+- let the summary be written by a model of the user's choosing
+- resolve a config to a route, not to a string
+- give the wire model its own type
+- free the cheap tokens before asking a model for a summary
+- tell every front end when the context was compacted
+- make /compact actually compact
+- make autoCompact and compact_threshold do something
+- summarise through a backend instead of one client
+- make every prompt-editing chord rebindable
+- find in the transcript and jump to a message
+- keep the prompt editable while a turn streams
+- record a checkpoint per turn and let the user go back to one
+- make the branch screen do what it says
+- make a headless run a session like any other
+- write the session transcript the readers were waiting for
+- give the transcript store a writer
+- put the project trust question in front of the user
+- show what a checkout's settings file wants to run
+- ask before a checkout's settings file may run anything
+- add a process-tree kill used by every command runner
+- run a line starting with ! as a shell command
+- add /yolo to switch permission asking off and on
+- /poke to switch the todo nudge
+- resume the selected session from the browser
+- detail panel for the selected session
+- show which project a session belongs to
+- jump between accounts in the model picker
+- star models in the picker
+- let the model picker hide accounts with no credential
+- tell /turns when an agent's own limit wins
+- add /turns to change the agentic turn limit
+- make the summary turn and the todo reminder switchable
+- delegate work to an external ACP agent
+- allow a forced todo status transition
+- add /todos to read back the session list
+- show todo confidence in the checklist
+- record a confidence score on todo items
+- summarise throughput and capability counts in the timeline panel
+- show todo progress in the footer
+- accept /goal set <objective>
+- mute the goal badge once the goal is complete
+- say when the agent dies, and offer to start it again
+- put the chat in the Activity Bar as well as an editor tab
+- bring the conversation back after a window reload
+- show whether the agent is running and whether it is answering
+- send the editor's selection, and reach the chat from the keyboard
+- offer to restart when a startup setting changes
+- ask which folder to work in when there is more than one
+- paste an image into the question
+- fold reasoning out of the way of the answer
+- copy a code block, or put it in the editor
+- render the agent's answers as markdown, with highlighted code
+- read what the agent said it can do
+- carry every content block a turn can hold
+- open the file a tool call is working on
+- ask for permission in the panel, showing what is being approved
+- send the headers a server was configured with
+- resume without replaying, and fork a conversation
+- optionally run the agent's commands here
+- host the files the agent reads and writes
+- draw a hosted terminal under the call that started it
+- run a command in the terminal the client hosts
+- read and write through the editor that opened the session
+- let a client host the files a tool works with
+- run the MCP servers a session was opened with
+- carry an image from the prompt to the model
+- give an editor session the MCP tools it is configured for
+- pass on what the loop says about itself
+- say which files a tool call is about
+- tell a tool which call it is running
+- many conversations in one agent, and a way back into an old one
+- run the slash commands, not just list them
+- tell a client which slash commands exist
+- answer in text when nobody can see a view
+- answer the protocol's own model methods
+- split a session in two without disturbing the original
+- list the sessions on file and let a client close one
+- reopen a stored session, with or without its history
+- keep a session after the connection ends
+- publish the todo list as the session's plan
+- send what an edit changed, not a sentence about it
+- accept a file the editor embedded in the prompt
+- add a VS Code extension speaking the agent protocol
+- offer the model, the account and the effort as session options
+- let a client switch how a session answers permissions
+- let the Config tool read and write provider and effort
+- let a session start at the effort the user chose
+- show each extra directory under the name that addresses it
+- tell the model which directories it can reach
+- let a path argument name the root it belongs to
+- name the directories a session can reach
+- run the status line command the way scripts expect
+- read the status line command from the user's own settings
+- install from Git Bash and authenticate to GitHub
+- let a plugin's declared options be set and read
+- read an install source as a git repository
+- install a plugin from a git repository
+- apply a plugin reload to the running session
+- fire the lifecycle events a manifest is allowed to declare
+- offer plugin commands and skills in the slash lists
+- say which skills /skills can actually run
+- discover a skill packaged as its own directory
+- fall back to OSC 52 when no clipboard tool answers
+- show the execution timeline in the web client
+- carry the execution timeline to a remote client
+- show what the agent is doing, step by step
+- add the timelineEnabled setting
+- add the execution timeline state container
+- configure SearXNG from the settings screen
+- let WebSearch hand over when SearXNG is down
+- add the MLX LM local runtime, offered on macOS only
+- move Grep onto the same ignore-aware walk
+- let Glob skip what .gitignore excludes
+- route an OAuth account by the protocol it speaks
+- fold the account registry into the auth store at startup
+- let the auth store hold every credential shape
+- hold more than one GitHub Copilot account
+- name an account when pasting an API key
+- add /providers sync to re-read an account's model list
+- take model limits from the endpoint that reports them
+- list an account's own models in the picker
+- name an account on connect and discover its models
+- make a provider an account with its own model list
+- swap the crab spinner verbs for cat ones
+- draw MikMik the cat and make it blink
+- replace the welcome mascot with MikMik the cat
+- show the companion and let it answer when addressed
+- reach the companion through /buddy
+- break the session cost down by model
+- tell the runner when a client attaches
+- answer a remote slash command with text, not a picker
+- name the slash commands that answer with a view
+- rename a session from the web client
+- let a remote client rename a session
+- show the model, mode and cost on the session card
+- carry the model, mode and cost in the session list
+- tell a remote client why its prompt is waiting
+- show the MCP trust prompt in the web client
+- let a remote client answer the MCP trust prompt
+- report slash command outcomes to a remote client
+- say why a turn ended when it did not end normally
+- report token and cost usage to a remote client
+- run slash commands sent from a remote client
+- carry attachments from a remote prompt
+- forward status, token warnings and busy state
+- forward thinking deltas to the remote client
+- show tool output in the web client
+- backfill the transcript when the bridge connects
+- answer AskUserQuestion from the remote client
+- drop the separate remote permission policy
+- add the web client
+- complete the remote permission round trip
+- start the bridge from the remoteControl settings
+- add a typed remoteControl settings section
+- package the relay for Docker
+- add the client-facing API for phones and browsers
+- add a self-hosted relay with the runner-facing API
+- add a custom-anthropic provider slot
+- let /model span every reachable provider
+- run the advisor on a second stored account
+- resolve a provider for a named account profile
+- let CodexProvider run on a named account profile
+- read an account out of the advisor model setting
+- make /advisor consult a real second model
+- show per-message timestamps behind a setting
+- add optional thought_signature passthrough to ToolUse blocks
+- apply model overrides in the models listing; test config merge
+- scroll welcome banner with content, compact footer (#310)
+- apply model metadata overrides to the live registry
+- read a [Pasted text #N] placeholder in a viewer by clicking it
+- layer user model-metadata overrides onto the registry
+- add ModelOverride config type and model_overrides map
+- click or Alt+E to expand a pasted-text placeholder in the prompt
+- live Anthropic model discovery via /v1/models (filters the sub list) (#307)
+- terminal working indicator via OSC 9;4 progress (#304)
+- expose Claude Pro/Max subscription login in /connect (#302)
+- centre-origin elliptical ripple for the ultracode wave
+- bold spectrum-analyzer look for the ultracode wave
+- crab wordplay for the turn spinner/completion verbs
+- soothing diffused rainbow for the ultracode effort wave
+- richer effort picker — bg-wave ultracode + rainbow xhigh/max
+- themed per-keyword prompt gradients for personas
+- resolve persona output-style per turn (transient inline keywords)
+- generalize inline keyword matcher into a shared registry
+- port opencode variants() effort ladder
+- add none/minimal effort levels below low
+- surface /new and /move; reset the view on /new
+- add /new lazy-home and /move re-home commands
+- keep the models.dev catalog fresh in the TUI with a 60-min loop
+- merge live discovery onto the catalog instead of replacing it
+- additive live-discovery merge + catalog-project the fixed providers
+- expand experimental.modes into listed models
+- remove explore from the Tab agent-mode cycle (#281)
+- show real recent activity on the welcome screen
+- render selector into prompt area, hide prompt box while open
+- dock selector bottom bar, claurst-red theme, animated max
+
+### Changed
+
+- restructure the README around a Features section
+- document the outputFilter setting
+- wire production straight to the managed handlers
+- make the manager mode the one thing mode-sync watches
+- drop the dead ToolContext.permission_mode field
+- describe /init as a codebase-researching command
+- correct output_format, timeline, and remoteControlAtStartup
+- update application screenshot
+- rename screenshot asset in readme
+- document showUsageLimits
+- document the /restart command
+- document Z.AI browser login
+- document handing out web search keys as entitlements
+- document the hooks/ folder source for event hooks
+- document agents folders and the Agent tool agent parameter
+- document the Cursor agent-executor provider
+- use split over splitn in kimi jwt account-id parse
+- make a denied tool actually denied
+- record how WebFetch treats a GitHub URL
+- correct the utility count and which copy a command gets
+- count the fifth thing the fork takes back
+- say what the shell's configuration turns off
+- copy uutils/coreutils into the tree
+- record what the embedded shell and its utilities cost
+- ask the platform for the child list instead of spawning pgrep
+- add an example that drives a real session
+- describe the embedded shell and the utilities that ship with it
+- search on ripgrep's engine instead of reading each file whole
+- cover the two cases the design promised
+- drop the two settings syncs that were never called
+- describe the workspace server and what it decides
+- satisfy clippy in the backup tests
+- drop the team memory sync nobody asked for
+- drop the settings migrations that never ran
+- stop promising a budget split that was removed
+- describe the managed-agent settings that exist
+- remove the coordinator mode that never ran
+- prove a spawned agent answers to the name it reports
+- remove the unreachable claude.ai session client
+- stop writing test fixtures that read as real credentials
+- say which block each auto-memory key belongs in
+- keep a credential out of the prompt it would be re-sent in
+- drive the edit guard from a settings file to a refusal
+- describe what an edit is now held to
+- make the end-of-turn advisor rule testable
+- pin what starts a watcher and what stays out of the prompt
+- describe the advisor that watches instead of waiting
+- keep a watcher's session id inside its own directory
+- name the memory module after the file it reads
+- mark each process tree test with its own sleep
+- show what the writing style forbids
+- describe what /context reports
+- derive the cost a column-width test expects
+- let the catalogue name the newest Opus
+- correct the authentication commands
+- describe the keybindings the code actually resolves
+- correct the counts and the paths on the landing pages
+- remove the install paths and build flags that do not work
+- list the providers the reference left out
+- describe the credential store that exists, not the one it replaced
+- match the MCP command surface and drop a dead cross-reference
+- correct what a plugin hook gets and where plugins are found
+- drop coordinator mode, which nothing switches on
+- give each command the arguments it accepts
+- state the settings values the code actually defaults to
+- separate the two hook systems and name their real fields
+- describe the tools and the features that exist
+- drop the second context collapse
+- drop the telemetry skeleton
+- draw PKCE secrets from the OS RNG
+- name a project's transcript directory in one place
+- report one context window from one set of thresholds
+- describe what decides a plan-mode switch
+- cover the live tool output setting and the remote bypass gate
+- drop the persona commands for the style picker
+- drop the root refusal for bypass permissions
+- remove the away box and the duplicate voice capture
+- describe the bypass gate and correct acceptEdits
+- stop a turn writing its own permission mode
+- block bypass mode for root by the mode, not the flag
+- drop the second copy of the permission mode
+- describe the memory loading that actually happens
+- prepare claudemd to be the loader that runs
+- describe the auto memory directory
+- document the notification sound key
+- record the plan directory and the sub-agent boundary
+- describe the four plan answers and the plan file
+- give compaction one place to move every surface
+- describe the notification switches and plan approval
+- stop nine tests writing into the real config root
+- write down what publishing to npm and the Marketplace needs
+- point the documented config path at the XDG directory
+- rename the relay to mikmik-relay
+- rename the product across the documentation
+- rename the product in code, config and external ids
+- point the installers at the renamed repository
+- rename the release assets to mikmik
+- rename the binary and the npm package to mikmik
+- rename the overlay colour constants
+- rename the library crates to mikmik
+- delete three Claude-only context-window helpers
+- make a composite model on the wire a compile error
+- keep an account switch on the account it switched to
+- record one canonical model string per session
+- read the account and the model off one route
+- reach the session's own account for side work
+- take the account and the model from one route
+- address models by route, not by string
+- delete the compaction code nothing called
+- drop the 99% path that never compacted anything
+- drop the MCP blanket-trust field nothing read
+- a repository must not silence memory files or redirect search
+- a repository must not open the remote-control bridge
+- copy through one clipboard writer
+- describe the session surfaces that now work
+- say what a repository's settings file can and cannot do
+- give the background-kill test a per-run marker
+- pin the permission-mode flag to leaving settings alone
+- cover shell commands, /poke and /yolo
+- split the bash tool's permission gate from its body
+- describe the session browser's keys
+- document /todos
+- describe the extension as it now behaves
+- cover the readers that turn the wire into what is drawn
+- make the extension packageable, and package it in CI
+- correct what happens to an MCP server's headers
+- draw the CSP nonce from a source that cannot be guessed
+- bundle the extension and the webview with esbuild
+- describe what an editor session can now do
+- describe the ACP surface as it now stands
+- move /refresh's discarding out of the binary
+- move model discovery's bookkeeping out of the binary
+- describe the Config tool as it is, not as it never was
+- stamp, check and document the two new surfaces
+- move the models cache loader beside the registry it builds
+- assert what the settings list promises, not its length
+- cover the pure functions the editor path leans on
+- read the selected suggestion without unwrapping
+- refuse an MCP server name that carries a path
+- describe workspace-root paths
+- describe the status line command and its stdin contract
+- publish the registries behind a lock so a reload can swap them
+- record the tui dependency on the plugins crate
+- match the plugin and hook pages to what the build does
+- document skill discovery and what a plugin's skills and agents do
+- extract the plugin agent definitions into a tested function
+- read the plugin directories on every /plugin call
+- describe plugin selection, plugin MCP scope, and what a reload does
+- cover mouse capture and how pasting behaves
+- describe the execution timeline
+- cover every Apple Silicon chip and fish in the install guide
+- declare nix only for the targets that use it
+- cut the unused write half of git_utils
+- read every relative timestamp from one formatter
+- drop the account registry for one account concept
+- read and write OAuth tokens through the auth store
+- write the protocol filter as a matches! pattern
+- keep provider API keys out of settings.json
+- untrack AGENTS.md
+- drop the unused ArmsUp mascot pose
+- update mascot file path in AGENTS.md
+- update architecture docs and reformat tests
+- cover the companion command and its settings
+- update GitHub Pages site info
+- point every reference at this fork
+- publish the relay image to ghcr.io
+- update relay and dev guidelines
+- cover providers, remote control, and the docs map
+- build and test the relay
+- clarify agent committing guidelines
+- give the model cost column one number format
+- upload events while the poll is in flight
+- narrow the session state to what a client can see
+- give a session rename one place to happen
+- extract the registration POST from BridgeSession
+- keep the session list beside the transcript
+- cover what a remote client can now do
+- cover remote answers and the system-prompt flags
+- cover self-hosted remote control
+- cover the custom endpoint slots and the new /model list
+- describe running the advisor on a second account
+- let the Anthropic token refresh target a profile
+- move provider lookup helpers out of commands
+- format the workspace with rustfmt
+- reformat documentation tables
+- thread thought_signature through remaining tool-use construction sites
+- add local models guide (llama.cpp, OpenAI-compatible servers)
+- drop duplicated doc comment on pending_key
+- assert welcome banner scrolls with the conversation (#310)
+- add modelOverrides to the annotated settings.json example
+- document modelOverrides for correcting model metadata
+- updating readme screenshot
+- Revert "feat(tui): centre-origin elliptical ripple for the ultracode wave"
+- satisfy clippy (struct-update init, drop unused import)
+- verify /output-style and /keybindings end-to-end
+- route /rocky /caveman /normal through output-style
+- record regex dependency edge for claurst-api in Cargo.lock
+- drive the /model effort selector from the variants ladder
+- pin core.autocrlf=false in /move test repos
+- document /new and /move
+- extract recent-activity rendering into a testable helper + tests
+- drop tip promoting the removed /feedback command (#276)
+- detach /feedback trigger from session survey
+- remove the /feedback (/bug) command
+- drop install-slack-app from slash-command autocomplete
+- remove /feedback and /install-slack-app commands
+- retheme ultracode keyword gradient to claurst-red
+
+### Fixed
+
+- push the permission mode to the manager on a config change
+- feed the slash command typeahead from the command registry
+- deliver macOS notifications through osascript
+- correct the output_format enum option to stream_json
+- show the timeline panel from the start when it is enabled
+- make the status-bar mode and connect badges white on the accent
+- make the selected timeline row white on the accent
+- use explicit RGB so the footer, status and selection stay readable
+- list every output style in the settings picker
+- read shifted keys from the terminal, drop the US-QWERTY map
+- remove legacy raster images and switch to mikmik.svg
+- drop the black from mikmik.svg, render it all pink
+- back only the eyes with black in mikmik.svg
+- send the SDK User-Agent on the Anthropic token refresh
+- bump the Anthropic OAuth fingerprint to Claude Code 2.1.246
+- retry a truncated Anthropic stream instead of a silent turn
+- replay a Gemini thought signature as tool_call extra_content
+- carry a tool call's thought signature through the accumulator
+- capture a Gemini thought signature from the OpenAI-compat wire
+- pause a command chain while any overlay or picker is open
+- end a computer-use op on an already-spent deadline
+- report each free upstream's real limits instead of one constant
+- resolve a composite account's window through its embedded provider
+- parse DeepSeek DSML tool-call envelopes instead of leaking markup
+- expand a leading ~ in configured skill paths
+- exclude the permission wait from a self-gating tool's duration
+- gate the desktop argument readers behind computer-use
+- apply schema deferral on both dispatch arms
+- stop advertising a tool the session withheld
+- draw the duration on the arm a real transcript uses
+- send a utility's printed output where it was redirected
+- keep a bundled utility from resetting the process's signals
+- stop an abandoned utility from holding the process
+- offer PowerShell only where it can run
+- keep the workspace session out of the account list
+- close the second door a sub-agent could spawn through
+- cut a message preview where a character ends
+- drop a tool that could never have worked
+- accept a config key spelled the way its own documentation spells it
+- search the memory a file holds, not only what it is called
+- fire the turn-end work on both dispatch arms
+- match a URI the server spells differently
+- stop reporting a wrong answer as an empty one
+- keep a language server for as long as it is useful
+- answer the language server, not only listen to it
+- ask again before a command that destroys data
+- show the rates /cost actually billed
+- report the context the session actually has
+- price the current models at what they cost
+- keep the cross-page links inside the viewer
+- make /hooks and /config print instructions that work
+- show the most urgent notification, not the most recent
+- apply a mode the model set to the turn that is running
+- make EnterPlanMode actually enter plan mode
+- give /memory edit the terminal before the editor
+- keep a sub-agent away from the plan dialog
+- give every plan its own file
+- end the plan file's last line
+- keep the plan's file name and say when nothing was summarised
+- keep the plan dialog readable while a note is typed
+- keep the plan dialog's hint row on screen
+- assert the flag cache path through the resolver
+- make the mascot test independent of the config root
+- bill each model at its own rates, not at Anthropic's
+- make the credential and the endpoint name one account
+- summarise with the wire model, not the account composite
+- hold the reported prompt size beside the breaker
+- carry the reported prompt size across user messages
+- compact at the request boundary, for both dispatch arms
+- keep the auto-compact breaker for the whole session
+- size the context window from the model that ran
+- read context fill from the prompt, not a running total
+- finish the last two project-settings booleans
+- let a project settings file turn auto-compact off, not only on
+- keep interface preferences out of a project settings file
+- keep the indent on every row a line wraps onto
+- restore the keys the resolver was swallowing
+- let Ctrl+Shift+C copy the selection
+- say so when a turn ends without producing anything
+- stop losing session failures on the way to the user
+- point the cost screen at the turns that were recorded
+- stop dropping the output tokens a turn reported
+- record what a turn cost on the message itself
+- stop a repository from setting what only the user may set
+- end REPL interpreters with the session that started them
+- stop the formatter when the turn that asked for it is cancelled
+- bound the worktree post-create command
+- stop a hook's children when the hook hits its limit
+- bound how long a settings hook may run
+- kill what a PowerShell script started, not just the interpreter
+- make cancelling a task stop what its shell started
+- kill what the bash tool's shell started, not just the shell
+- stop resetting the saved permission mode on every launch
+- write the turn limit /turns says it saves
+- point the footer at the resumed session's directory
+- make URLs in the transcript clickable
+- deliver dictated text to the prompt
+- scroll the session browser list
+- fit a session browser row inside the modal
+- run the session loads the live event loop never drove
+- keep the picker cursor on the row it just starred
+- let an account carry its own request options
+- repair mojibake in the renderer
+- do not restart the agent between listing and opening a session
+- let go of a turn's bookkeeping once it is over
+- keep the command list useful past the command name
+- stop dragging the view back down mid-turn
+- give up on a request the agent never answers
+- draw what a tool returned
+- keep the preview the agent attaches to a permission request
+- show what a permission request is approving
+- tell every opened session which commands it can run
+- run one turn at a time per session
+- count each session's spending on its own
+- let a cancelled session take another prompt
+- give a switched account a model even when the catalog is silent
+- report the manifest's version to the agent
+- classify a tool the same way on both editor paths
+- stop a default Config from switching @ autocomplete off
+- keep the legacy SSE transport alive after a task panics
+- describe the session's directory, not the runtime's
+- gate the patch release on this repository's owner
+- remove the renamed binary the Windows upgrade leaves behind
+- mark the CLI entrypoint executable
+- shape an account's base URL by its protocol, not its name
+- read a manifest a plugin keeps under .claude-plugin
+- kill a hook that overruns and keep it off the runtime threads
+- show the hooks a plugin registered in the /hooks browser
+- describe a command by its frontmatter, not its delimiter
+- tell the truth about activating a freshly installed plugin
+- expand a plugin command the way a skill expands
+- list the agents a plugin ships and say what shadows what
+- make the output styles a plugin ships selectable
+- start the language servers a plugin declares
+- run tool hooks on the provider dispatch arm too
+- register the hooks a plugin declares
+- publish the plugin registry and reach the plugins' skills
+- stop claiming a reload changes the running session
+- report a failed settings write from /plugin enable and disable
+- connect plugin MCP servers at startup instead of after a reconnect
+- let a plugin's origin decide whether its MCP server is trusted
+- honour the plugins the user disabled
+- write OSC 52 only when stdout is a terminal
+- say why Ctrl+V did nothing
+- copy through one clipboard writer
+- expand a timeline row with right, not enter
+- keep status lines out of the execution timeline
+- put an expanded timeline detail under the row it explains
+- stop a tab in tool output from shifting the transcript
+- rebuild the remote timeline after the history that clears it
+- apply a settings toggle to the session that is running
+- tell the user when a settings write does not land
+- let settings.json carry a partial config block
+- show the match when a settings search narrows the list
+- give format_relative_time the calendar date it documents
+- pass a stash message as its own argument
+- register an account under its own name
+- name the active account in the status line
+- read both model-limit spellings without a duplicate-field error
+- name the right wire format in the URL hint
+- make a connected account reachable in the same session
+- accept both timestamp shapes from GET /v1/models
+- offer only accounts that were actually added
+- never pick the account from the model name
+- decide the fallback from the error type, not its prose
+- honour --fallback-model on the provider path
+- price a bridge turn at the model that ran it
+- make the /cost rows add up to the total
+- accept more than one prompt per remote session
+- report a positive zero for a session that spent nothing
+- price tokens at the model that spent them
+- make /effort report the level in force
+- let a chosen effort level reach the request
+- name the working directory and platform once
+- say when the machine has gone instead of counting down
+- send a rotated token back to the unlock screen
+- carry a rename into the exported file
+- stop a remote prompt from racing the running turn
+- show the arguments in the MCP trust prompt
+- resync the remote transcript when the conversation changes
+- separate assistant turns in the remote transcript
+- back off when the event stream cannot be reached
+- make --system-prompt-file do something
+- stop offering a remote answer that will be refused
+- stop claiming a remote permission policy that is not in force
+- make the web client adapt to tablet and desktop
+- report the relay a session will actually use
+- honour allow-permanently from a remote client
+- make --dump-system-prompt print the real system prompt
+- claurst upgrade fails with Text file busy (ETXTBSY) (#325)
+- discover loaded LM Studio models and usage (#329)
+- preserve malformed settings (#328)
+- support owned peer info from cargo install (#324)
+- capture and re-attach Gemini thoughtSignature on tool calls (#311)
+- show n/a for cache counters when no cache reported
+- appease clippy in the paste viewer (clamp, default-then-assign)
+- parse cached_tokens from OpenAI-compatible usage
+- preserve line breaks in raw key-flood pastes
+- capture raw key-flood pastes in the live event loop
+- deliver bracketed pastes while streaming via the shared paste path
+- complete MiniMax M3 refresh (#313)
+- refresh MiniMax M3 metadata (#308)
+- resolve clippy 1.97 lints failing CI
+- remember permission approvals across restarts
+- expand pasted-text placeholders at submit so the agent gets the real content
+- activate Claude Pro/Max OAuth credentials in-session (no restart) (#306)
+- don't rainbow xhigh in the effort picker when max is also available (#305)
+- stop pinning the idle spinner glyph after the first turn (#303)
+- theme the streaming spinner claurst red (not yellow)
+- drop the ASCII-star spinner glyph from the status row
+- ultracode wave = slow glowing waveform, text clearly on top
+- red (not rainbow) ultracode wave; diffuse the xhigh/max text
+- count the effort picker as an open modal so Enter confirms
+- resolve effort ladder for provider-alias models (codex)
+- stop hardcoded discover_models from overwriting the catalog
+- regenerate SHA256SUMS in patch-release (was stale, broke installer)
+

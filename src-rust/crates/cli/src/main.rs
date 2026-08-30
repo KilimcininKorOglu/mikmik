@@ -1622,6 +1622,21 @@ fn session_slash_commands(
 ) -> (Vec<(String, String)>, usize) {
     let mut commands: Vec<(String, String)> = Vec::new();
 
+    // Registry built-ins the TUI's static PROMPT_SLASH_COMMANDS list does not
+    // carry: without these a command like `/permissions` runs when typed in
+    // full but never shows in the `/` typeahead, because the two lists drifted
+    // (the TUI is a sibling crate of `mikmik-commands` and cannot read its
+    // registry). `set_extra_slash_commands` drops any name the built-in table
+    // already has, so this only fills the gaps. Hidden commands stay hidden.
+    for command in mikmik_commands::all_commands() {
+        if !command.hidden() {
+            commands.push((
+                command.name().to_string(),
+                command.description().to_string(),
+            ));
+        }
+    }
+
     if let Some(registry) = mikmik_plugins::global_plugin_registry() {
         for def in registry.all_command_defs() {
             commands.push((def.name.clone(), def.description.clone()));

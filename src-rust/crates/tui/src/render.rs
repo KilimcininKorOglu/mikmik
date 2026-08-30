@@ -3481,7 +3481,9 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
                 Span::styled(
                     format!(" {} ", agent_mode.to_uppercase()),
                     Style::default()
-                        .fg(Color::Black)
+                        // White on the accent, not ANSI Color::Black: a theme can
+                        // remap black to a mid-gray that is unreadable on pink.
+                        .fg(Color::Rgb(255, 255, 255))
                         .bg(pink)
                         .add_modifier(Modifier::BOLD),
                 ),
@@ -3509,7 +3511,9 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
                 Span::styled(
                     " /connect ",
                     Style::default()
-                        .fg(Color::Black)
+                        // White on the accent, not ANSI Color::Black, so the badge
+                        // stays readable on pink under every terminal theme.
+                        .fg(Color::Rgb(255, 255, 255))
                         .bg(pink)
                         .add_modifier(Modifier::BOLD),
                 ),

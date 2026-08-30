@@ -344,7 +344,7 @@ pub fn setup_terminal(mouse_capture: bool) -> io::Result<Terminal<CrosstermBacke
         );
     }
 
-    set_terminal_title("\u{1f980} MikMik");
+    set_terminal_title("\u{1f431} MikMik");
     let backend = CrosstermBackend::new(stdout);
     let terminal = Terminal::new(backend)?;
     Ok(terminal)
@@ -420,11 +420,11 @@ pub fn set_terminal_progress(active: bool) {
 }
 
 /// Update the terminal title to reflect the current session context.
-/// Format: "🦀 | <topic>" or just "🦀 MikMik" when no topic is set.
+/// Format: "🐱 | <topic>" or just "🐱 MikMik" when no topic is set.
 pub fn update_terminal_title(topic: Option<&str>) {
     match topic {
-        Some(t) if !t.is_empty() => set_terminal_title(&format!("\u{1f980} | {}", t)),
-        _ => set_terminal_title("\u{1f980} MikMik"),
+        Some(t) if !t.is_empty() => set_terminal_title(&format!("\u{1f431} | {}", t)),
+        _ => set_terminal_title("\u{1f431} MikMik"),
     }
 }
 

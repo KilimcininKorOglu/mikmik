@@ -21,16 +21,15 @@ const MAX_BODY_CHARS: usize = 180;
 ///
 /// Each platform reads the name through a different vocabulary, and a name it
 /// does not recognise leaves the notification silent rather than falling back:
-/// macOS resolves it against `/System/Library/Sounds`, Windows parses it into
-/// a `tauri-winrt-notification` `Sound`, and the XDG backend passes it as the
-/// freedesktop `sound-name` hint.
+/// macOS resolves it against `/System/Library/Sounds` through AppleScript's
+/// `sound name`, Windows parses it into a `tauri-winrt-notification` `Sound`,
+/// and the XDG backend passes it as the freedesktop `sound-name` hint.
 ///
-/// So each name is the one that platform calls its own default, rather than a
-/// sound picked here: whatever the user set as their alert sound is what they
-/// already recognise as a notification. The freedesktop spec has no "default"
-/// token, so the generic message sound stands in for one there.
+/// The macOS name is a concrete file in `/System/Library/Sounds`, because
+/// AppleScript's `sound name` has no "default alert" token: an unknown or
+/// empty name leaves the banner silent.
 #[cfg(target_os = "macos")]
-const NOTIFY_SOUND: &str = "NSUserNotificationDefaultSoundName";
+const NOTIFY_SOUND: &str = "Ping";
 #[cfg(target_os = "windows")]
 const NOTIFY_SOUND: &str = "Default";
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -122,21 +121,73 @@ pub fn notify(settings: &Settings, event: NotifyEvent, body: &str) {
     let body = trim_body(body);
     let with_sound = should_play_sound(settings, event);
 
-    // Off the caller's thread: `show()` talks to D-Bus or the platform's
-    // notification service, and the caller is usually the TUI event loop,
-    // where a blocked frame is visible as a stutter.
+    // Off the caller's thread: delivery talks to a notification service or
+    // spawns `osascript`, and the caller is usually the TUI event loop, where
+    // a blocked frame is visible as a stutter.
     std::thread::spawn(move || {
-        let mut notification = notify_rust::Notification::new();
-        notification.summary(summary).body(&body);
-        if with_sound {
-            notification.sound_name(NOTIFY_SOUND);
-        }
-        if let Err(error) = notification.show() {
-            // Not an error the user can act on mid-turn: no daemon, no
-            // permission, no session bus. Logged so it is still diagnosable.
-            debug!(%error, summary, "desktop notification was not delivered");
-        }
+        deliver(summary, &body, with_sound);
     });
+}
+
+/// Post the notification through the platform's service.
+///
+/// macOS goes through `osascript` rather than `notify_rust`: the crate's
+/// default backend is the deprecated `NSUserNotificationCenter`, which modern
+/// macOS ignores, and the modern `UNUserNotificationCenter` needs a bundle
+/// identifier this binary does not have. AppleScript's `display notification`
+/// posts through the terminal's own bundle, so it needs none.
+#[cfg(target_os = "macos")]
+fn deliver(summary: &str, body: &str, with_sound: bool) {
+    let sound = with_sound.then_some(NOTIFY_SOUND);
+    let script = applescript_notification(summary, body, sound);
+    match std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+    {
+        Ok(output) if !output.status.success() => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            debug!(%stderr, summary, "osascript notification failed");
+        }
+        Err(error) => debug!(%error, summary, "osascript could not be launched"),
+        Ok(_) => {}
+    }
+}
+
+/// Build the `display notification` command, escaping every field for the
+/// AppleScript string literal it lands in.
+///
+/// `body` and `summary` carry model output, so a bare `"` or `\` would end the
+/// literal and let the rest run as script; both are escaped first.
+#[cfg(target_os = "macos")]
+fn applescript_notification(summary: &str, body: &str, sound: Option<&str>) -> String {
+    fn escape(value: &str) -> String {
+        value.replace('\\', "\\\\").replace('"', "\\\"")
+    }
+    let mut script = format!(
+        "display notification \"{}\" with title \"{}\"",
+        escape(body),
+        escape(summary)
+    );
+    if let Some(sound) = sound {
+        script.push_str(&format!(" sound name \"{}\"", escape(sound)));
+    }
+    script
+}
+
+/// Post the notification through `notify_rust` on every non-macOS platform.
+#[cfg(not(target_os = "macos"))]
+fn deliver(summary: &str, body: &str, with_sound: bool) {
+    let mut notification = notify_rust::Notification::new();
+    notification.summary(summary).body(body);
+    if with_sound {
+        notification.sound_name(NOTIFY_SOUND);
+    }
+    if let Err(error) = notification.show() {
+        // Not an error the user can act on mid-turn: no daemon, no permission,
+        // no session bus. Logged so it is still diagnosable.
+        debug!(%error, summary, "desktop notification was not delivered");
+    }
 }
 
 /// Cut `body` to [`MAX_BODY_CHARS`], on a character boundary, with an ellipsis.
@@ -278,5 +329,22 @@ mod tests {
     #[test]
     fn a_short_body_is_passed_through_trimmed() {
         assert_eq!(trim_body("  keep me  "), "keep me");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn applescript_escapes_quotes_and_backslashes_so_a_body_cannot_break_out() {
+        let script = applescript_notification("Ti\"tle", "bo\\dy\"", Some("Ping"));
+        assert_eq!(
+            script,
+            "display notification \"bo\\\\dy\\\"\" with title \"Ti\\\"tle\" sound name \"Ping\""
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn applescript_without_sound_omits_the_sound_clause() {
+        let script = applescript_notification("t", "b", None);
+        assert_eq!(script, "display notification \"b\" with title \"t\"");
     }
 }

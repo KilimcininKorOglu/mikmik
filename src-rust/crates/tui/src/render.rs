@@ -51,7 +51,6 @@ use crate::tasks_overlay::render_tasks_overlay;
 use crate::theme_screen::render_theme_screen;
 use crate::transcript_turn::{build_transcript_turns, TranscriptTurn};
 use crate::virtual_list::{VirtualItem, VirtualList};
-use crate::voice_mode_notice::render_voice_mode_notice;
 use mikmik_core::constants::{APP_VERSION, CONTEXT_CRITICAL_FRACTION, CONTEXT_WARNING_FRACTION};
 use mikmik_core::timeline::{TimelineRow, TimelineStatus};
 use mikmik_core::types::Role;
@@ -815,20 +814,6 @@ pub fn render_app(frame: &mut Frame, app: &App) {
                 height: banner_h,
             };
             render_overage_upsell(&app.overage_upsell, banner_area, frame.buffer_mut());
-        }
-    }
-
-    // Voice mode availability notice
-    if app.voice_mode_notice.visible {
-        let notice_h = app.voice_mode_notice.height();
-        if size.height > notice_h + 4 {
-            let notice_area = Rect {
-                x: size.x,
-                y: size.y,
-                width: size.width,
-                height: notice_h,
-            };
-            render_voice_mode_notice(&app.voice_mode_notice, notice_area, frame.buffer_mut());
         }
     }
 
@@ -3656,10 +3641,11 @@ fn should_render_status_row(app: &App) -> bool {
     // next submit, so keeping the row on for it unconditionally pinned an idle
     // row on screen permanently after the first turn; behind the setting that
     // is what the user asked for.
-    app.voice_recording
-        || (!app.is_streaming && app.status_message.is_some())
-        || (app.is_streaming && interesting_stream_status)
-        || (!app.is_streaming && turn_duration_line(app).is_some())
+    if app.is_streaming {
+        interesting_stream_status
+    } else {
+        app.status_message.is_some() || turn_duration_line(app).is_some()
+    }
 }
 
 /// The finished turn's verb and elapsed time, when the setting asks for them.
@@ -3678,15 +3664,7 @@ fn render_status_row(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let spans = if app.voice_recording {
-        vec![Span::styled(
-            format!(
-                "{} Recording... press Alt+V to transcribe",
-                figures::black_circle()
-            ),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        )]
-    } else if app.is_streaming {
+    let spans = if app.is_streaming {
         // Pick a label: use the status message if it has real content,
         // otherwise show a default "Thinking" shimmer so the user always
         // sees that the model is working.
@@ -3831,13 +3809,8 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         height: 1,
     };
 
-    // Left side: ordered pills — voice > PR badge > background task > vim > hint
-    let left_spans: Vec<Span> = if app.voice_recording {
-        vec![Span::styled(
-            format!(" {} REC — speak now", figures::black_circle()),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        )]
-    } else {
+    // Left side: ordered pills — PR badge > background task > vim > hint
+    let left_spans: Vec<Span> = {
         let mut spans: Vec<Span> = Vec::new();
 
         // Agent type badge (shown when running as subagent / coordinator)

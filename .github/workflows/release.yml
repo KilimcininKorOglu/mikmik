@@ -15,10 +15,6 @@ concurrency:
 
 permissions:
   contents: write
-  # `actions: write` is needed for the final step that dispatches
-  # npm-publish.yml via `gh workflow run`. Without it, `gh workflow run`
-  # gets a 403 from the GitHub API.
-  actions: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -105,7 +101,7 @@ jobs:
         if: runner.os == 'Linux' && !matrix.cross
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config libwayland-dev libpipewire-0.3-dev libclang-dev libegl-dev
+          sudo apt-get install -y pkg-config libwayland-dev libpipewire-0.3-dev libclang-dev libegl-dev
 
       # Linux ARM64: use cross for reliable cross-compilation (handles
       # sysroot, pkg-config, ALSA automatically via Docker).
@@ -137,7 +133,7 @@ jobs:
           pre-build = [
             "dpkg --add-architecture $CROSS_DEB_ARCH",
             "apt-get update",
-            "apt-get install -y pkg-config libclang-dev libasound2-dev:$CROSS_DEB_ARCH libwayland-dev:$CROSS_DEB_ARCH libpipewire-0.3-dev:$CROSS_DEB_ARCH libegl-dev:$CROSS_DEB_ARCH"
+            "apt-get install -y pkg-config libclang-dev libwayland-dev:$CROSS_DEB_ARCH libpipewire-0.3-dev:$CROSS_DEB_ARCH libegl-dev:$CROSS_DEB_ARCH"
           ]
           EOF
 
@@ -385,23 +381,3 @@ jobs:
           body_path: release-notes.md
           files: release/*
 
-      # Explicit hand-off to npm-publish.yml.
-      #
-      # We can't rely solely on the `workflow_run` trigger in npm-publish.yml
-      # because this Release workflow is itself triggered by a workflow
-      # dispatch from auto-release.yml's GITHUB_TOKEN, and GitHub's
-      # automatic-token rules don't list `workflow_run` as an exception to
-      # the "events from GITHUB_TOKEN don't create new workflow runs" rule.
-      # In practice that means the workflow_run chain silently no-ops on
-      # auto-cut releases. Dispatching directly here makes the publish step
-      # deterministic — the workflow_run trigger stays as a manual-release
-      # fallback.
-      - name: Dispatch npm-publish.yml
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh workflow run npm-publish.yml \
-            --repo "${{ github.repository }}" \
-            --ref main \
-            -f version="${{ inputs.version }}"
-          echo "Dispatched npm-publish.yml for ${{ inputs.version }}."

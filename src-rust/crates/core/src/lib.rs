@@ -9082,7 +9082,7 @@ pub mod oauth {
 pub use oauth::OAuthTokens;
 
 // ---------------------------------------------------------------------------
-// New modules: keybindings, voice, lsp, system_prompt, memdir, oauth_config
+// New modules: keybindings, lsp, system_prompt, memdir, oauth_config
 // ---------------------------------------------------------------------------
 pub mod accounts;
 pub mod antigravity_oauth;
@@ -9108,7 +9108,6 @@ pub mod ps_classifier;
 pub mod system_prompt;
 pub mod tips;
 pub mod tool_gates;
-pub mod voice;
 pub mod xai_oauth;
 pub mod zai_oauth;
 

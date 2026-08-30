@@ -10,7 +10,7 @@ This document is the complete reference for every slash command available in Mik
 2. [Shell Commands](#shell-commands)
 3. [Session & Navigation](#session--navigation)
 4. [Model & Provider](#model--provider) — `/model`, `/providers`, `/connect`, `/thinking`, `/effort`, `/advisor`, `/fast`
-5. [Configuration & Settings](#configuration--settings) — `/config`, `/turns`, `/poke`, `/yolo`, `/keybindings`, `/permissions`, `/hooks`, `/privacy-settings`, `/mcp`, `/output-style`, `/theme`, `/statusline`, `/timeline`, `/vim`, `/voice`, `/terminal-setup`
+5. [Configuration & Settings](#configuration--settings) — `/config`, `/turns`, `/poke`, `/yolo`, `/keybindings`, `/permissions`, `/hooks`, `/privacy-settings`, `/mcp`, `/output-style`, `/theme`, `/statusline`, `/timeline`, `/vim`, `/terminal-setup`
 6. [Code & Git](#code--git) — `/commit`, `/diff`, `/undo`, `/review`, `/security-review`, `/init`, `/search`
 7. [Search & Files](#search--files) — `/files`, `/context`
 8. [Memory & Context](#memory--context) — `/memory`, `/memories`, `/usage`, `/cost`, `/stats`, `/status`, `/insights`
@@ -741,30 +741,6 @@ Toggle vim keybinding mode on or off. In vim mode the input field behaves like a
 /vim on
 /vim off
 ```
-
----
-
-### /voice
-
-Enable or disable voice input (push-to-talk). There is no speech output.
-
-```
-/voice           — toggle
-/voice on
-/voice off
-/voice status
-```
-
-`Alt+V` starts recording; `Alt+V` or `Esc` stops it and transcribes. The setting
-persists to `~/.config/mikmik/ui-settings.json`.
-
-Transcription goes to a Whisper-compatible API. `OPENAI_API_KEY` is the key it
-looks for, with `ANTHROPIC_API_KEY` as a fallback. Point it at a local server
-with `WHISPER_ENDPOINT_URL`, for example
-`http://localhost:8080/v1/audio/transcriptions`.
-
-On Linux, ALSA must be installed (`sudo apt install libasound2-dev`), and a
-build made with `--no-default-features` has no voice support at all.
 
 ---
 
@@ -1760,4 +1736,3 @@ Two commands report a limit at run time rather than being hidden:
 | Command           | What it reports                                                                 |
 |-------------------|---------------------------------------------------------------------------------|
 | `/sandbox-toggle` | Sandboxed execution needs macOS, Linux or WSL2. On native Windows it says so.   |
-| `/voice`          | Voice needs a microphone, and needs a build that was not made with `--no-default-features`. |

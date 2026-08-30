@@ -8,8 +8,7 @@ name = "mikmik"
 path = "src/main.rs"
 
 [features]
-default = ["voice", "computer-use"]
-voice = ["mikmik-core/voice", "mikmik-tui/voice"]
+default = ["computer-use"]
 # The desktop half of the tool roster. On by default so `computerUseEnabled`
 # is the only thing deciding whether the model gets it; without this the
 # setting decides nothing, because the tool is not compiled at all.

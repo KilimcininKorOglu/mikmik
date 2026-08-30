@@ -691,8 +691,11 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Fast-path: `mikmik upgrade [--version <v>] [--force]` — self-update.
-    if raw_args.get(1).map(|s| s.as_str()) == Some("upgrade") {
+    // Fast-path: `mikmik update|upgrade [--version <v>] [--force]` — self-update.
+    if matches!(
+        raw_args.get(1).map(|s| s.as_str()),
+        Some("update") | Some("upgrade")
+    ) {
         return upgrade::run_upgrade(&raw_args[2..]).await;
     }
 
@@ -4115,7 +4118,6 @@ async fn run_interactive(
         app.pump_usage();
         app.pump_stats();
         app.pump_branch_list();
-        app.pump_voice_events();
 
         // Creating a branch writes a new session record, so the screen asks
         // and this loop does it, then switches to what it made.
@@ -4300,18 +4302,6 @@ async fn run_interactive(
                     // On Windows crossterm emits Press + Release for a single key.
                     // Only process Press to avoid double-registering input.
                     if key.kind != crossterm::event::KeyEventKind::Press {
-                        // The one exception: push-to-talk stops when the key
-                        // comes back up, which is a Release and nothing else.
-                        // Kept as narrow as it can be — letting any other
-                        // Release through would process that key twice.
-                        if key.kind == crossterm::event::KeyEventKind::Release
-                            && key.code == KeyCode::Char('v')
-                            && key.modifiers == KeyModifiers::NONE
-                            && app.voice_recording
-                            && app.voice_recorder.is_some()
-                        {
-                            app.handle_voice_ptt_stop();
-                        }
                         continue;
                     }
 
@@ -4486,7 +4476,7 @@ async fn run_interactive(
                             //   /model claude-haiku  → set model, don't open picker
                             //   /theme dark          → set theme, don't open picker
                             //   /resume <id>         → load session, don't open browser
-                            // Also skip TUI for /vim, /voice, /fast with explicit
+                            // Also skip TUI for /vim, /fast with explicit
                             // on|off args so the blind-toggle doesn't misfire.
                             let skip_tui_for_args = !cmd_args.is_empty()
                                 && matches!(
@@ -4498,7 +4488,6 @@ async fn run_interactive(
                                         | "session"
                                         | "vim"
                                         | "vi"
-                                        | "voice"
                                         | "fast"
                                         | "speed"
                                 );

@@ -46,7 +46,7 @@ use ratatui::style::Color;
 use ratatui::Terminal;
 use std::cell::{Cell, RefCell};
 use std::io::Stdout;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tracing::debug;
 
 const PROMPT_SLASH_COMMANDS: &[(&str, &str)] = &[
@@ -142,14 +142,11 @@ const PROMPT_SLASH_COMMANDS: &[(&str, &str)] = &[
         "Check for updates and upgrade to the latest version",
     ),
     ("vim", "Toggle vim keybindings"),
-    ("voice", "Toggle voice input mode"),
 ];
 
 fn help_command_category(name: &str) -> &'static str {
     match name {
-        "connect" | "model" | "providers" | "refresh" | "fast" | "effort" | "voice" => {
-            "Model & Provider"
-        }
+        "connect" | "model" | "providers" | "refresh" | "fast" | "effort" => "Model & Provider",
         "changes" | "diff" | "review" | "rewind" | "export" | "copy" | "share" | "links" => {
             "Review & History"
         }
@@ -1720,8 +1717,6 @@ pub struct App {
     pub hooks_config_menu: crate::hooks_config_menu::HooksConfigMenuState,
     /// Overage credit upsell banner.
     pub overage_upsell: crate::overage_upsell::OverageCreditUpsellState,
-    /// Voice mode availability notice.
-    pub voice_mode_notice: crate::voice_mode_notice::VoiceModeNoticeState,
     /// Desktop app upsell startup dialog.
     pub desktop_upsell: crate::desktop_upsell_startup::DesktopUpsellStartupState,
     /// Startup error dialog for malformed settings.json or AGENTS.md.
@@ -1909,13 +1904,6 @@ pub struct App {
     /// rendered with its own ANSI styling in the rows above the footer.
     pub status_line_override: Option<String>,
 
-    // ---- Voice hold-to-talk ------------------------------------------------
-    /// The global voice recorder, Some when voice is enabled in config.
-    pub voice_recorder: Option<Arc<Mutex<mikmik_core::voice::VoiceRecorder>>>,
-    /// True while recording is active (Alt+V toggled on).
-    pub voice_recording: bool,
-    /// Receiver for VoiceEvent messages produced by the recorder task.
-    pub voice_event_rx: Option<tokio::sync::mpsc::Receiver<mikmik_core::voice::VoiceEvent>>,
     /// A single key event that was drained from the queue during paste-burst
     /// detection but wasn't part of the burst (e.g. a modifier key that stopped
     /// the burst). Replayed at the top of the next loop iteration.
@@ -2268,7 +2256,6 @@ impl App {
             memory_file_selector: crate::memory_file_selector::MemoryFileSelectorState::new(),
             hooks_config_menu: crate::hooks_config_menu::HooksConfigMenuState::new(),
             overage_upsell: crate::overage_upsell::OverageCreditUpsellState::new(),
-            voice_mode_notice: crate::voice_mode_notice::VoiceModeNoticeState::new(),
             desktop_upsell: crate::desktop_upsell_startup::DesktopUpsellStartupState::new(),
             invalid_config_dialog: crate::invalid_config_dialog::InvalidConfigDialogState::new(),
             memory_update_notification:
@@ -2362,34 +2349,6 @@ impl App {
             background_task_count: 0,
             background_task_status: None,
             status_line_override: None,
-            voice_recorder: {
-                // Check whether voice input has been enabled via the /voice command
-                // (stored in ~/.config/mikmik/ui-settings.json).  We also accept
-                // MIKMIK_VOICE_ENABLED=1 as an override for easier testing.
-                let voice_on = std::env::var("MIKMIK_VOICE_ENABLED")
-                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                    .unwrap_or(false)
-                    || {
-                        let path =
-                            mikmik_core::config::Settings::config_dir().join("ui-settings.json");
-                        std::fs::read_to_string(&path)
-                            .ok()
-                            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                            .and_then(|v| v["voice_enabled"].as_bool())
-                            .unwrap_or(false)
-                    };
-                if voice_on {
-                    let recorder = mikmik_core::voice::global_voice_recorder();
-                    if let Ok(mut r) = recorder.lock() {
-                        r.set_enabled(true);
-                    }
-                    Some(recorder)
-                } else {
-                    None
-                }
-            },
-            voice_recording: false,
-            voice_event_rx: None,
             pending_key: None,
             model_fetch_rx: None,
             user_question_rx: None,
@@ -3751,39 +3710,6 @@ impl App {
                 self.effort_picker.open(self.effort_level, levels);
                 true
             }
-            "voice" => {
-                let was_on = self.voice_recorder.is_some();
-                if was_on {
-                    // Stop any active recording before disabling.
-                    if self.voice_recording {
-                        self.voice_recording = false;
-                        self.voice_event_rx = None;
-                        if let Some(ref recorder_arc) = self.voice_recorder {
-                            let recorder = recorder_arc.clone();
-                            tokio::task::spawn_blocking(move || {
-                                if let Ok(mut r) = recorder.lock() {
-                                    tokio::runtime::Handle::current()
-                                        .block_on(r.stop_recording())
-                                        .ok();
-                                }
-                            });
-                        }
-                    }
-                    self.voice_recorder = None;
-                    self.voice_mode_notice.dismiss();
-                    self.status_message = Some("Voice mode disabled.".to_string());
-                } else {
-                    let recorder = mikmik_core::voice::global_voice_recorder();
-                    if let Ok(mut r) = recorder.lock() {
-                        r.set_enabled(true);
-                    }
-                    self.voice_recorder = Some(recorder);
-                    self.voice_mode_notice = crate::voice_mode_notice::VoiceModeNoticeState::new();
-                    self.status_message =
-                        Some("Voice mode enabled. Press Alt+V to start recording.".to_string());
-                }
-                true
-            }
             "doctor" => {
                 // Handled by execute_command (DoctorCommand).
                 false
@@ -3902,7 +3828,6 @@ impl App {
             || self.memory_file_selector.visible
             || self.hooks_config_menu.visible
             || self.overage_upsell.visible
-            || self.voice_mode_notice.visible
             || self.memory_update_notification.visible
             || self.desktop_upsell.visible
             || self.import_config_dialog.visible
@@ -4402,56 +4327,6 @@ impl App {
     pub fn set_prompt_text(&mut self, text: String) {
         self.prompt_input.replace_text(text);
         self.refresh_prompt_input();
-    }
-
-    // -----------------------------------------------------------------------
-    // Voice PTT helpers
-    // -----------------------------------------------------------------------
-
-    /// Start PTT recording: open the microphone capture stream and signal the
-    /// UI.  No-op when no voice recorder is attached or recording is already
-    /// in progress.
-    pub fn handle_voice_ptt_start(&mut self) {
-        if self.voice_recording || self.voice_recorder.is_none() {
-            return;
-        }
-        let (tx, rx) = tokio::sync::mpsc::channel(16);
-        self.voice_event_rx = Some(rx);
-        self.voice_recording = true;
-        if let Some(ref recorder_arc) = self.voice_recorder {
-            let recorder = recorder_arc.clone();
-            tokio::task::spawn_blocking(move || {
-                if let Ok(mut r) = recorder.lock() {
-                    tokio::runtime::Handle::current()
-                        .block_on(r.start_recording(tx))
-                        .ok();
-                }
-            });
-        }
-        self.status_message =
-            Some("Recording\u{2026} release V or press Enter to transcribe".to_string());
-    }
-
-    /// Stop PTT recording: flip the AtomicBool inside VoiceRecorder so the
-    /// capture thread exits, then fire a "Transcribing…" notice.  The
-    /// transcript text arrives later via `voice_event_rx` and is injected into
-    /// the prompt by the event-loop drain.
-    pub fn handle_voice_ptt_stop(&mut self) {
-        if !self.voice_recording {
-            return;
-        }
-        self.voice_recording = false;
-        if let Some(ref recorder_arc) = self.voice_recorder {
-            let recorder = recorder_arc.clone();
-            tokio::task::spawn_blocking(move || {
-                if let Ok(mut r) = recorder.lock() {
-                    tokio::runtime::Handle::current()
-                        .block_on(r.stop_recording())
-                        .ok();
-                }
-            });
-        }
-        self.status_message = Some("Transcribing\u{2026}".to_string());
     }
 
     pub fn attach_turn_diff_state(
@@ -6075,30 +5950,6 @@ impl App {
             return false;
         }
 
-        // Voice mode notice dismiss
-        if key.code == KeyCode::Esc && self.voice_mode_notice.visible {
-            self.voice_mode_notice.dismiss();
-            return false;
-        }
-
-        // Cancel an active voice recording with Esc.
-        if key.code == KeyCode::Esc && self.voice_recording {
-            self.voice_recording = false;
-            self.voice_event_rx = None;
-            if let Some(ref recorder_arc) = self.voice_recorder {
-                let recorder = recorder_arc.clone();
-                tokio::task::spawn_blocking(move || {
-                    if let Ok(mut r) = recorder.lock() {
-                        tokio::runtime::Handle::current()
-                            .block_on(r.stop_recording())
-                            .ok();
-                    }
-                });
-            }
-            self.status_message = Some("Recording cancelled.".to_string());
-            return false;
-        }
-
         // Desktop upsell startup dialog
         if self.desktop_upsell.visible {
             match key.code {
@@ -6223,76 +6074,6 @@ impl App {
             *self.selection_text.borrow_mut() = String::new();
         }
 
-        // ---- Voice hold-to-talk (Alt+V toggles recording on/off) ----------
-        if key.code == KeyCode::Char('v')
-            && key.modifiers.contains(KeyModifiers::ALT)
-            && self.voice_recorder.is_some()
-        {
-            if !self.voice_recording {
-                // First press: start recording.
-                let (tx, rx) = tokio::sync::mpsc::channel(8);
-                self.voice_event_rx = Some(rx);
-                self.voice_recording = true;
-                if let Some(ref recorder_arc) = self.voice_recorder {
-                    let recorder = recorder_arc.clone();
-                    // Use spawn_blocking so we don't hold a std::sync::MutexGuard
-                    // across an await point.  start_recording internally spawns a
-                    // tokio task and returns quickly, so blocking is negligible.
-                    tokio::task::spawn_blocking(move || {
-                        if let Ok(mut r) = recorder.lock() {
-                            // start_recording is async but its real work happens in
-                            // a spawned task; use block_on to drive the short setup.
-                            tokio::runtime::Handle::current()
-                                .block_on(r.start_recording(tx))
-                                .ok();
-                        }
-                    });
-                }
-                self.push_notification(
-                    NotificationKind::Info,
-                    "Recording\u{2026} (Alt+V to transcribe · Esc to cancel)".to_string(),
-                    None,
-                );
-            } else {
-                // Second press: stop recording.  stop_recording() just flips an
-                // AtomicBool; drive it synchronously to avoid Send issues.
-                self.voice_recording = false;
-                if let Some(ref recorder_arc) = self.voice_recorder {
-                    let recorder = recorder_arc.clone();
-                    tokio::task::spawn_blocking(move || {
-                        if let Ok(mut r) = recorder.lock() {
-                            tokio::runtime::Handle::current()
-                                .block_on(r.stop_recording())
-                                .ok();
-                        }
-                    });
-                }
-                self.push_notification(
-                    NotificationKind::Info,
-                    "Transcribing\u{2026}".to_string(),
-                    Some(10),
-                );
-            }
-            return false;
-        }
-
-        // ---- Voice PTT: plain V press starts recording when voice is on ----
-        // This is the "hold to talk" variant.  The user presses V to begin
-        // recording; releasing V (handled in the run loop) or pressing Enter
-        // stops the capture and triggers transcription.
-        // Only active when voice mode is enabled (voice_recorder is Some) and
-        // the prompt input is in default (non-vim) mode so 'v' doesn't conflict
-        // with vim keybindings.
-        if key.code == KeyCode::Char('v')
-            && key.modifiers == KeyModifiers::NONE
-            && self.voice_recorder.is_some()
-            && !self.voice_recording
-            && self.prompt_input.vim_mode == crate::prompt_input::VimMode::Insert
-        {
-            self.handle_voice_ptt_start();
-            return false;
-        }
-
         // ---- Ctrl+V / Cmd+V — clipboard paste (image first, then text fallback) ----
         // Only fires when NOT in vim Normal/Visual/VisualBlock mode (where \x16 is
         // already consumed by the vim handler above to enter VisualBlock mode).
@@ -6337,12 +6118,6 @@ impl App {
         // ---- Shift+Insert — selection/clipboard paste fallback -------------
         if key.code == KeyCode::Insert && key.modifiers.contains(KeyModifiers::SHIFT) {
             let _ = self.paste_primary_into_prompt();
-            return false;
-        }
-
-        // ---- Enter while PTT recording: stop capture instead of submitting ----
-        if key.code == KeyCode::Enter && self.voice_recording && self.voice_recorder.is_some() {
-            self.handle_voice_ptt_stop();
             return false;
         }
 
@@ -8015,8 +7790,8 @@ impl App {
     ///
     /// On Windows Terminal, Ctrl+V causes the terminal emulator to write the
     /// clipboard content directly to stdin as raw character events — every
-    /// newline becomes an Enter keypress and stray `v` characters trigger
-    /// voice PTT.  Because a paste dumps ALL characters into the queue at
+    /// newline becomes an Enter keypress.  Because a paste dumps ALL
+    /// characters into the queue at
     /// once, a zero-timeout drain immediately after the first character
     /// reliably yields 3+ chars for any non-trivial paste, while normal
     /// keyboard typing (even at 120 WPM) almost never queues more than one
@@ -9496,66 +9271,6 @@ impl App {
         }
     }
 
-    /// Take whatever the background recorder has said since the last frame.
-    ///
-    /// The transcript only reaches the prompt through here, so a loop that
-    /// does not call this records audio and then drops the words on the floor.
-    pub fn pump_voice_events(&mut self) {
-        use mikmik_core::voice::VoiceEvent;
-
-        // Drained into a vec first: the loop body needs `&mut self` for the
-        // prompt and the notifications, which the receiver borrow would block.
-        let mut events = Vec::new();
-        if let Some(ref mut rx) = self.voice_event_rx {
-            while let Ok(ev) = rx.try_recv() {
-                events.push(ev);
-            }
-        }
-
-        for ev in events {
-            match ev {
-                VoiceEvent::RecordingStarted => {
-                    self.voice_recording = true;
-                    self.status_message =
-                        Some("Recording\u{2026} (Alt+V or Esc to stop)".to_string());
-                }
-                VoiceEvent::RecordingStopped => {
-                    self.voice_recording = false;
-                    self.status_message = Some("Transcribing\u{2026}".to_string());
-                }
-                VoiceEvent::TranscriptReady(text) => {
-                    if !text.is_empty() {
-                        // Append to existing prompt text with a space separator
-                        // so the user can combine voice + typed input.
-                        if !self.prompt_input.text.is_empty()
-                            && !self.prompt_input.text.ends_with(' ')
-                        {
-                            self.prompt_input.paste(" ");
-                        }
-                        self.prompt_input.paste(&text);
-                        self.refresh_prompt_input();
-                        // Cut on a character boundary: a byte slice through a
-                        // multi-byte character panics, and dictation is exactly
-                        // where non-ASCII text arrives.
-                        let preview: String = text.chars().take(60).collect();
-                        self.status_message = Some(format!("Transcribed: {}", preview));
-                    }
-                    // Clear the channel once we have the result.
-                    self.voice_event_rx = None;
-                }
-                VoiceEvent::Error(msg) => {
-                    self.voice_recording = false;
-                    self.voice_event_rx = None;
-                    self.push_notification(
-                        NotificationKind::Warning,
-                        format!("Voice: {}", msg),
-                        Some(8),
-                    );
-                }
-            }
-        }
-    }
-
     // -------------------------------------------------------------------
     // Main run loop
     // -------------------------------------------------------------------
@@ -9571,12 +9286,6 @@ impl App {
 
             self.pump_session_list();
             self.pump_recent_sessions();
-
-            // Drain voice transcription events (non-blocking).
-            // When the background recording/transcription task emits a
-            // TranscriptReady event we insert the text directly into the
-            // prompt so the user can review and submit it.
-            self.pump_voice_events();
 
             // Draw the frame, and immediately scan the *just-rendered*
             // buffer for URL runs. ratatui swaps its two buffers at the
@@ -9613,30 +9322,18 @@ impl App {
                 match event {
                     Event::Key(key) => {
                         // On Windows crossterm fires both Press and Release events.
-                        // We normally skip non-press events, but when voice PTT mode
-                        // is active we need the Release event for the `V` key so we
-                        // can stop recording as soon as the user lifts the key.
+                        // Skip non-press events so a key is handled once.
                         if key.kind != crossterm::event::KeyEventKind::Press {
-                            // Handle V-key release to stop PTT recording.
-                            if key.kind == crossterm::event::KeyEventKind::Release
-                                && key.code == KeyCode::Char('v')
-                                && key.modifiers == KeyModifiers::NONE
-                                && self.voice_recording
-                                && self.voice_recorder.is_some()
-                            {
-                                self.handle_voice_ptt_stop();
-                            }
                             continue;
                         }
 
                         // ---- Paste-burst detection -----------------------------------------
                         // On Windows Terminal, Ctrl+V causes the terminal to write clipboard
                         // content as raw character events (not as Event::Paste).  Every `\n`
-                        // fires as Enter (submitting the prompt) and stray `v` chars trigger
-                        // voice PTT.  We detect this by draining the event queue with a
-                        // zero-timeout immediately after the first character arrives — a paste
-                        // dumps every character at once while normal typing rarely queues more
-                        // than one char in the same 50 ms window.
+                        // fires as Enter (submitting the prompt).  We detect this by draining
+                        // the event queue with a zero-timeout immediately after the first
+                        // character arrives — a paste dumps every character at once while
+                        // normal typing rarely queues more than one char in the same 50 ms window.
                         if key.modifiers == KeyModifiers::NONE
                             || key.modifiers == KeyModifiers::SHIFT
                         {
@@ -12377,86 +12074,6 @@ mod background_pump_tests {
         app.pump_session_list();
         assert!(app.session_list_rx.is_none());
         assert!(app.session_browser.sessions.is_empty());
-    }
-
-    async fn deliver_voice(app: &mut App, events: Vec<mikmik_core::voice::VoiceEvent>) {
-        let (tx, rx) = tokio::sync::mpsc::channel(events.len().max(1));
-        app.voice_event_rx = Some(rx);
-        for ev in events {
-            tx.send(ev).await.expect("channel open");
-        }
-        app.pump_voice_events();
-    }
-
-    #[tokio::test]
-    async fn a_finished_transcript_lands_in_the_prompt() {
-        use mikmik_core::voice::VoiceEvent;
-        let mut app = app();
-
-        deliver_voice(&mut app, vec![VoiceEvent::TranscriptReady("hello".into())]).await;
-
-        assert_eq!(app.prompt_input.text, "hello");
-        assert!(
-            app.voice_event_rx.is_none(),
-            "the channel is done once the words arrive"
-        );
-    }
-
-    #[tokio::test]
-    async fn dictation_is_appended_to_what_was_already_typed() {
-        use mikmik_core::voice::VoiceEvent;
-        let mut app = app();
-        app.prompt_input.paste("write");
-
-        deliver_voice(&mut app, vec![VoiceEvent::TranscriptReady("a test".into())]).await;
-
-        assert_eq!(app.prompt_input.text, "write a test");
-    }
-
-    #[tokio::test]
-    async fn a_long_non_ascii_transcript_does_not_panic_the_status_line() {
-        // The preview used to cut the string at a byte offset, which lands
-        // mid-character for exactly the alphabets dictation produces.
-        use mikmik_core::voice::VoiceEvent;
-        let mut app = app();
-        // Under the paste-placeholder threshold so the prompt keeps the words,
-        // but past 60 *bytes*, which is where the old slice cut. The leading
-        // ASCII letter is what makes byte 60 land inside a character rather
-        // than between two: an all-two-byte string is cut cleanly by accident.
-        let text = format!("a{}", "ş".repeat(60));
-
-        deliver_voice(&mut app, vec![VoiceEvent::TranscriptReady(text.clone())]).await;
-
-        assert_eq!(app.prompt_input.text, text);
-        assert!(app
-            .status_message
-            .as_deref()
-            .is_some_and(|s| s.starts_with("Transcribed: ")));
-    }
-
-    #[tokio::test]
-    async fn a_recording_that_fails_says_so_and_stops() {
-        use mikmik_core::voice::VoiceEvent;
-        let mut app = app();
-        app.voice_recording = true;
-
-        deliver_voice(&mut app, vec![VoiceEvent::Error("no microphone".into())]).await;
-
-        assert!(!app.voice_recording);
-        assert!(app.voice_event_rx.is_none());
-        assert!(!app.notifications.is_empty(), "the failure is surfaced");
-    }
-
-    #[tokio::test]
-    async fn the_recording_flag_follows_the_recorder() {
-        use mikmik_core::voice::VoiceEvent;
-        let mut app = app();
-
-        deliver_voice(&mut app, vec![VoiceEvent::RecordingStarted]).await;
-        assert!(app.voice_recording);
-
-        deliver_voice(&mut app, vec![VoiceEvent::RecordingStopped]).await;
-        assert!(!app.voice_recording);
     }
 
     #[tokio::test]

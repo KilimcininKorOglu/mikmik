@@ -125,48 +125,17 @@ list.
 
 ---
 
-## Via npm / bun
-
-If you have Node.js or Bun installed, you can install MikMik as a global
-package. The postinstall script automatically downloads the correct pre-built
-native binary for your platform from GitHub Releases — no compilation needed.
-
-```bash
-# npm
-npm install -g mikmik
-
-# bun
-bun install -g mikmik
-```
-
-After installation, run `mikmik` directly from your terminal.
-
-You can also run MikMik without a permanent install:
-
-```bash
-npx mikmik          # via npm
-bunx mikmik         # via bun
-```
-
-**Supported platforms via npm:**
-
-| Platform | Architecture                                |
-|----------|---------------------------------------------|
-| Linux    | x86_64, aarch64                             |
-| macOS    | x86_64 (Intel), aarch64 (all Apple Silicon) |
-| Windows  | x86_64                                      |
-
----
-
 ## Upgrading
 
 Once installed, upgrade in place at any time:
 
 ```bash
-mikmik upgrade               # to the latest release
-mikmik upgrade --version 0.1.0   # pin to a specific version
-mikmik upgrade --force       # reinstall the same version
+mikmik update                    # to the latest release
+mikmik update --version 0.1.0    # pin to a specific version
+mikmik update --force            # reinstall the same version
 ```
+
+`mikmik upgrade` is accepted as an alias for `mikmik update`.
 
 The upgrade command downloads the matching archive from GitHub, extracts the
 new binary, and replaces the running executable atomically. Settings in
@@ -296,36 +265,35 @@ Copy it to a directory on your `PATH` as described above.
 
 ### Linux system dependencies
 
-On Linux, the build requires ALSA development headers (for the optional voice
-feature) and OpenSSL:
+On Linux, the build requires OpenSSL:
 
 ```bash
 # Debian / Ubuntu
-sudo apt-get install -y libasound2-dev libssl-dev pkg-config
+sudo apt-get install -y libssl-dev pkg-config
 
 # Fedora / RHEL
-sudo dnf install -y alsa-lib-devel openssl-devel
+sudo dnf install -y openssl-devel
 
 # Arch
-sudo pacman -S alsa-lib openssl
+sudo pacman -S openssl
 ```
 
 ### Cargo features
 
-The `mikmik` package has two features, `voice` and `computer-use`, and both are
-on by default. Turn them off to build without microphone support and without
-desktop control, which is what drops the Linux system libraries below:
+The `mikmik` package has one feature, `computer-use`, on by default. Turn it
+off to build without desktop control, which is what drops the Linux system
+libraries below:
 
 ```bash
 cargo build --release --package mikmik --no-default-features
 ```
 
-`voice` needs ALSA. `computer-use` (screenshot capture and mouse/keyboard
-control) reaches `xcap` and `enigo`, which on Linux need wayland, pipewire, EGL
-and libclang. On Debian and Ubuntu that is:
+`computer-use` (screenshot capture and mouse/keyboard control) reaches `xcap`
+and `enigo`, which on Linux need wayland, pipewire, EGL and libclang. On Debian
+and Ubuntu that is:
 
 ```bash
-sudo apt-get install -y pkg-config libasound2-dev \
+sudo apt-get install -y pkg-config \
   libwayland-dev libpipewire-0.3-dev libclang-dev libegl-dev
 ```
 
@@ -347,7 +315,7 @@ cd src-rust
 cross build --release --locked --package mikmik --target aarch64-unknown-linux-gnu
 ```
 
-`cross` manages the Docker sysroot, OpenSSL, and ALSA headers automatically.
+`cross` manages the Docker sysroot and OpenSSL automatically.
 
 ---
 

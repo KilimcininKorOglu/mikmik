@@ -5,7 +5,7 @@ name: Auto Release (commit marker)
 #   --release vMAJOR.MINOR.PATCH
 #       Cut a brand-new release.  The requested tag must be strictly greater
 #       (semver) than the highest existing tag, and must not already exist.
-#       Stamps the version across Cargo.toml/lock, npm, README, docs, and the
+#       Stamps the version across Cargo.toml/lock, README, docs, and the
 #       ACP registry, commits the bump as github-actions[bot] with [skip ci],
 #       then dispatches .github/workflows/release.yml.
 #
@@ -167,7 +167,7 @@ jobs:
             echo "## Auto-release dispatched"
             echo
             echo "- Tag: \`${{ steps.marker.outputs.tag }}\`"
-            echo "- Version stamped into Cargo.toml/lock, npm, README, docs, ACP registry."
+            echo "- Version stamped into Cargo.toml/lock, README, docs, ACP registry."
             echo "- Bump committed to main as \`github-actions[bot]\` (\`[skip ci]\`)."
             echo "- Release pipeline dispatched — watch the Release workflow for build/publish progress."
           } >> "$GITHUB_STEP_SUMMARY"

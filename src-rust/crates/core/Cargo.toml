@@ -4,11 +4,6 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-# Enable real microphone capture via cpal.
-# Without this feature the VoiceRecorder compiles but start_recording()
-# returns an error instead of accessing hardware.
-voice = ["dep:cpal"]
-
 # Experimental/feature-flagged capabilities
 default = ["ultraplan"]
 
@@ -53,7 +48,6 @@ ccr_remote_setup = []
 
 # Full dev build — includes all experimental features (36 total)
 dev_full = [
-    "voice",
     "ultraplan", "ultrathink", "history_picker",
     "message_actions", "quick_search", "away_summary",
     "hook_prompts", "kairos_brief", "kairos_channels", "lodestone",
@@ -100,8 +94,6 @@ which = { workspace = true }
 tokio-util = { workspace = true }
 futures = { workspace = true }
 rusqlite = { workspace = true }
-# Optional: real audio capture for voice input (gated behind the `voice` feature)
-cpal = { version = "0.15", optional = true }
 
 # Killing a process group needs `killpg`; `process_tree` uses the safe wrapper
 # rather than calling libc directly.

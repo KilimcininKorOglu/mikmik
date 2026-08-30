@@ -1,13 +1,5 @@
 //! Figure/icon constants matching src/constants/figures.ts
 
-// Platform-aware: on Windows use ● (U+25CF), elsewhere ⏺ (U+23FA)
-pub fn black_circle() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "●"
-    } else {
-        "⏺"
-    }
-}
 pub const BULLET_OPERATOR: &str = "∙"; // U+2219
 pub const TEARDROP_ASTERISK: &str = "✻"; // U+273B - used for thinking/compact
 pub const UP_ARROW: &str = "↑"; // U+2191

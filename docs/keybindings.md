@@ -13,7 +13,7 @@ The source of truth is `crates/core/src/keybindings.rs` for the bindings themsel
    - [Chat Context](#chat-context)
 2. [Keys Handled Outside the Binding System](#keys-handled-outside-the-binding-system)
    - [Permission Dialogs](#permission-dialogs)
-   - [Clipboard and Voice](#clipboard-and-voice)
+   - [Clipboard](#clipboard)
 3. [Keybinding Contexts](#keybinding-contexts)
 4. [Customizing Keybindings](#customizing-keybindings)
    - [The /keybindings command](#the-keybindings-command)
@@ -135,15 +135,13 @@ character:
 A digit only moves the selection. A letter key both selects and closes the
 dialog.
 
-### Clipboard and Voice
+### Clipboard
 
 | Key                | Behaviour                                                                |
 |--------------------|--------------------------------------------------------------------------|
 | `Ctrl+C`           | Copy the selection if there is one; otherwise cancel the stream; otherwise start the exit sequence |
 | `Ctrl+V` / `Cmd+V` | Paste an image, or text, from the system clipboard                       |
 | `Shift+Insert`     | Paste the primary selection                                              |
-| `Alt+V`            | Toggle voice recording (only when voice is enabled)                      |
-| `v`                | Push-to-talk: hold to record (only when voice is enabled and vim mode is off) |
 
 ---
 

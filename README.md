@@ -1,7 +1,7 @@
 <div align="center">
 
 <h1>MikMik</h1>
-<h2><em>Agentic Coding for Builders who Ship</em></h2>
+<h2><em>The chatter a cat makes at the birds outside the window</em></h2>
 <img src="public/mikmik.svg" alt="Rustle on the ship" width="350" />
 
 <p>
@@ -89,29 +89,15 @@ irm https://github.com/KilimcininKorOglu/mikmik/releases/latest/download/install
 
 This installs `mikmik` into `~/.local/bin` (or `%LOCALAPPDATA%\Programs\mikmik` on Windows; Git Bash uses that same Windows location) and adds it to your `PATH`. Open a new terminal and run `mikmik`.
 
-### Via npm / bun
+### Updating
 
-With Node.js or Bun installed, install MikMik as a global package. The postinstall script downloads the right pre-built binary for your platform.
-
-```bash
-# npm
-npm install -g mikmik
-
-# bun
-bun install -g mikmik
-
-# or run without installing
-npx mikmik
-bunx mikmik
-```
-
-Upgrade later with:
+MikMik updates itself from GitHub Releases:
 
 ```bash
-mikmik upgrade
+mikmik update
 ```
 
-> Pin a specific version with `--version 0.1.0` on either installer, or `mikmik upgrade --version 0.1.0`.
+This checks the latest release, downloads the build for your platform, and replaces the running binary in place. Your settings and sessions are preserved. Pin a specific version with `mikmik update --version 1.0.0`, or force a reinstall of the same version with `mikmik update --force`.
 
 ### Manual download
 
@@ -152,7 +138,7 @@ cargo build --release --package mikmik
 # Binary is at target/release/mikmik
 ```
 
-On a Raspberry Pi or a system without ALSA (for example Debian Trixie or a headless server), build without voice support so `libasound2-dev` is not required:
+On a headless server or a minimal system, build without desktop control so the X11/wayland libraries are not required:
 
 ```bash
 cargo build --release --package mikmik --no-default-features
@@ -271,7 +257,7 @@ If you touched `relay/`, run its own `cargo test -- --test-threads=1` and `cargo
 
 After cloning, open the repository in VS Code and use Reopen in Container to start the development environment. It requires [Docker](https://www.docker.com/products/docker-desktop/) on your host.
 
-GPG and SSH forwarding are enabled in the devcontainer if you have them set up on your host; follow [this guide](https://code.visualstudio.com/remote/advancedcontainers/sharing-git-credentials) if you need help. The container is based on `rust:1-bullseye`, preinstalls the build dependencies (`gnupg2`, `libasound2-dev`, `libxdo-dev`, `pkg-config`), runs as the `vscode` user, persists the Cargo caches through named volumes, and binds your local `.mikmik` into the container for settings and session history.
+GPG and SSH forwarding are enabled in the devcontainer if you have them set up on your host; follow [this guide](https://code.visualstudio.com/remote/advancedcontainers/sharing-git-credentials) if you need help. The container is based on `rust:1-bookworm`, preinstalls the build dependencies (`gnupg2`, `libxdo-dev`, `pkg-config`), runs as the `vscode` user, persists the Cargo caches through named volumes, and binds your local `.mikmik` into the container for settings and session history.
 
 ### Where to start
 

@@ -159,8 +159,6 @@ pub mod transcript_find;
 pub mod transcript_turn;
 /// Virtual scrollable list for efficient message rendering.
 pub mod virtual_list;
-/// Voice mode availability notice (shown when voice is available but not enabled).
-pub mod voice_mode_notice;
 
 // ---------------------------------------------------------------------------
 // Public re-exports
@@ -219,7 +217,6 @@ pub use session_browser::{
     render_session_browser, SessionBrowserMode, SessionBrowserState, SessionEntry,
 };
 pub use stats_dialog::{load_stats, render_stats_dialog, StatsDialogState, StatsTab};
-pub use voice_mode_notice::{render_voice_mode_notice, VoiceModeNoticeState};
 // (FreeModeField type is now per-provider; legacy callers may still import both names.)
 pub use device_auth_dialog::{
     render_device_auth_dialog, DeviceAuthDialogState, DeviceAuthEvent, DeviceAuthStatus,

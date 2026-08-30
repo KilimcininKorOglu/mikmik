@@ -15,8 +15,6 @@ pub(crate) struct UiSettings {
     #[serde(default)]
     pub fast_mode: Option<bool>,
     #[serde(default)]
-    pub voice_enabled: Option<bool>,
-    #[serde(default)]
     pub statusline_show_cost: Option<bool>,
     #[serde(default)]
     pub statusline_show_tokens: Option<bool>,

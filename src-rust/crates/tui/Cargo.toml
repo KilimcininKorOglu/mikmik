@@ -7,9 +7,6 @@ edition.workspace = true
 # Extra footer gauge fed by MIKMIK_TOKEN_BUDGET. Nothing in `core` is gated by
 # it, so it forwards nowhere.
 token_budget = []
-# Enable real microphone capture for voice PTT mode.
-voice = ["mikmik-core/voice", "dep:cpal", "dep:hound"]
-
 # UI & Interaction features (pass-through from cc-core)
 ultraplan = ["mikmik-core/ultraplan"]
 ultrathink = ["mikmik-core/ultrathink"]
@@ -78,9 +75,6 @@ dashmap = { workspace = true }
 icy_sixel = { workspace = true }
 image = { workspace = true }
 regex = { workspace = true }
-# Optional audio capture for voice PTT (gated behind the `voice` feature)
-cpal = { version = "0.15", optional = true }
-hound = { version = "3.5", optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

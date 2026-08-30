@@ -6,7 +6,6 @@ Usage: scripts/bump-version.py vMAJOR.MINOR.PATCH
 Touches:
   - src-rust/Cargo.toml                 workspace.package.version
   - src-rust/Cargo.lock                 12 mikmik* workspace package entries
-  - npm/package.json                    version field
   - editors/vscode/package.json         version field
   - README.md                           shields.io badge (text + alt) + Beta callout
   - docs/index.md                       **Version:** line
@@ -99,14 +98,7 @@ def main() -> None:
     # 2. Cargo.lock — every mikmik* workspace package
     bump_cargo_lock(version)
 
-    # 3. npm/package.json
-    pkg_path = ROOT / "npm" / "package.json"
-    pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
-    pkg["version"] = version
-    pkg_path.write_text(json.dumps(pkg, indent=2) + "\n", encoding="utf-8")
-    print(f"  npm/package.json")
-
-    # 3b. editors/vscode/package.json — the extension reports this version to
+    # 3. editors/vscode/package.json — the extension reports this version to
     # the agent in its initialize handshake.
     ext_path = ROOT / "editors" / "vscode" / "package.json"
     ext = json.loads(ext_path.read_text(encoding="utf-8"))

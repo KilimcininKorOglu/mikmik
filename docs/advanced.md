@@ -449,20 +449,6 @@ The bones (species, rarity, stats, eyes, hat, shiny) are never stored and are al
 
 ---
 
-## Voice mode
-
-```
-/voice
-```
-
-Voice input using the device microphone. When active, spoken input is transcribed and submitted as a prompt. Transcription goes to an OpenAI Whisper-compatible endpoint, `https://api.openai.com/v1/audio/transcriptions` by default, with the `whisper-1` model. Both the URL and the model are configurable, so any compatible server works.
-
-The `/voice` command is a toggle. `MIKMIK_VOICE_ENABLED=1` pre-enables voice mode and `MIKMIK_VOICE_DISABLED=1` turns it off.
-
-Voice is a compile-time Cargo feature. A build made with `--no-default-features` drops it, along with the ALSA dependency it needs on Linux.
-
----
-
 ## Vim keybindings
 
 ```

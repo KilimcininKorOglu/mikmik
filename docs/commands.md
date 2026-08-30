@@ -854,9 +854,12 @@ Run a security-focused review pass. The model looks specifically for vulnerabili
 
 ### /init
 
-Create an `AGENTS.md` in the working directory from a template. That file is
-read at the start of every session and injected into the system prompt. An
-existing `AGENTS.md` is left alone.
+Have the model write `AGENTS.md` for the working directory: it explores the
+build, lint and test commands, the architecture that spans several files, and
+the project's conventions, then writes the file. That file is read at the start
+of every session and injected into the system prompt. When an `AGENTS.md`
+already exists, `/init` reads it and refreshes it instead — updating stale
+entries, adding what is missing, and dropping what is no longer true.
 
 ```
 /init

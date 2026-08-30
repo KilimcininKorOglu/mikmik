@@ -20,8 +20,9 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-// Built-in filters, embedded at compile time.
-const BUILTIN_TOML: &str = include_str!("builtin_filters.toml");
+// Built-in filters, embedded at compile time. `build.rs` concatenates every
+// `filters/*.toml` into this one document under OUT_DIR.
+const BUILTIN_TOML: &str = include_str!(concat!(env!("OUT_DIR"), "/builtin_filters.toml"));
 
 // ---------------------------------------------------------------------------
 // Deserialization types (TOML schema)

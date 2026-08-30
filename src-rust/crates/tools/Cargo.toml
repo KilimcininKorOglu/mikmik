@@ -97,3 +97,6 @@ zvariant = "5"
 
 [features]
 computer-use = ["dep:enigo", "dep:xcap", "dep:image"]
+
+[build-dependencies]
+toml = { workspace = true }

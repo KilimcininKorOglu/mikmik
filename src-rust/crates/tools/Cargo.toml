@@ -44,6 +44,9 @@ dirs = { workspace = true }
 reqwest = { workspace = true }
 url = { workspace = true }
 base64 = { workspace = true }
+# The output-filter tee writes recovery files with a short slug hash to keep
+# their names unique but compact.
+sha2 = { workspace = true }
 # The `browser` tool speaks CDP: reqwest reads `/json/version`, this carries the
 # WebSocket that every DevTools command and response travels over.
 tokio-tungstenite = { workspace = true }

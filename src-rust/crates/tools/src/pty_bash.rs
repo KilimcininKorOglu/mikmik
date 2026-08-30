@@ -589,7 +589,7 @@ fn truncate_output(
     // reads it. Runs upstream of the hard character cap below, which stays as a
     // backstop for output the filter left large or did not match.
     if filter_enabled {
-        output = crate::output_filter::filter_command_output(command, &output);
+        output = crate::output_filter::filter_command_output(command, &output, exit_code);
     }
 
     const MAX_OUTPUT_LEN: usize = 100_000;

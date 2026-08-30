@@ -874,10 +874,10 @@ impl EnvAppData {
             match cmd.status() {
                 Ok(exit) if !exit.success() => Err(exit.code().unwrap_or(1).into()),
                 Err(ref err) => match err.kind() {
-                    io::ErrorKind::NotFound | io::ErrorKind::InvalidInput => {
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidInput => {
                         Err(self.make_error_no_such_file_or_dir(&prog))
                     }
-                    io::ErrorKind::PermissionDenied => {
+                    std::io::ErrorKind::PermissionDenied => {
                         uucore::show_error!(
                             "{}",
                             translate!("env-error-permission-denied", "program" => prog.quote())

@@ -216,7 +216,7 @@ fn read_and_discard<R: Read>(reader: &mut R, n: u64, buf_size: usize) -> io::Res
 enum Source {
     /// Input from stdin.
     #[cfg(not(unix))]
-    Stdin(io::Stdin),
+    Stdin(uucore::streams::Stdin),
 
     /// Input from a file.
     File(File),

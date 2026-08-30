@@ -25,7 +25,9 @@ use std::collections::HashMap;
 pub enum SettingKind {
     Bool,
     Enum {
-        options: Vec<&'static str>,
+        /// Owned so an enum can offer runtime-discovered options (e.g. output
+        /// styles loaded from disk), not only compile-time constants.
+        options: Vec<String>,
     },
     Number,
     /// Free text, edited the same way as `Number` but never parsed.
@@ -880,7 +882,15 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             label: "Output Style".into(),
             description: "Controls the verbosity and format of responses.".into(),
             kind: SettingKind::Enum {
-                options: vec!["default", "concise", "explanatory", "learning"],
+                // Every style the resolver accepts, including styles loaded from
+                // disk and registered at runtime — not just the built-ins — so
+                // the picker offers exactly what the description lists.
+                options: mikmik_core::output_styles::all_styles_with_runtime(
+                    &mikmik_core::config::Settings::config_dir(),
+                )
+                .into_iter()
+                .map(|style| style.name)
+                .collect(),
             },
             value: screen.output_style.clone(),
         },
@@ -1018,7 +1028,10 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
                 "How the advisor works. `tool`: the agent consults it when it decides to. `runtime`: it reads every turn on its own and interrupts. `both`: either way. `off`: neither."
                     .into(),
             kind: SettingKind::Enum {
-                options: mikmik_core::advisor::AdvisorMode::ALL.to_vec(),
+                options: mikmik_core::advisor::AdvisorMode::ALL
+                    .iter()
+                    .map(|mode| mode.to_string())
+                    .collect(),
             },
             value: screen.advisor_mode.clone(),
         },
@@ -1038,7 +1051,10 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
                 "How strictly an edit is held to what this session read. `stale`: refuse an edit to a file that changed after the read. `strict`: also refuse an edit to lines the read never displayed. `off`: neither."
                     .into(),
             kind: SettingKind::Enum {
-                options: mikmik_core::file_snapshot::EditGuard::ALL.to_vec(),
+                options: mikmik_core::file_snapshot::EditGuard::ALL
+                    .iter()
+                    .map(|guard| guard.to_string())
+                    .collect(),
             },
             value: screen.edit_guard.clone(),
         },
@@ -1159,7 +1175,7 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             label: "Output format".into(),
             description: "How responses are formatted: text, JSON, or streaming JSON.".into(),
             kind: SettingKind::Enum {
-                options: vec!["text", "json", "streamjson"],
+                options: vec!["text".to_string(), "json".to_string(), "streamjson".to_string()],
             },
             value: screen.output_format.clone(),
         },
@@ -1901,9 +1917,9 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                 screen.persist();
             }
             SettingKind::Enum { ref options } => {
-                let current_idx = options.iter().position(|&o| o == entry.value).unwrap_or(0);
+                let current_idx = options.iter().position(|o| *o == entry.value).unwrap_or(0);
                 let next_idx = (current_idx + 1) % options.len();
-                let new_value = options[next_idx];
+                let new_value = options[next_idx].as_str();
 
                 match entry.key.as_str() {
                     "output_style" => {

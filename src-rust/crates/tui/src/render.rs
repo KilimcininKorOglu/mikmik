@@ -1882,8 +1882,10 @@ fn timeline_row_line(
     let padding = title_width.saturating_sub(title.width());
 
     let title_style = if selected && focused {
+        // Bold white on the accent, not ANSI Color::Black (a theme may remap it
+        // to a mid-gray that washes out on the accent background).
         Style::default()
-            .fg(Color::Black)
+            .fg(Color::Rgb(255, 255, 255))
             .bg(MIKMIK_ACCENT)
             .add_modifier(Modifier::BOLD)
     } else if selected {
@@ -3908,7 +3910,10 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 spans.push(Span::raw("  "));
             }
             let (label, style) = match app.prompt_input.vim_mode {
-                VimMode::Insert => ("-- INSERT --", Style::default().fg(Color::Rgb(150, 150, 160))),
+                VimMode::Insert => (
+                    "-- INSERT --",
+                    Style::default().fg(Color::Rgb(150, 150, 160)),
+                ),
                 VimMode::Normal => (
                     "-- NORMAL --",
                     Style::default()
@@ -4075,7 +4080,10 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 format!("${:.2}", app.cost_usd)
             };
-            parts.push(Span::styled(cost_str, Style::default().fg(Color::Rgb(150, 150, 160))));
+            parts.push(Span::styled(
+                cost_str,
+                Style::default().fg(Color::Rgb(150, 150, 160)),
+            ));
         }
 
         // 3b. Token budget (feature-gated)

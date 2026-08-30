@@ -54,7 +54,13 @@ pub const MINIMUM_SCOPES: &[&str] = &[CLAUDE_AI_INFERENCE_SCOPE, CLAUDE_AI_PROFI
 /// User-Agent advertised to Anthropic's API on OAuth-authenticated requests.
 /// Must match a Claude Code version the server still accepts; bump when
 /// Anthropic invalidates the current value.
-pub const CLAUDE_CODE_VERSION_FOR_OAUTH: &str = "2.1.162";
+pub const CLAUDE_CODE_VERSION_FOR_OAUTH: &str = "2.1.246";
+
+/// Anthropic SDK version Claude Code bundles, sent as `x-stainless-package-version`
+/// on OAuth-authenticated requests. Paired with `CLAUDE_CODE_VERSION_FOR_OAUTH`:
+/// an outdated pair is rejected with `403 Request not allowed`, so bump both
+/// together to the values the current Claude Code release sends.
+pub const CLAUDE_CODE_SDK_VERSION: &str = "0.112.1";
 
 /// `anthropic-beta` flags for OAuth requests, in the exact order the official
 /// `claude` sends on a Pro account. The first two are required for the server to
@@ -525,6 +531,21 @@ pub fn is_codex_subscriber() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Assert the OAuth fingerprint as literal bytes, never against the
+    /// constants production emits, so a wrong bump moves the constant and the
+    /// test apart instead of together. This exact pair is what Anthropic
+    /// accepts for subscription OAuth; a stale pair is rejected with 403.
+    #[test]
+    fn the_oauth_fingerprint_pins_the_current_claude_code_release() {
+        assert_eq!(CLAUDE_CODE_VERSION_FOR_OAUTH, "2.1.246");
+        assert_eq!(CLAUDE_CODE_SDK_VERSION, "0.112.1");
+        assert_eq!(
+            claude_code_user_agent(),
+            "claude-cli/2.1.246 (external, cli)"
+        );
+        assert!(OAUTH_BETA_FLAGS.contains(&"oauth-2025-04-20"));
+    }
 
     #[test]
     fn test_prod_config_urls_are_https() {

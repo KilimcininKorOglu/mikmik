@@ -1135,7 +1135,10 @@ pub mod client {
                         .header("x-stainless-os", stainless_os)
                         .header("x-stainless-arch", stainless_arch)
                         .header("x-stainless-runtime-version", "v22.0.0")
-                        .header("x-stainless-package-version", "0.94.0")
+                        .header(
+                            "x-stainless-package-version",
+                            mikmik_core::oauth_config::CLAUDE_CODE_SDK_VERSION,
+                        )
                         .header("x-stainless-retry-count", (attempts - 1).to_string())
                         .header(
                             "x-stainless-timeout",

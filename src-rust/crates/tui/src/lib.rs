@@ -37,26 +37,11 @@ use ratatui::Terminal;
 use std::io::{self, Stdout};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Whether the active terminal speaks the kitty keyboard protocol (progressive
-/// keyboard enhancement). Detected once during [`setup_terminal`]. Defaults to
-/// `false` so that, until proven otherwise, we treat printable key presses as
-/// already-final characters (the behaviour of conhost / CMD / legacy PowerShell
-/// and most default terminals) instead of re-applying a US-QWERTY shift map —
-/// see `App::shift_normalize` and issue #183.
-static KEYBOARD_ENHANCEMENT_ACTIVE: AtomicBool = AtomicBool::new(false);
-
-/// Returns whether the terminal's kitty keyboard protocol is active, as detected
-/// during [`setup_terminal`]. The run loop copies this onto the `App` so input
-/// normalization can be gated on it.
-pub fn keyboard_enhancement_active() -> bool {
-    KEYBOARD_ENHANCEMENT_ACTIVE.load(Ordering::Relaxed)
-}
-
 /// Whether app-level mouse capture was enabled during [`setup_terminal`].
-/// Mirrors [`KEYBOARD_ENHANCEMENT_ACTIVE`]: set once at setup from the user's
-/// `mouseCapture` config so the panic hook and restore path know whether to
-/// emit `DisableMouseCapture` (issue #104). Defaults to `true` so a restore
-/// that runs before setup keeps the historical always-disable behaviour.
+/// Set once at setup from the user's `mouseCapture` config so the panic hook
+/// and restore path know whether to emit `DisableMouseCapture` (issue #104).
+/// Defaults to `true` so a restore that runs before setup keeps the historical
+/// always-disable behaviour.
 static MOUSE_CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(true);
 
 // ---------------------------------------------------------------------------
@@ -318,7 +303,13 @@ pub fn setup_terminal(mouse_capture: bool) -> io::Result<Terminal<CrosstermBacke
         EnableBracketedPaste,
         PushKeyboardEnhancementFlags(
             KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES,
+                | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                // Ask the terminal to report the layout-correct shifted key
+                // (the `shifted` field of the kitty protocol). crossterm then
+                // delivers the real character the OS layout produces (e.g. `/`
+                // for Shift+7 on Turkish-Q) and clears SHIFT, so we never guess
+                // it from a US-QWERTY table.
+                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS,
         ),
     )?;
     // Mouse capture is opt-out (issue #104): when on, the app handles scroll /
@@ -347,19 +338,11 @@ pub fn setup_terminal(mouse_capture: bool) -> io::Result<Terminal<CrosstermBacke
             stdout,
             PushKeyboardEnhancementFlags(
                 KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES,
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS,
             ),
         );
     }
-
-    // Detect whether the terminal actually speaks the kitty keyboard protocol.
-    // This decides how we interpret printable key presses: kitty terminals report
-    // the unshifted base key + a SHIFT modifier (so we apply the shift map), while
-    // everything else (conhost / CMD / legacy PowerShell, default macOS Terminal,
-    // older xterms) reports the final, layout-correct character (so we must not
-    // re-shift it — issue #183). Failure to query is treated as "no kitty".
-    let kitty_active = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
-    KEYBOARD_ENHANCEMENT_ACTIVE.store(kitty_active, Ordering::Relaxed);
 
     set_terminal_title("\u{1f980} MikMik");
     let backend = CrosstermBackend::new(stdout);

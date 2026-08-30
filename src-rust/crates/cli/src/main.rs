@@ -3701,12 +3701,6 @@ async fn run_interactive(
         app.invalid_config_dialog =
             mikmik_tui::InvalidConfigDialogState::show_settings_error(&error);
     }
-    // Gate input shift-normalization on whether the terminal speaks the kitty
-    // keyboard protocol (detected in setup_terminal). On terminals that don't —
-    // Windows conhost / CMD / legacy PowerShell, etc. — printable keys already
-    // arrive as their final character, so re-shifting them would corrupt input
-    // (issue #183: typing `/` produced `?`).
-    app.kitty_keyboard_active = mikmik_tui::keyboard_enhancement_active();
     // The companion reads two files, so it is loaded once here rather than
     // per frame. `/buddy` reports a config change and the loop reloads it.
     app.reload_companion();
@@ -4735,8 +4729,6 @@ async fn run_interactive(
                                     terminal = mikmik_tui::setup_terminal(
                                         app.config.mouse_capture_enabled(),
                                     )?;
-                                    app.kitty_keyboard_active =
-                                        mikmik_tui::keyboard_enhancement_active();
                                     app.status_message = Some(match status {
                                         Ok(_) => message,
                                         Err(e) => format!(
@@ -5057,8 +5049,6 @@ async fn run_interactive(
                                     terminal = mikmik_tui::setup_terminal(
                                         app.config.mouse_capture_enabled(),
                                     )?;
-                                    app.kitty_keyboard_active =
-                                        mikmik_tui::keyboard_enhancement_active();
                                 }
                                 Some(CommandResult::StartLoginForProvider {
                                     provider,
@@ -5127,8 +5117,6 @@ async fn run_interactive(
                                     terminal = mikmik_tui::setup_terminal(
                                         app.config.mouse_capture_enabled(),
                                     )?;
-                                    app.kitty_keyboard_active =
-                                        mikmik_tui::keyboard_enhancement_active();
                                 }
                                 Some(CommandResult::Error(e)) => {
                                     app.status_message = Some(format!("Error: {}", e));
@@ -6607,7 +6595,6 @@ async fn run_interactive(
             mikmik_tui::restore_terminal(&mut terminal).ok();
             let status = std::process::Command::new(&editor).arg(&path).status();
             terminal = mikmik_tui::setup_terminal(app.config.mouse_capture_enabled())?;
-            app.kitty_keyboard_active = mikmik_tui::keyboard_enhancement_active();
 
             app.status_message = match status {
                 // The dialog shows what the tool will read back when the user

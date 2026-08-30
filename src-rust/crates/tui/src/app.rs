@@ -1348,57 +1348,14 @@ fn layout_to_latin(c: char) -> String {
     mapped.unwrap_or(lower).to_string()
 }
 
-/// Apply shift transformation to a character based on standard US QWERTY layout.
-/// Handles both ASCII lowercase letters and number/symbol keys.
-///
-/// **Why this exists**: Terminals that support the kitty keyboard protocol send
-/// unshifted characters with modifier flags instead of pre-shifted characters
-/// (e.g., Shift+1 arrives as '1' + SHIFT instead of '!'). This function normalizes
-/// them to the expected shifted characters.
-///
-/// **Keyboard layout limitation**: This only works correctly for US QWERTY keyboards.
-/// Other layouts (AZERTY, QWERTZ, etc.) have different shift mappings. For non-US
-/// layouts, we rely on the terminal to send the correctly shifted character, which
-/// most modern terminals do (especially with kitty protocol enabled).
-fn normalize_char_with_shift(c: char, modifiers: KeyModifiers) -> char {
-    if !modifiers.contains(KeyModifiers::SHIFT) {
-        return c;
-    }
-
-    if c.is_ascii_lowercase() {
-        return c.to_ascii_uppercase();
-    }
-
-    // Map unshifted number/symbol keys to their shifted equivalents (US QWERTY)
-    match c {
-        '1' => '!',
-        '2' => '@',
-        '3' => '#',
-        '4' => '$',
-        '5' => '%',
-        '6' => '^',
-        '7' => '&',
-        '8' => '*',
-        '9' => '(',
-        '0' => ')',
-        '-' => '_',
-        '=' => '+',
-        '[' => '{',
-        ']' => '}',
-        ';' => ':',
-        '\'' => '"',
-        ',' => '<',
-        '.' => '>',
-        '/' => '?',
-        '\\' => '|',
-        '`' => '~',
-        _ => c,
-    }
-}
-
 fn key_event_to_keystroke(key: &KeyEvent) -> Option<ParsedKeystroke> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
+    // With REPORT_ALTERNATE_KEYS the kitty protocol resolves Shift into the
+    // character itself, so crossterm delivers an uppercase letter and clears the
+    // SHIFT modifier. Treat an uppercase ASCII letter as Shift so a chord like
+    // `ctrl+shift+a` still resolves after crossterm consumed the modifier.
+    let shift_from_case = matches!(key.code, KeyCode::Char(c) if c.is_ascii_uppercase());
 
     let normalized_key = match key.code {
         KeyCode::Backspace => "backspace".to_string(),
@@ -1438,7 +1395,7 @@ fn key_event_to_keystroke(key: &KeyEvent) -> Option<ParsedKeystroke> {
         key: normalized_key,
         ctrl,
         alt,
-        shift: key.modifiers.contains(KeyModifiers::SHIFT),
+        shift: key.modifiers.contains(KeyModifiers::SHIFT) || shift_from_case,
         meta: key.modifiers.contains(KeyModifiers::SUPER),
     })
 }
@@ -1586,16 +1543,6 @@ pub struct App {
     /// original flags and `--resume <session_id>` instead of exiting.
     pub restart_requested: bool,
     pub show_help: bool,
-    /// Whether the terminal speaks the kitty keyboard protocol (progressive
-    /// keyboard enhancement is active). When `false` — e.g. Windows conhost /
-    /// CMD / legacy PowerShell and most default terminals — printable keys
-    /// arrive as their final, layout-correct character (Shift already applied),
-    /// so we must NOT re-apply a US-QWERTY shift map to them (issue #183: typing
-    /// `/` produced `?`). When `true`, the terminal reports the unshifted base
-    /// key plus a SHIFT modifier, so we normalize it ourselves. Defaults to
-    /// `true`; the run loop overwrites it with the detected value once the
-    /// terminal has been initialized.
-    pub kitty_keyboard_active: bool,
 
     // Extended state
     pub tool_use_blocks: Vec<ToolUseBlock>,
@@ -2243,7 +2190,6 @@ impl App {
             should_exit: false,
             restart_requested: false,
             show_help: false,
-            kitty_keyboard_active: true,
             tool_use_blocks: Vec::new(),
             permission_request: None,
             frame_count: 0,
@@ -4852,23 +4798,6 @@ impl App {
         ));
     }
 
-    /// Resolve the character to insert for a printable key press, applying the
-    /// US-QWERTY shift map only when the kitty keyboard protocol is active.
-    ///
-    /// On terminals that do NOT speak the kitty protocol (Windows conhost / CMD
-    /// / legacy PowerShell and most default terminals) the character is already
-    /// final and layout-correct — Shift has been applied by the OS — so we pass
-    /// it through untouched. Re-shifting it here would double-shift and corrupt
-    /// input, e.g. turning a literal `/` (typed via Shift on many non-US
-    /// layouts) into `?` (issue #183).
-    fn shift_normalize(&self, c: char, modifiers: KeyModifiers) -> char {
-        if self.kitty_keyboard_active {
-            normalize_char_with_shift(c, modifiers)
-        } else {
-            c
-        }
-    }
-
     /// Handle Enter while a typeahead popup is open. Accepts the highlighted
     /// suggestion and returns whether the prompt should now be submitted.
     ///
@@ -5193,7 +5122,6 @@ impl App {
                         .select_by_number((c as u8 - b'0') as usize);
                 }
                 KeyCode::Char(c) => {
-                    let c = self.shift_normalize(c, key.modifiers);
                     self.plan_approval_dialog.push_char(c);
                 }
                 KeyCode::Backspace => {
@@ -5234,7 +5162,6 @@ impl App {
                     }
                 }
                 KeyCode::Char(c) => {
-                    let c = self.shift_normalize(c, key.modifiers);
                     self.ask_user_dialog.push_char(c);
                 }
                 KeyCode::Backspace => {
@@ -5301,7 +5228,6 @@ impl App {
                     }
                 }
                 KeyCode::Char(c) => {
-                    let c = self.shift_normalize(c, key.modifiers);
                     self.key_input_dialog.insert_char(c);
                 }
                 _ => {}
@@ -5342,7 +5268,6 @@ impl App {
                     self.free_mode_dialog.backspace();
                 }
                 KeyCode::Char(c) => {
-                    let c = self.shift_normalize(c, key.modifiers);
                     self.free_mode_dialog.insert_char(c);
                 }
                 _ => {}
@@ -5388,7 +5313,6 @@ impl App {
                     self.custom_provider_dialog.backspace();
                 }
                 KeyCode::Char(c) => {
-                    let c = self.shift_normalize(c, key.modifiers);
                     self.custom_provider_dialog.insert_char(c);
                 }
                 _ => {}
@@ -6236,7 +6160,6 @@ impl App {
                     return false;
                 }
                 KeyCode::Char(c) => {
-                    let c = self.shift_normalize(c, key.modifiers);
                     self.elicitation.insert_char(c);
                     return false;
                 }
@@ -6535,26 +6458,6 @@ impl App {
                 self.show_help = !self.show_help;
                 self.help_overlay.toggle();
             }
-            // With the kitty keyboard protocol, Shift+/ is reported as Char('/') with
-            // SHIFT rather than Char('?'), so also accept that form for the help toggle.
-            // This MUST be gated on the kitty protocol being active: on terminals that
-            // don't speak it (Windows conhost / CMD / legacy PowerShell), a Char('/')
-            // carrying a SHIFT flag is just a literal slash typed on a layout where `/`
-            // is a shifted key — it must fall through to text entry so the user can
-            // actually start a slash command (issue #183).
-            KeyCode::Char('/')
-                if self.kitty_keyboard_active
-                    && key.modifiers.contains(KeyModifiers::SHIFT)
-                    && !self.is_streaming
-                    && self.prompt_input.is_empty()
-                    && !key.modifiers.contains(KeyModifiers::CONTROL)
-                    && !key.modifiers.contains(KeyModifiers::ALT)
-                    && !key.modifiers.contains(KeyModifiers::SUPER) =>
-            {
-                self.show_help = !self.show_help;
-                self.help_overlay.toggle();
-            }
-
             // Every prompt-editing chord now resolves through
             // mikmik_core::keybindings, so it can be rebound and it can be
             // turned off. Arms here for ctrl+u, ctrl+w, ctrl+y, alt+y,
@@ -6564,7 +6467,6 @@ impl App {
             // ---- Text entry (allowed while streaming so users can queue
             // the next message; submission queues via Enter at the CLI layer).
             KeyCode::Char(c) => {
-                let c = self.shift_normalize(c, key.modifiers);
                 if self.prompt_input.vim_enabled && self.prompt_input.vim_mode != VimMode::Insert {
                     self.prompt_input.vim_command(&c.to_string());
                 } else {
@@ -6859,7 +6761,6 @@ impl App {
                     }
                 }
                 KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    let ch = self.shift_normalize(ch, key.modifiers);
                     self.agents_menu.editor_insert_char(ch);
                 }
                 _ => {}
@@ -6996,7 +6897,6 @@ impl App {
                 self.history_search_overlay.toggle_pin();
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let c = self.shift_normalize(c, key.modifiers);
                 let history = self.prompt_input.history.clone();
                 self.history_search_overlay.push_char(c, &history);
                 if let Some(hs) = self.history_search.as_mut() {
@@ -7068,7 +6968,6 @@ impl App {
                 self.refresh_global_search();
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let c = self.shift_normalize(c, key.modifiers);
                 self.global_search.push_char(c);
                 self.refresh_global_search();
             }
@@ -10383,81 +10282,24 @@ mod tests {
         );
     }
 
-    // ---- normalize_char_with_shift tests ----
-
     #[test]
-    fn test_normalize_char_no_shift_returns_unchanged() {
-        assert_eq!(normalize_char_with_shift('a', KeyModifiers::NONE), 'a');
-        assert_eq!(normalize_char_with_shift('1', KeyModifiers::NONE), '1');
-        assert_eq!(normalize_char_with_shift('!', KeyModifiers::NONE), '!');
-    }
+    fn an_uppercase_letter_keeps_shift_in_the_keystroke() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        // With REPORT_ALTERNATE_KEYS crossterm resolves Shift into the character
+        // and clears the SHIFT modifier, so `ctrl+shift+a` arrives as `Char('A')`
+        // + CTRL only. The keystroke must still read as ctrl+shift+a, or every
+        // ctrl+shift+<letter> binding breaks on a kitty terminal.
+        let ks = key_event_to_keystroke(&KeyEvent::new(KeyCode::Char('A'), KeyModifiers::CONTROL))
+            .expect("char maps to a keystroke");
+        assert_eq!(ks.key, "a");
+        assert!(ks.ctrl);
+        assert!(ks.shift, "an uppercase letter must imply shift");
 
-    #[test]
-    fn test_normalize_char_shift_uppercase_letters() {
-        assert_eq!(normalize_char_with_shift('a', KeyModifiers::SHIFT), 'A');
-        assert_eq!(normalize_char_with_shift('z', KeyModifiers::SHIFT), 'Z');
-        assert_eq!(normalize_char_with_shift('m', KeyModifiers::SHIFT), 'M');
-    }
-
-    #[test]
-    fn test_normalize_char_shift_numbers() {
-        assert_eq!(normalize_char_with_shift('1', KeyModifiers::SHIFT), '!');
-        assert_eq!(normalize_char_with_shift('2', KeyModifiers::SHIFT), '@');
-        assert_eq!(normalize_char_with_shift('3', KeyModifiers::SHIFT), '#');
-        assert_eq!(normalize_char_with_shift('4', KeyModifiers::SHIFT), '$');
-        assert_eq!(normalize_char_with_shift('5', KeyModifiers::SHIFT), '%');
-        assert_eq!(normalize_char_with_shift('6', KeyModifiers::SHIFT), '^');
-        assert_eq!(normalize_char_with_shift('7', KeyModifiers::SHIFT), '&');
-        assert_eq!(normalize_char_with_shift('8', KeyModifiers::SHIFT), '*');
-        assert_eq!(normalize_char_with_shift('9', KeyModifiers::SHIFT), '(');
-        assert_eq!(normalize_char_with_shift('0', KeyModifiers::SHIFT), ')');
-    }
-
-    #[test]
-    fn test_normalize_char_shift_symbols() {
-        assert_eq!(normalize_char_with_shift('-', KeyModifiers::SHIFT), '_');
-        assert_eq!(normalize_char_with_shift('=', KeyModifiers::SHIFT), '+');
-        assert_eq!(normalize_char_with_shift('[', KeyModifiers::SHIFT), '{');
-        assert_eq!(normalize_char_with_shift(']', KeyModifiers::SHIFT), '}');
-        assert_eq!(normalize_char_with_shift(';', KeyModifiers::SHIFT), ':');
-        assert_eq!(normalize_char_with_shift('\'', KeyModifiers::SHIFT), '"');
-        assert_eq!(normalize_char_with_shift(',', KeyModifiers::SHIFT), '<');
-        assert_eq!(normalize_char_with_shift('.', KeyModifiers::SHIFT), '>');
-        assert_eq!(normalize_char_with_shift('/', KeyModifiers::SHIFT), '?');
-        assert_eq!(normalize_char_with_shift('\\', KeyModifiers::SHIFT), '|');
-        assert_eq!(normalize_char_with_shift('`', KeyModifiers::SHIFT), '~');
-    }
-
-    #[test]
-    fn test_normalize_char_shift_already_shifted_chars_unchanged() {
-        // Characters that don't have shift equivalents remain unchanged
-        assert_eq!(normalize_char_with_shift('!', KeyModifiers::SHIFT), '!');
-        assert_eq!(normalize_char_with_shift('@', KeyModifiers::SHIFT), '@');
-        assert_eq!(normalize_char_with_shift('A', KeyModifiers::SHIFT), 'A');
-    }
-
-    #[test]
-    fn test_normalize_char_other_modifiers_ignored() {
-        // CTRL or ALT without SHIFT should not shift the character
-        assert_eq!(normalize_char_with_shift('a', KeyModifiers::CONTROL), 'a');
-        assert_eq!(normalize_char_with_shift('1', KeyModifiers::ALT), '1');
-        assert_eq!(
-            normalize_char_with_shift('a', KeyModifiers::CONTROL | KeyModifiers::ALT),
-            'a'
-        );
-    }
-
-    #[test]
-    fn test_normalize_char_shift_with_other_modifiers() {
-        // SHIFT + CTRL should still apply shift transformation
-        assert_eq!(
-            normalize_char_with_shift('a', KeyModifiers::SHIFT | KeyModifiers::CONTROL),
-            'A'
-        );
-        assert_eq!(
-            normalize_char_with_shift('1', KeyModifiers::SHIFT | KeyModifiers::ALT),
-            '!'
-        );
+        // A lowercase letter without SHIFT stays unshifted (plain ctrl+c).
+        let plain =
+            key_event_to_keystroke(&KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+                .expect("char maps to a keystroke");
+        assert!(!plain.shift);
     }
 
     // ---- issue #183: slash command input & execution on Windows / non-kitty terminals ----
@@ -10470,7 +10312,6 @@ mod tests {
         // character already final. We must insert a literal `/`, not re-shift it
         // into `?` (issue #183).
         let mut app = make_app();
-        app.kitty_keyboard_active = false;
         // Pre-fill so the empty-prompt `?`/`/` help shortcut is out of the picture.
         app.prompt_input.text = "x".to_string();
         app.prompt_input.cursor = app.prompt_input.text.len();
@@ -10487,7 +10328,6 @@ mod tests {
         // terminal) must insert a literal slash so the user can start a command,
         // NOT toggle the help overlay (issue #183 — "Cannot run any slash commands").
         let mut app = make_app();
-        app.kitty_keyboard_active = false;
 
         app.handle_key_event(press_key(KeyCode::Char('/'), KeyModifiers::SHIFT));
 
@@ -10500,18 +10340,20 @@ mod tests {
     }
 
     #[test]
-    fn test_shift_slash_still_normalizes_to_question_under_kitty_protocol() {
-        // With the kitty protocol active, Shift+/ arrives as the unshifted base
-        // key Char('/') + SHIFT, so we DO apply the US-QWERTY shift map → `?`.
+    fn a_shifted_slash_is_inserted_literally_never_remapped() {
+        // The app no longer reconstructs shifted characters from a US-QWERTY
+        // table. Whatever the terminal reports as Char('/') is inserted verbatim,
+        // so a `/` typed via Shift on a non-US layout (Turkish-Q) never becomes
+        // `?`. The layout-correct character comes from the terminal via
+        // REPORT_ALTERNATE_KEYS, not from a hardcoded map.
         let mut app = make_app();
-        app.kitty_keyboard_active = true;
         app.prompt_input.text = "x".to_string();
         app.prompt_input.cursor = app.prompt_input.text.len();
         app.refresh_prompt_input();
 
         app.handle_key_event(press_key(KeyCode::Char('/'), KeyModifiers::SHIFT));
 
-        assert_eq!(app.prompt_input.text, "x?");
+        assert_eq!(app.prompt_input.text, "x/");
     }
 
     #[test]

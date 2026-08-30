@@ -151,6 +151,7 @@ pub struct SettingsScreen {
     pub repl_enabled: bool,
     pub computer_use_enabled: bool,
     pub computer_script_enabled: bool,
+    pub browser_enabled: bool,
     pub schema_deferral: bool,
     pub live_tool_output: bool,
     /// Empty when no SearXNG instance is configured.
@@ -231,6 +232,7 @@ impl SettingsScreen {
             repl_enabled: false,
             computer_use_enabled: false,
             computer_script_enabled: false,
+            browser_enabled: false,
             schema_deferral: false,
             live_tool_output: false,
             searxng_url: String::new(),
@@ -322,6 +324,7 @@ impl SettingsScreen {
         self.repl_enabled = self.settings_snapshot.config.repl_enabled;
         self.computer_use_enabled = self.settings_snapshot.config.computer_use_enabled;
         self.computer_script_enabled = self.settings_snapshot.config.computer_script_enabled;
+        self.browser_enabled = self.settings_snapshot.config.browser_enabled;
         self.schema_deferral = self.settings_snapshot.config.schema_deferral;
         self.live_tool_output = self.settings_snapshot.config.live_tool_output;
         self.searxng_url = self
@@ -1118,6 +1121,15 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             .to_string(),
         },
         SettingsEntry {
+            key: "browser_enabled".into(),
+            label: "Browser tool".into(),
+            description:
+                "Offer the browser tool: open a page, click, type, and read it. Needs Chrome, or a CDP address or Chrome path set in settings.json."
+                    .into(),
+            kind: SettingKind::Bool,
+            value: if screen.browser_enabled { "true" } else { "false" }.to_string(),
+        },
+        SettingsEntry {
             key: "schema_deferral".into(),
             label: "Deferred tool schemas".into(),
             description:
@@ -1883,6 +1895,11 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                         screen.settings_snapshot.config.computer_use_enabled = new_value;
                         config.computer_use_enabled = new_value;
                     }
+                    "browser_enabled" => {
+                        screen.browser_enabled = new_value;
+                        screen.settings_snapshot.config.browser_enabled = new_value;
+                        config.browser_enabled = new_value;
+                    }
                     "schema_deferral" => {
                         screen.schema_deferral = new_value;
                         screen.settings_snapshot.config.schema_deferral = new_value;
@@ -2538,6 +2555,7 @@ mod tests {
             ("Computer scripting", |config| {
                 config.computer_script_enabled
             }),
+            ("Browser tool", |config| config.browser_enabled),
             ("Deferred tool schemas", |config| config.schema_deferral),
             ("Live tool output", |config| config.live_tool_output),
             ("File injection (@)", |config| {

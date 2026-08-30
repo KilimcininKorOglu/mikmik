@@ -579,7 +579,19 @@ fn drive_pty_child(
 // Shared output truncation helper
 // ---------------------------------------------------------------------------
 
-fn truncate_output(mut output: String, exit_code: i32) -> ToolResult {
+fn truncate_output(
+    mut output: String,
+    exit_code: i32,
+    command: &str,
+    filter_enabled: bool,
+) -> ToolResult {
+    // Compress noisy command output (make, terraform, ping, …) before the model
+    // reads it. Runs upstream of the hard character cap below, which stays as a
+    // backstop for output the filter left large or did not match.
+    if filter_enabled {
+        output = crate::output_filter::filter_command_output(command, &output);
+    }
+
     const MAX_OUTPUT_LEN: usize = 100_000;
     if output.len() > MAX_OUTPUT_LEN {
         let half = MAX_OUTPUT_LEN / 2;
@@ -779,7 +791,12 @@ async fn run_bash(params: BashInput, ctx: &ToolContext) -> ToolResult {
                 } else {
                     output
                 };
-                truncate_output(output, ran.exit_code)
+                truncate_output(
+                    output,
+                    ran.exit_code,
+                    &params.command,
+                    ctx.config.effective_output_filter(),
+                )
             }
             Err(error) => {
                 ToolResult::error(format!("The shell could not run the command: {error}"))
@@ -831,9 +848,13 @@ async fn run_bash(params: BashInput, ctx: &ToolContext) -> ToolResult {
         .await;
 
         match outcome {
-            PtyOutcome::Completed(raw_output, exit_code) => {
-                finish_run(&raw_output, exit_code, &params.command, &shell_state_arc)
-            }
+            PtyOutcome::Completed(raw_output, exit_code) => finish_run(
+                &raw_output,
+                exit_code,
+                &params.command,
+                &shell_state_arc,
+                ctx.config.effective_output_filter(),
+            ),
             PtyOutcome::Failed(e) => ToolResult::error(format!("PTY execution failed: {}", e)),
             PtyOutcome::TimedOut => {
                 ToolResult::error(format!("Command timed out after {}ms", timeout_ms))
@@ -892,6 +913,7 @@ async fn run_in_client_terminal(
                 .unwrap_or(if output.signal.is_some() { 137 } else { 0 }),
             command,
             shell_state,
+            ctx.config.effective_output_filter(),
         ),
         Some(Err(e)) => ToolResult::error(format!("The editor's terminal failed: {e}")),
         None => {
@@ -927,6 +949,7 @@ fn finish_run(
     exit_code: i32,
     command: &str,
     shell_state: &std::sync::Arc<parking_lot::Mutex<ShellState>>,
+    filter_enabled: bool,
 ) -> ToolResult {
     let cleaned = strip_ansi(raw_output);
     let all_lines: Vec<String> = cleaned.lines().map(|l| l.to_string()).collect();
@@ -963,7 +986,7 @@ fn finish_run(
     if output.is_empty() {
         output = "(no output)".to_string();
     }
-    truncate_output(output, exit_code)
+    truncate_output(output, exit_code, command, filter_enabled)
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,56 @@
+# Built-in output filters, ported from RTK (Rust Token Killer).
+# One `[filters.<name>]` block per command. First match wins at lookup.
+# This file is embedded at compile time via include_str! in toml_filter.rs.
+schema_version = 1
+
+[filters.df]
+description = "Compact df output — truncate wide columns, limit rows"
+match_command = "^df(\\s|$)"
+strip_ansi = true
+truncate_lines_at = 80
+max_lines = 20
+
+[filters.du]
+description = "Compact du output"
+match_command = "^du\\b"
+strip_lines_matching = ["^\\s*$"]
+truncate_lines_at = 120
+max_lines = 40
+
+[filters.make]
+description = "Compact make output"
+match_command = "^make\\b"
+strip_lines_matching = [
+  "^make\\[\\d+\\]:",
+  "^\\s*$",
+  "^Nothing to be done",
+]
+max_lines = 50
+on_empty = "make: ok"
+
+[filters.ping]
+description = "Compact ping output — strip per-packet lines, keep summary"
+match_command = "^ping\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^PING ",
+  "^Pinging ",
+  "^\\d+ bytes from ",
+  "^Reply from .+: bytes=",
+  "^\\s*$",
+]
+tail_lines = 4
+
+[filters.terraform-plan]
+description = "Compact Terraform plan output"
+match_command = "^terraform\\s+plan"
+strip_ansi = true
+strip_lines_matching = [
+  "^Refreshing state",
+  "^\\s*#.*unchanged",
+  "^\\s*$",
+  "^Acquiring state lock",
+  "^Releasing state lock",
+]
+max_lines = 80
+on_empty = "terraform plan: no changes detected"

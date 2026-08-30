@@ -1635,6 +1635,16 @@ pub mod config {
             skip_serializing_if = "Option::is_none"
         )]
         pub bash_engine: Option<String>,
+        /// Whether the Bash tool compresses command output before the model
+        /// reads it, using the ported RTK output filters. Unset means off; it is
+        /// opt-in because an aggressive filter can drop a line the model needs.
+        /// See [`Config::effective_output_filter`].
+        #[serde(
+            default,
+            rename = "outputFilter",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub output_filter: Option<bool>,
         /// Which copy of a command-line utility the Bash tool reaches for:
         /// `prefer` or `fallback`.
         ///
@@ -3032,6 +3042,14 @@ pub mod config {
             BundledUtilities::parse(self.bundled_utilities.as_deref())
         }
 
+        /// Whether the Bash tool compresses command output before the model
+        /// reads it. Default off (opt-in): an aggressive filter can drop a line
+        /// the model needs, and the never-worse guard only bounds size, not
+        /// which lines survive.
+        pub fn effective_output_filter(&self) -> bool {
+            self.output_filter.unwrap_or(false)
+        }
+
         /// Whether the project's servers start with the session. Unset means
         /// no: a session that never touches code would pay for a process it
         /// does not use.
@@ -4216,6 +4234,9 @@ pub mod config {
                 // the same classifier before a command reaches them, so this
                 // decides compatibility rather than reach.
                 bash_engine: over.config.bash_engine.or(base.config.bash_engine),
+                // Output filtering is a local preference; either side may set it
+                // and the override wins, like the other Bash-tool knobs.
+                output_filter: over.config.output_filter.or(base.config.output_filter),
                 // Same reasoning: a repository knows which `ls` its scripts
                 // were written against, and neither choice reaches further
                 // than the other.

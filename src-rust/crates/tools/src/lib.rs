@@ -57,6 +57,7 @@ pub mod memory_guard;
 pub mod memory_tool;
 pub mod monitor_tool;
 pub mod notebook_edit;
+pub mod output_filter;
 pub mod powershell;
 pub(crate) mod powershell_session;
 pub mod pty_bash;

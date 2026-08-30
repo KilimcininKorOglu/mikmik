@@ -111,6 +111,15 @@ pub fn claude_code_user_agent() -> String {
     format!("claude-cli/{CLAUDE_CODE_VERSION_FOR_OAUTH} (external, cli)")
 }
 
+/// User-Agent the official client sends on the OAuth **token refresh** call
+/// (distinct from the inference `claude_code_user_agent`): the stainless SDK
+/// identity `anthropic-sdk-typescript/<sdk-version> userOAuthProvider`. The
+/// upstream rejects a refresh whose SDK version drifts from the current
+/// release, so it is pinned to the same `CLAUDE_CODE_SDK_VERSION`.
+pub fn claude_code_refresh_user_agent() -> String {
+    format!("anthropic-sdk-typescript/{CLAUDE_CODE_SDK_VERSION} userOAuthProvider")
+}
+
 /// Salt baked into the official bundle (a minified JS var), used in the
 /// `cc_version` client hash. Re-extracted and bumped per release by
 /// `claude-re/scripts/update-claude-code.sh`. See `findings/CCH-NATIVE.md`.
@@ -543,6 +552,12 @@ mod tests {
         assert_eq!(
             claude_code_user_agent(),
             "claude-cli/2.1.246 (external, cli)"
+        );
+        // The token-refresh call carries a different User-Agent than inference:
+        // the stainless SDK identity, pinned to the same SDK version.
+        assert_eq!(
+            claude_code_refresh_user_agent(),
+            "anthropic-sdk-typescript/0.112.1 userOAuthProvider"
         );
         assert!(OAUTH_BETA_FLAGS.contains(&"oauth-2025-04-20"));
     }

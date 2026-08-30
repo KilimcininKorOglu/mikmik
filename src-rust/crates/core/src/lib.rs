@@ -8823,9 +8823,18 @@ pub mod oauth {
                 else {
                     break 'refresh None;
                 };
+                // The official CLI sends these two on the refresh call (but not
+                // on the initial code exchange): the OAuth beta flag and the
+                // stainless SDK User-Agent. The upstream rejects a refresh whose
+                // fingerprint drifts from the current release.
                 let Ok(resp) = client
                     .post(TOKEN_URL)
                     .header("content-type", "application/json")
+                    .header("anthropic-beta", "oauth-2025-04-20")
+                    .header(
+                        "user-agent",
+                        crate::oauth_config::claude_code_refresh_user_agent(),
+                    )
                     .json(&body)
                     .send()
                     .await

@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>MIKMIK</h1>
+<h1>MikMik</h1>
 <h2><em>Agentic Coding for Builders who Ship</em></h2>
 <img src="public/mikmik.svg" alt="Rustle on the ship" width="350" />
 
@@ -211,18 +211,18 @@ After merge, Zed and other ACP-aware editors pick up MikMik on their next regist
 
 Native wire-format implementations, each with its own request shaping, streaming, and tool conversion:
 
-| Provider | Notes |
-|----------|-------|
-| **Anthropic** | Default. API key or OAuth; multi-account supported. |
-| **OpenAI** | Also the base for every OpenAI-compatible endpoint below. |
-| **Google (Gemini)** | |
-| **Azure OpenAI** | |
-| **AWS Bedrock** | |
-| **GitHub Copilot** | |
-| **Codex** | OAuth; multi-account supported. |
-| **Cohere** | |
-| **MiniMax** | |
-| **Free Mode** | Rotating free endpoints, configured through `/connect`. `[EXPERIMENTAL]` |
+| Provider            | Notes                                                                    |
+|---------------------|--------------------------------------------------------------------------|
+| **Anthropic**       | Default. API key or OAuth; multi-account supported.                      |
+| **OpenAI**          | Also the base for every OpenAI-compatible endpoint below.                |
+| **Google (Gemini)** |                                                                          |
+| **Azure OpenAI**    |                                                                          |
+| **AWS Bedrock**     |                                                                          |
+| **GitHub Copilot**  |                                                                          |
+| **Codex**           | OAuth; multi-account supported.                                          |
+| **Cohere**          |                                                                          |
+| **MiniMax**         |                                                                          |
+| **Free Mode**       | Rotating free endpoints, configured through `/connect`. `[EXPERIMENTAL]` |
 
 On top of those, MikMik ships around forty OpenAI-compatible endpoints — Groq, DeepSeek, Mistral, xAI, OpenRouter, Together, Perplexity, DeepInfra, Cerebras, Venice, SambaNova, Fireworks, Nebius, Moonshot, Qwen, Z.AI and more — plus local runtimes (Ollama, LM Studio, llama.cpp, and MLX LM on Apple Silicon) and two escape hatches, `custom-openai` and `custom-anthropic`, for anything not on the list.
 
@@ -236,18 +236,18 @@ Setup instructions, environment variables and `settings.json` shapes are in [doc
 
 Full documentation is on the [MikMik docs site](https://kilimcininkoroglu.github.io/mikmik/docs).
 
-| Page | Covers |
-|------|--------|
-| [installation.md](docs/installation.md) | Every install path and upgrading |
-| [auth.md](docs/auth.md) | API keys, OAuth, multiple accounts |
-| [providers.md](docs/providers.md) · [local-models.md](docs/local-models.md) | Provider setup; Ollama / LM Studio / llama.cpp |
-| [commands.md](docs/commands.md) · [keybindings.md](docs/keybindings.md) | Slash commands and key bindings |
-| [configuration.md](docs/configuration.md) | `settings.json` reference |
-| [tools.md](docs/tools.md) · [agents.md](docs/agents.md) | Built-in tools; subagents and teams |
-| [mcp.md](docs/mcp.md) · [plugins.md](docs/plugins.md) · [hooks.md](docs/hooks.md) | Extending MikMik |
-| [remote-control.md](docs/remote-control.md) | Driving a session from your phone |
-| [workspace-server.md](docs/workspace-server.md) | A company's own server: accounts, providers, policy, backups |
-| [advanced.md](docs/advanced.md) | Everything else |
+| Page                                                                              | Covers                                                       |
+|-----------------------------------------------------------------------------------|--------------------------------------------------------------|
+| [installation.md](docs/installation.md)                                           | Every install path and upgrading                             |
+| [auth.md](docs/auth.md)                                                           | API keys, OAuth, multiple accounts                           |
+| [providers.md](docs/providers.md) · [local-models.md](docs/local-models.md)       | Provider setup; Ollama / LM Studio / llama.cpp               |
+| [commands.md](docs/commands.md) · [keybindings.md](docs/keybindings.md)           | Slash commands and key bindings                              |
+| [configuration.md](docs/configuration.md)                                         | `settings.json` reference                                    |
+| [tools.md](docs/tools.md) · [agents.md](docs/agents.md)                           | Built-in tools; subagents and teams                          |
+| [mcp.md](docs/mcp.md) · [plugins.md](docs/plugins.md) · [hooks.md](docs/hooks.md) | Extending MikMik                                             |
+| [remote-control.md](docs/remote-control.md)                                       | Driving a session from your phone                            |
+| [workspace-server.md](docs/workspace-server.md)                                   | A company's own server: accounts, providers, policy, backups |
+| [advanced.md](docs/advanced.md)                                                   | Everything else                                              |
 
 ---
 

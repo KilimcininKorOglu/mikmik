@@ -2,7 +2,7 @@
 
 # MikMik
 
-<img src="../public/Ship.png" alt="Rustle on the ship" width="350" />
+<img src="../public/mikmik.svg" alt="Rustle on the ship" width="350" />
 
 MikMik is a high-performance Rust reimplementation of Claude Code — a terminal-native AI coding agent with streaming responses, 40+ built-in tools, 15+ LLM provider integrations, a full ratatui TUI, and an extensible plugin system.
 

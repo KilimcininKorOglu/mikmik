@@ -596,7 +596,7 @@ mod tests {
     fn test_cc_version_suffix_golden() {
         // Chars at indices 4/7/20 are 'n', ' ', 'a'.
         const GOLDEN_INPUT: &str = "Réponds uniquement par le mot: PROXYTEST";
-        const EXPECTED_SUFFIX: &str = "c4f"; // AUTO-MAINTAINED: cc_version suffix
+        const EXPECTED_SUFFIX: &str = "a81"; // AUTO-MAINTAINED: cc_version suffix for 2.1.246
         assert_eq!(claude_code_cc_version_suffix(GOLDEN_INPUT), EXPECTED_SUFFIX);
 
         let h = claude_code_billing_header(GOLDEN_INPUT);

@@ -1537,8 +1537,11 @@ fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) 
         };
 
         let row_style = if is_selected {
+            // White on the bright accent, not ANSI `Color::Black` (a theme may
+            // remap it to a mid-gray that washes out on the accent). Bold white
+            // reads clearly on the accent background.
             Style::default()
-                .fg(Color::Black)
+                .fg(Color::Rgb(255, 255, 255))
                 .bg(MIKMIK_ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {

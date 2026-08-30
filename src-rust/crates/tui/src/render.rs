@@ -3711,14 +3711,14 @@ fn render_status_row(frame: &mut Frame, app: &App, area: Rect) {
         // "✽ Worked for 2m 5s" — mirrors TS TeammateSpinnerLine idle state
         vec![Span::styled(
             format!("{} {} for {}", figures::TEARDROP_ASTERISK, verb, elapsed),
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
+            // Explicit readable gray, not ANSI `Color::DarkGray` + DIM, which a
+            // terminal theme can render too faint to read on the main background.
+            Style::default().fg(Color::Rgb(150, 150, 160)),
         )]
     } else if let Some(status) = app.status_message.as_deref() {
         vec![Span::styled(
             status.to_string(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Rgb(150, 150, 160)),
         )]
     } else {
         Vec::new()
@@ -3908,7 +3908,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 spans.push(Span::raw("  "));
             }
             let (label, style) = match app.prompt_input.vim_mode {
-                VimMode::Insert => ("-- INSERT --", Style::default().fg(Color::DarkGray)),
+                VimMode::Insert => ("-- INSERT --", Style::default().fg(Color::Rgb(150, 150, 160))),
                 VimMode::Normal => (
                     "-- NORMAL --",
                     Style::default()
@@ -4003,7 +4003,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         if spans.is_empty() && app.is_streaming {
             spans.push(Span::styled(
                 "esc interrupt",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Rgb(150, 150, 160)),
             ));
         }
 
@@ -4059,7 +4059,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 let total_k = app.context_window_size / 1000;
                 parts.push(Span::styled(
                     format!("{}k/{}k", used_k, total_k),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::Rgb(150, 150, 160)),
                 ));
             }
         }
@@ -4075,7 +4075,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 format!("${:.2}", app.cost_usd)
             };
-            parts.push(Span::styled(cost_str, Style::default().fg(Color::DarkGray)));
+            parts.push(Span::styled(cost_str, Style::default().fg(Color::Rgb(150, 150, 160))));
         }
 
         // 3b. Token budget (feature-gated)
@@ -4096,7 +4096,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             } else if pct >= 75 {
                 Color::Yellow
             } else {
-                Color::DarkGray
+                Color::Rgb(150, 150, 160)
             };
             parts.push(Span::styled(
                 format!("Tokens: {}/{} ({}%)", used, max, pct),
@@ -4224,7 +4224,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 };
                 parts.push(Span::styled(
                     display_dir,
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::Rgb(150, 150, 160)),
                 ));
             }
         }

@@ -1175,7 +1175,11 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             label: "Output format".into(),
             description: "How responses are formatted: text, JSON, or streaming JSON.".into(),
             kind: SettingKind::Enum {
-                options: vec!["text".to_string(), "json".to_string(), "streamjson".to_string()],
+                options: vec![
+                    "text".to_string(),
+                    "json".to_string(),
+                    "stream_json".to_string(),
+                ],
             },
             value: screen.output_format.clone(),
         },

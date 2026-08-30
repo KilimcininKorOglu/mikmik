@@ -4,12 +4,17 @@
 //! command-aware, TOML-defined pipeline (see `toml_filter`) shrinks noisy output
 //! (make, terraform, ping, …) by 60-90% while preserving the parts that matter.
 //!
+//! Two filter kinds run in order: Rust-native filters (`native`, for tsc/pytest/
+//! mypy/prettier, whose summaries need stateful parsing TOML cannot express) are
+//! tried first, then the TOML pipeline.
+//!
 //! Safety nets, all from RTK: the `never_worse` guard reverts to raw output when
 //! filtering would grow it, `catch_unwind` reverts when a filter panics, and a
 //! command with no matching filter passes through untouched. Filtering can only
 //! ever help or no-op.
 
 mod guard;
+mod native;
 mod tee;
 pub mod toml_filter;
 
@@ -66,30 +71,43 @@ pub fn estimate_tokens(text: &str) -> usize {
 /// tail -n +N …]`) is appended so the model can read what was cut without
 /// re-running the command.
 pub fn filter_command_output(command: &str, raw: &str, exit_code: i32) -> String {
+    // A filter is pure regex/parse work, but a pathological input could still
+    // panic; never let that cost the user their output.
+    // 1. Rust-native filters (stateful summaries TOML cannot express). A native
+    //    filter always rewrites the whole output, so recovery treats it as Whole.
+    if let Ok(Some(filtered)) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        native::try_filter(command, raw)
+    })) {
+        return finalize(raw, filtered, command, exit_code, Lossiness::Whole);
+    }
+    // 2. TOML pipeline.
     if !command_matches_filter(command) {
         return raw.to_string();
     }
     let Some(filter) = find_matching_filter(command) else {
         return raw.to_string();
     };
-    // A filter is pure regex work, but a pathological pattern could still panic;
-    // never let that cost the user their output.
     let (filtered, loss) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         apply_filter_with_info(filter, raw)
     })) {
         Ok(pair) => pair,
         Err(_) => return raw.to_string(),
     };
-    // never_worse: when filtering would grow the output, keep the raw text and
-    // treat it as lossless — the full output is already present, so no recovery
-    // hint is needed (only a failed command still earns a full-output copy).
+    finalize(raw, filtered, command, exit_code, loss)
+}
+
+/// Apply the never-worse guard and append a recovery hint. When filtering would
+/// grow the output, keep the raw text and treat it as lossless — the full output
+/// is already present, so no hint is needed (only a failed command still earns a
+/// full-output copy).
+fn finalize(raw: &str, filtered: String, command: &str, exit_code: i32, loss: Lossiness) -> String {
     let filtered_kept = estimate_tokens(&filtered) <= estimate_tokens(raw);
-    let (body, effective_loss): (&str, &Lossiness) = if filtered_kept {
-        (&filtered, &loss)
+    let (body, effective_loss): (&str, Lossiness) = if filtered_kept {
+        (&filtered, loss)
     } else {
-        (raw, &Lossiness::None)
+        (raw, Lossiness::None)
     };
-    match tee::recover_hint(raw, command, exit_code, effective_loss) {
+    match tee::recover_hint(raw, command, exit_code, &effective_loss) {
         Some(hint) => format!("{body}\n{hint}"),
         None => body.to_string(),
     }

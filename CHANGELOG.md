@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 
+- accept `mikmik update` as an alias for the in-place self-update
 - count tokens the output filter kept out of context
 - add Rust-native output filters for tsc, pytest, mypy, prettier
 - ship the full built-in output-filter set (63 commands)
@@ -489,6 +490,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Changed
 
+- remove the voice input feature and its audio dependencies
+- remove the npm/bun distribution; install with the one-liner script or the release archives
 - restructure the README around a Features section
 - document the outputFilter setting
 - wire production straight to the managed handlers
@@ -699,6 +702,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 
+- correct the cc_version OAuth golden suffix for 2.1.246
+- build the bundled env and cat utilities on Windows
 - push the permission mode to the manager on a config change
 - feed the slash command typeahead from the command registry
 - deliver macOS notifications through osascript

@@ -11893,12 +11893,18 @@ mod timeline_tests {
     #[test]
     fn the_slash_command_rejects_an_unknown_argument() {
         let mut app = app_with_timeline(true);
+        // The panel starts visible when the timeline is enabled, so hide it
+        // first to check the unknown argument does not reveal it again.
+        app.apply_timeline_command("hide");
         let message = app.apply_timeline_command("sideways");
         assert!(
             message.contains("show|hide|toggle|clear"),
             "the error should list what is accepted, got {message:?}"
         );
-        assert!(!app.timeline_visible);
+        assert!(
+            !app.timeline_visible,
+            "an unknown argument must not change the panel"
+        );
     }
 
     #[test]

@@ -2157,6 +2157,9 @@ impl App {
         let model_name = config.canonical_model(&effective.account, &effective.model);
         // Read before the struct takes ownership of `config` below.
         let palette = crate::theme_colors::ColorPalette::for_config_theme(&config.theme);
+        // With the timeline enabled, show the panel from the start instead of
+        // waiting for Ctrl+Shift+L, so the setting reads as "panel on".
+        let timeline_starts_visible = config.timeline_enabled;
         let user_keybindings = UserKeybindings::load(&Settings::config_dir());
         // Build the model registry up front so user metadata overrides
         // (issue #309) are layered on before the struct owns `config`.
@@ -2441,7 +2444,7 @@ impl App {
             scroll_last_time: None,
             bash_prefix_allowlist: std::collections::HashSet::new(),
             timeline: Timeline::default(),
-            timeline_visible: false,
+            timeline_visible: timeline_starts_visible,
             timeline_focused: false,
             timeline_expanded: false,
             timeline_outbox: Vec::new(),

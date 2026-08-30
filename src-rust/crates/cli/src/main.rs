@@ -1281,7 +1281,6 @@ async fn main() -> anyhow::Result<()> {
 
     let tool_ctx = ToolContext {
         working_dir: cwd.clone(),
-        permission_mode: config.permission_mode,
         permission_handler: permission_handler.clone(),
         cost_tracker: cost_tracker.clone(),
         session_id: session_id.clone(),
@@ -9789,7 +9788,6 @@ mod bang_command_tests {
     fn ctx() -> ToolContext {
         ToolContext {
             working_dir: std::env::temp_dir(),
-            permission_mode: mikmik_core::config::PermissionMode::Default,
             permission_handler: std::sync::Arc::new(DenyAll),
             cost_tracker: mikmik_core::cost::CostTracker::new(),
             session_id: "bang-command-test".to_string(),

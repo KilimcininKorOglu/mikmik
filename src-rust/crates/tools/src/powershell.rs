@@ -161,7 +161,7 @@ impl Tool for PowerShellTool {
                 // context permission mode is Default (non-bypass, non-accept).
                 let needs_gate = params.require_confirmation
                     || matches!(
-                        ctx.permission_mode,
+                        ctx.config.permission_mode,
                         mikmik_core::config::PermissionMode::Default
                             | mikmik_core::config::PermissionMode::Plan
                     );
@@ -304,7 +304,6 @@ mod tests {
     fn bypassing_ctx() -> ToolContext {
         ToolContext {
             working_dir: std::env::temp_dir(),
-            permission_mode: mikmik_core::config::PermissionMode::BypassPermissions,
             permission_handler: std::sync::Arc::new(
                 mikmik_core::permissions::AutoPermissionHandler {
                     mode: mikmik_core::config::PermissionMode::BypassPermissions,

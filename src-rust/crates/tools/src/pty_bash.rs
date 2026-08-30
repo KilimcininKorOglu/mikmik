@@ -1297,7 +1297,6 @@ mod tests {
     fn allow_all_context() -> ToolContext {
         ToolContext {
             working_dir: std::env::temp_dir(),
-            permission_mode: mikmik_core::config::PermissionMode::Default,
             permission_handler: std::sync::Arc::new(AllowAllHandler),
             cost_tracker: mikmik_core::cost::CostTracker::new(),
             session_id: "pty-bash-test".to_string(),

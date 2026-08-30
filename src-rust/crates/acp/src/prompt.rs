@@ -82,7 +82,6 @@ pub async fn handle(
         Arc::new(AcpPermissionHandler);
     let tool_ctx = ToolContext {
         working_dir: session.cwd.lock().clone(),
-        permission_mode: config.permission_mode,
         permission_handler,
         cost_tracker: session.cost_tracker.clone(),
         session_id: session.session_id.0.to_string(),

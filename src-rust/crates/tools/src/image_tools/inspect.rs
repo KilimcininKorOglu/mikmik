@@ -167,7 +167,6 @@ pub(crate) fn tests_ctx(config: mikmik_core::config::Config) -> ToolContext {
 
     ToolContext {
         working_dir: PathBuf::from("."),
-        permission_mode: mikmik_core::config::PermissionMode::Default,
         permission_handler: Arc::new(AutoPermissionHandler {
             mode: mikmik_core::config::PermissionMode::Default,
         }),

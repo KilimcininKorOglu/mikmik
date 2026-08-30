@@ -35,7 +35,6 @@ fn session(settings_json: &str, cwd: std::path::PathBuf) -> ToolContext {
         serde_json::from_str(settings_json).expect("the settings file must parse");
     ToolContext {
         working_dir: cwd,
-        permission_mode: settings.config.permission_mode,
         permission_handler: Arc::new(AllowAll),
         cost_tracker: mikmik_core::cost::CostTracker::new(),
         session_id: "edit-guard-test".to_string(),

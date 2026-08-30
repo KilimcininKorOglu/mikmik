@@ -481,10 +481,6 @@ impl Watcher {
 
         let mut ctx = base_ctx.clone();
         ctx.session_id = format!("{}-advisor-{}", base_ctx.session_id, self.name);
-        // A watcher reads. Whatever its entry asked for, the roster loader has
-        // already reduced a project entry to the read-only set, and this keeps
-        // a user entry's own grant from escalating past what the session allows.
-        ctx.permission_mode = mikmik_core::config::PermissionMode::Default;
         ctx.advisor_note_tx = Some(raw_tx);
         ctx.advisor_name = self.label.clone();
 

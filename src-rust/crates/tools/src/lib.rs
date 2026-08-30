@@ -8,7 +8,6 @@
 #![allow(clippy::type_complexity)]
 
 use async_trait::async_trait;
-use mikmik_core::config::PermissionMode;
 use mikmik_core::cost::CostTracker;
 use mikmik_core::permissions::{PermissionDecision, PermissionHandler, PermissionRequest};
 use mikmik_core::types::ToolDefinition;
@@ -554,7 +553,6 @@ pub struct ActiveToolCall {
 #[derive(Clone)]
 pub struct ToolContext {
     pub working_dir: PathBuf,
-    pub permission_mode: PermissionMode,
     pub permission_handler: Arc<dyn PermissionHandler>,
     pub cost_tracker: Arc<CostTracker>,
     pub session_id: String,
@@ -1127,7 +1125,6 @@ mod tests {
 
         ToolContext {
             working_dir: PathBuf::from("/workspace"),
-            permission_mode: mikmik_core::config::PermissionMode::Default,
             permission_handler: handler,
             cost_tracker: mikmik_core::cost::CostTracker::new(),
             session_id: "test".to_string(),

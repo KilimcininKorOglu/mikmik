@@ -1387,7 +1387,6 @@ pub(crate) mod tests {
 
         ToolContext {
             working_dir: PathBuf::from("/workspace"),
-            permission_mode: mikmik_core::config::PermissionMode::Default,
             permission_handler: Arc::new(AllowAll),
             cost_tracker: mikmik_core::cost::CostTracker::new(),
             session_id: "parent-session".to_string(),

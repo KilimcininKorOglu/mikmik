@@ -35,7 +35,6 @@ impl mikmik_core::permissions::PermissionHandler for AllowAll {
 fn session(session_id: &str) -> ToolContext {
     ToolContext {
         working_dir: std::env::temp_dir(),
-        permission_mode: mikmik_core::config::PermissionMode::Default,
         permission_handler: Arc::new(AllowAll),
         cost_tracker: mikmik_core::cost::CostTracker::new(),
         session_id: session_id.to_string(),

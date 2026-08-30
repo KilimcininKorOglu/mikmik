@@ -57,7 +57,6 @@ impl mikmik_core::permissions::PermissionHandler for AllowAllHandler {
 pub(crate) fn allow_all_context(working_dir: PathBuf) -> ToolContext {
     ToolContext {
         working_dir,
-        permission_mode: mikmik_core::config::PermissionMode::Default,
         permission_handler: Arc::new(AllowAllHandler),
         cost_tracker: mikmik_core::cost::CostTracker::new(),
         session_id: "eol-test".to_string(),

@@ -442,7 +442,6 @@ mod tests {
     ) -> ToolContext {
         ToolContext {
             working_dir: std::env::temp_dir(),
-            permission_mode: mikmik_core::config::PermissionMode::Default,
             permission_handler: handler,
             cost_tracker: mikmik_core::cost::CostTracker::new(),
             session_id: session_id.to_string(),

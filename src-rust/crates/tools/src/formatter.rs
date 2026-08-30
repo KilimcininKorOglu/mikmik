@@ -106,7 +106,6 @@ mod tests {
         );
         ToolContext {
             working_dir: std::env::temp_dir(),
-            permission_mode: mikmik_core::config::PermissionMode::BypassPermissions,
             permission_handler: std::sync::Arc::new(
                 mikmik_core::permissions::AutoPermissionHandler {
                     mode: mikmik_core::config::PermissionMode::BypassPermissions,

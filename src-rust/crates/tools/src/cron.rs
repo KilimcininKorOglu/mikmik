@@ -576,7 +576,6 @@ mod tests {
     fn deny_ctx() -> ToolContext {
         ToolContext {
             working_dir: std::env::temp_dir(),
-            permission_mode: mikmik_core::config::PermissionMode::Default,
             permission_handler: Arc::new(DenyHandler),
             cost_tracker: mikmik_core::cost::CostTracker::new(),
             session_id: "cron-deny-test".to_string(),

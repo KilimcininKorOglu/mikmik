@@ -455,7 +455,6 @@ mod tests {
 
         ToolContext {
             working_dir: PathBuf::from("."),
-            permission_mode: mikmik_core::config::PermissionMode::Default,
             permission_handler: Arc::new(AutoPermissionHandler {
                 mode: mikmik_core::config::PermissionMode::Default,
             }),

@@ -154,6 +154,16 @@ pub struct SettingsScreen {
     pub browser_enabled: bool,
     pub schema_deferral: bool,
     pub live_tool_output: bool,
+    pub degradation_summary: bool,
+    pub auto_poke: bool,
+    pub remote_control_at_startup: bool,
+    pub browser_cdp_url: String,
+    pub browser_executable: String,
+    pub advisor_immune_turns: String,
+    pub lsp_idle_timeout_ms: String,
+    pub effort: String,
+    pub bash_engine: String,
+    pub bundled_utilities: String,
     /// Empty when no SearXNG instance is configured.
     pub searxng_url: String,
     /// The model that writes every summary, or empty for "the one this turn
@@ -170,7 +180,6 @@ pub struct SettingsScreen {
     /// One of `off`, `stale`, `strict`.
     pub edit_guard: String,
     pub output_format: String,
-    pub disable_claude_mds: bool,
     pub file_injection_enabled: bool,
     pub file_autocomplete_limit: String,
     pub file_autocomplete_show_hidden_files: bool,
@@ -235,6 +244,22 @@ impl SettingsScreen {
             browser_enabled: false,
             schema_deferral: false,
             live_tool_output: false,
+            degradation_summary: false,
+            auto_poke: false,
+            remote_control_at_startup: false,
+            browser_cdp_url: String::new(),
+            browser_executable: String::new(),
+            advisor_immune_turns: "0".to_string(),
+            lsp_idle_timeout_ms: String::new(),
+            effort: mikmik_core::effort::EffortLevel::default()
+                .as_str()
+                .to_string(),
+            bash_engine: mikmik_core::config::BashEngine::default()
+                .as_str()
+                .to_string(),
+            bundled_utilities: mikmik_core::config::BundledUtilities::default()
+                .as_str()
+                .to_string(),
             searxng_url: String::new(),
             compact_model: String::new(),
             advisor_model: String::new(),
@@ -247,7 +272,6 @@ impl SettingsScreen {
                 .as_str()
                 .to_string(),
             output_format: "text".to_string(),
-            disable_claude_mds: false,
             file_injection_enabled: true,
             file_autocomplete_limit: "15".to_string(),
             file_autocomplete_show_hidden_files: false,
@@ -327,6 +351,58 @@ impl SettingsScreen {
         self.browser_enabled = self.settings_snapshot.config.browser_enabled;
         self.schema_deferral = self.settings_snapshot.config.schema_deferral;
         self.live_tool_output = self.settings_snapshot.config.live_tool_output;
+        self.degradation_summary = self
+            .settings_snapshot
+            .config
+            .degradation_summary
+            .unwrap_or(false);
+        self.auto_poke = self.settings_snapshot.config.auto_poke.unwrap_or(false);
+        self.remote_control_at_startup = self.settings_snapshot.remote_control_at_startup;
+        self.browser_cdp_url = self
+            .settings_snapshot
+            .config
+            .browser_cdp_url
+            .clone()
+            .unwrap_or_default();
+        self.browser_executable = self
+            .settings_snapshot
+            .config
+            .browser_executable
+            .clone()
+            .unwrap_or_default();
+        self.advisor_immune_turns = self
+            .settings_snapshot
+            .config
+            .advisor_immune_turns
+            .map_or_else(|| "0".to_string(), |n| n.to_string());
+        self.lsp_idle_timeout_ms = self
+            .settings_snapshot
+            .config
+            .lsp_idle_timeout_ms
+            .map(|n| n.to_string())
+            .unwrap_or_default();
+        self.effort = self
+            .settings_snapshot
+            .config
+            .effort
+            .clone()
+            .unwrap_or_else(|| {
+                mikmik_core::effort::EffortLevel::default()
+                    .as_str()
+                    .to_string()
+            });
+        self.bash_engine = self
+            .settings_snapshot
+            .config
+            .effective_bash_engine()
+            .as_str()
+            .to_string();
+        self.bundled_utilities = self
+            .settings_snapshot
+            .config
+            .effective_bundled_utilities()
+            .as_str()
+            .to_string();
         self.searxng_url = self
             .settings_snapshot
             .config
@@ -375,7 +451,6 @@ impl SettingsScreen {
             mikmik_core::config::OutputFormat::Json => "json".to_string(),
             mikmik_core::config::OutputFormat::StreamJson => "stream_json".to_string(),
         };
-        self.disable_claude_mds = self.settings_snapshot.config.disable_claude_mds;
         self.file_injection_enabled = self.settings_snapshot.config.file_injection_is_enabled();
         self.file_autocomplete_limit = self
             .settings_snapshot
@@ -609,6 +684,66 @@ impl SettingsScreen {
                         saved.compact_threshold = n;
                         self.compact_threshold = value.clone();
                     }
+                }
+                "browser_cdp_url" => {
+                    let trimmed = value.trim();
+                    let url = (!trimmed.is_empty()).then(|| trimmed.to_string());
+                    config.browser_cdp_url = url.clone();
+                    saved.browser_cdp_url = url;
+                    self.browser_cdp_url = trimmed.to_string();
+                }
+                "browser_executable" => {
+                    let trimmed = value.trim();
+                    let path = (!trimmed.is_empty()).then(|| trimmed.to_string());
+                    config.browser_executable = path.clone();
+                    saved.browser_executable = path;
+                    self.browser_executable = trimmed.to_string();
+                }
+                "advisor_immune_turns" => {
+                    if let Ok(n) = value.parse::<u32>() {
+                        config.advisor_immune_turns = Some(n);
+                        saved.advisor_immune_turns = Some(n);
+                        self.advisor_immune_turns = value.clone();
+                    }
+                }
+                "lsp_idle_timeout_ms" => {
+                    let trimmed = value.trim();
+                    if trimmed.is_empty() {
+                        config.lsp_idle_timeout_ms = None;
+                        saved.lsp_idle_timeout_ms = None;
+                        self.lsp_idle_timeout_ms = String::new();
+                    } else if let Ok(n) = trimmed.parse::<u64>() {
+                        config.lsp_idle_timeout_ms = Some(n);
+                        saved.lsp_idle_timeout_ms = Some(n);
+                        self.lsp_idle_timeout_ms = trimmed.to_string();
+                    }
+                }
+                "effort" => {
+                    // Store what the enum read back, so an unreadable value never
+                    // sits in settings.json looking valid.
+                    let level = mikmik_core::effort::EffortLevel::from_str(value)
+                        .unwrap_or_default()
+                        .as_str()
+                        .to_string();
+                    config.effort = Some(level.clone());
+                    saved.effort = Some(level.clone());
+                    self.effort = level;
+                }
+                "bash_engine" => {
+                    let engine = mikmik_core::config::BashEngine::parse(Some(value))
+                        .as_str()
+                        .to_string();
+                    config.bash_engine = Some(engine.clone());
+                    saved.bash_engine = Some(engine.clone());
+                    self.bash_engine = engine;
+                }
+                "bundled_utilities" => {
+                    let utilities = mikmik_core::config::BundledUtilities::parse(Some(value))
+                        .as_str()
+                        .to_string();
+                    config.bundled_utilities = Some(utilities.clone());
+                    saved.bundled_utilities = Some(utilities.clone());
+                    self.bundled_utilities = utilities;
                 }
                 "fileAutocompleteLimit" => {
                     if let Ok(n) = value.parse::<usize>() {
@@ -1130,6 +1265,24 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             value: if screen.browser_enabled { "true" } else { "false" }.to_string(),
         },
         SettingsEntry {
+            key: "browser_cdp_url".into(),
+            label: "Browser CDP address".into(),
+            description:
+                "Connect the browser tool to a Chrome already listening at this CDP address. Empty launches Chrome itself."
+                    .into(),
+            kind: SettingKind::Text,
+            value: screen.browser_cdp_url.clone(),
+        },
+        SettingsEntry {
+            key: "browser_executable".into(),
+            label: "Browser executable".into(),
+            description:
+                "Path to the Chrome the browser tool launches. Empty uses the Chrome found on PATH."
+                    .into(),
+            kind: SettingKind::Text,
+            value: screen.browser_executable.clone(),
+        },
+        SettingsEntry {
             key: "schema_deferral".into(),
             label: "Deferred tool schemas".into(),
             description:
@@ -1196,11 +1349,75 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             value: screen.output_format.clone(),
         },
         SettingsEntry {
-            key: "disable_claude_mds".into(),
-            label: "Disable CLAUDE.md".into(),
-            description: "Ignore CLAUDE.md files in projects (use defaults instead).".into(),
+            key: "effort".into(),
+            label: "Reasoning effort".into(),
+            description:
+                "How hard the model thinks: none, minimal, low, medium, high, xhigh, max, or ultracode."
+                    .into(),
+            kind: SettingKind::Enum {
+                options: mikmik_core::effort::EffortLevel::ALL
+                    .iter()
+                    .map(|level| level.as_str().to_string())
+                    .collect(),
+            },
+            value: screen.effort.clone(),
+        },
+        SettingsEntry {
+            key: "bash_engine".into(),
+            label: "Bash engine".into(),
+            description:
+                "Which shell the Bash tool runs a command in. `brush`: the shell embedded in this binary. `system`: the machine's own bash."
+                    .into(),
+            kind: SettingKind::Enum {
+                options: vec!["brush".to_string(), "system".to_string()],
+            },
+            value: screen.bash_engine.clone(),
+        },
+        SettingsEntry {
+            key: "bundled_utilities".into(),
+            label: "Bundled utilities".into(),
+            description:
+                "Which copy of a command-line utility the Bash tool reaches for. `prefer`: the copy in this binary. `fallback`: only when the machine lacks it."
+                    .into(),
+            kind: SettingKind::Enum {
+                options: vec!["prefer".to_string(), "fallback".to_string()],
+            },
+            value: screen.bundled_utilities.clone(),
+        },
+        SettingsEntry {
+            key: "advisor_immune_turns".into(),
+            label: "Advisor immune turns".into(),
+            description: "How many turns at the start of a session the advisor stays silent. 0 never.".into(),
+            kind: SettingKind::Number,
+            value: screen.advisor_immune_turns.clone(),
+        },
+        SettingsEntry {
+            key: "lsp_idle_timeout_ms".into(),
+            label: "Language server idle timeout".into(),
+            description: "Milliseconds of inactivity before an idle language server is stopped. Empty keeps the default.".into(),
+            kind: SettingKind::Number,
+            value: screen.lsp_idle_timeout_ms.clone(),
+        },
+        SettingsEntry {
+            key: "degradation_summary".into(),
+            label: "Degradation summary".into(),
+            description: "Show a short note when the context is trimmed to fit.".into(),
             kind: SettingKind::Bool,
-            value: if screen.disable_claude_mds { "true" } else { "false" }.to_string(),
+            value: if screen.degradation_summary { "true" } else { "false" }.to_string(),
+        },
+        SettingsEntry {
+            key: "auto_poke".into(),
+            label: "Auto-continue".into(),
+            description: "Nudge the model to continue on its own when a turn ends without finishing.".into(),
+            kind: SettingKind::Bool,
+            value: if screen.auto_poke { "true" } else { "false" }.to_string(),
+        },
+        SettingsEntry {
+            key: "remote_control_at_startup".into(),
+            label: "Remote control at startup".into(),
+            description: "Open the remote-control bridge when the session starts, so a web or mobile client can join.".into(),
+            kind: SettingKind::Bool,
+            value: if screen.remote_control_at_startup { "true" } else { "false" }.to_string(),
         },
         SettingsEntry {
             key: "fileInjectionEnabled".into(),
@@ -1910,10 +2127,17 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                         screen.settings_snapshot.config.timeline_enabled = new_value;
                         config.timeline_enabled = new_value;
                     }
-                    "disable_claude_mds" => {
-                        screen.disable_claude_mds = new_value;
-                        screen.settings_snapshot.config.disable_claude_mds = new_value;
-                        config.disable_claude_mds = new_value;
+                    "degradation_summary" => {
+                        screen.degradation_summary = new_value;
+                        screen.settings_snapshot.config.degradation_summary = Some(new_value);
+                    }
+                    "auto_poke" => {
+                        screen.auto_poke = new_value;
+                        screen.settings_snapshot.config.auto_poke = Some(new_value);
+                    }
+                    "remote_control_at_startup" => {
+                        screen.remote_control_at_startup = new_value;
+                        screen.settings_snapshot.remote_control_at_startup = new_value;
                     }
                     "fileInjectionEnabled" => {
                         screen.file_injection_enabled = new_value;
@@ -1970,6 +2194,22 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut Config) {
                         screen.edit_guard = new_value.to_string();
                         screen.settings_snapshot.config.edit_guard = Some(new_value.to_string());
                         config.edit_guard = Some(new_value.to_string());
+                    }
+                    "effort" => {
+                        screen.effort = new_value.to_string();
+                        screen.settings_snapshot.config.effort = Some(new_value.to_string());
+                        config.effort = Some(new_value.to_string());
+                    }
+                    "bash_engine" => {
+                        screen.bash_engine = new_value.to_string();
+                        screen.settings_snapshot.config.bash_engine = Some(new_value.to_string());
+                        config.bash_engine = Some(new_value.to_string());
+                    }
+                    "bundled_utilities" => {
+                        screen.bundled_utilities = new_value.to_string();
+                        screen.settings_snapshot.config.bundled_utilities =
+                            Some(new_value.to_string());
+                        config.bundled_utilities = Some(new_value.to_string());
                     }
                     _ => {}
                 }
@@ -2216,6 +2456,10 @@ mod tests {
     /// three events rather than at the far end of the list.
     #[test]
     fn the_notification_sound_row_follows_the_three_events() {
+        // Isolate HOME: `SettingsScreen::new` reads settings.json through
+        // `Settings::load_sync`, so a developer whose own config sets
+        // `notifySound` would otherwise fail this default-value assertion.
+        let _guard = HomeGuard::new();
         let screen = SettingsScreen::new();
         let all = all_entries(&screen);
         let keys: Vec<&str> = all.iter().map(|e| e.key.as_str()).collect();

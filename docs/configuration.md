@@ -235,8 +235,9 @@ silent.
 
 | Key                | Type   | Default  | Description                                              |
 |--------------------|--------|----------|----------------------------------------------------------|
-| `bashEngine`       | string | `brush`  | `brush` or `system`. Which shell the `Bash` tool runs commands in. |
-| `bundledUtilities` | string | `prefer` | `prefer` or `fallback`. Which copy of `ls`, `sort` and the rest a command reaches for. |
+| `bashEngine`       | string  | `brush`  | `brush` or `system`. Which shell the `Bash` tool runs commands in. |
+| `bundledUtilities` | string  | `prefer` | `prefer` or `fallback`. Which copy of `ls`, `sort` and the rest a command reaches for. |
+| `outputFilter`     | boolean | `false`  | Compress noisy command output (make, terraform, tsc, pytest, …) before the model reads it. Opt-in. |
 
 Inside the `config` object, not at the top level:
 
@@ -271,6 +272,18 @@ Either way an external program is still a real process. The embedded shell remov
 The shell's own built-ins win either way, so `echo`, `printf`, `test`, `true` and `false` keep bash semantics.
 
 `bashEngine: "system"` ignores the setting: the machine's own `bash` looks up commands its own way.
+
+#### Compressing command output
+
+`outputFilter`, off by default, runs a command-aware filter over the `Bash` tool's output before the model reads it. It shrinks noisy output by 60-90%: 63 commands have a declarative filter (make, terraform, ping, df, gradle, xcodebuild and the rest), and tsc, pytest, mypy and prettier have a richer filter that groups errors by file. Turn it on inside the `config` object:
+
+```json
+"config": {
+  "outputFilter": true
+}
+```
+
+A never-worse guard reverts to the raw output whenever filtering would grow it, and a command with no matching filter passes through untouched, so the filter can only help or no-op. When the filter drops lines, or a command fails, the raw output is saved under the config directory and a hint is appended — `[full output: <path>]`, or `[see remaining: tail -n +N <path>]` when only a tail was cut — so the model can read what was cut without re-running the command.
 
 ### Edit guard
 

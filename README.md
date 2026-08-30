@@ -33,6 +33,8 @@ It's fast, it's memory-efficient, it's yours to run however you want, and there'
 >
 > - **Utilities in the binary:** 82 coreutils from [uutils](https://github.com/uutils/coreutils) plus `find`, `xargs`, `sed` and `jq` ship inside `mikmik`, so `ls`, `cat`, `sort`, `wc` and the rest work on a Windows box or a stripped container that has none of them installed. They run in the MikMik process, with no fork and no exec, and the carried copy is used even where the machine has its own: `ls -1` costs 164 us against 2.54 ms. Set `"bundledUtilities": "fallback"` in `settings.json` to use the machine's binary wherever it has one; see [docs/configuration.md](docs/configuration.md).
 >
+> - **Output filter:** A command-aware filter shrinks noisy `Bash` output (make, terraform, tsc, pytest and 60+ commands) by 60-90% before it reaches the model, so a long build or plan does not fill the context. A never-worse guard keeps it from ever growing the output, and dropped output is saved to disk with a hint to read the rest. Off by default; set `"outputFilter": true` in `settings.json` to enable it; see [docs/configuration.md](docs/configuration.md).
+>
 > - **/share support:** Use `/share` to share chat sessions with others via unlisted GitHub Gists. `[EXPERIMENTAL]`
 >
 > - **Free Mode:** Try out Free in '/connect' to get a great agentic coding experience in MikMik for absolutely free (or as good as free gets you :P). `[EXPERIMENTAL]` 

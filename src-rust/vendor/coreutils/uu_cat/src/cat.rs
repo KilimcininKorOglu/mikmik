@@ -371,7 +371,10 @@ fn cat_path(path: &OsString, options: &OutputOptions, state: &mut OutputState) -
     match get_input_type(path)? {
         InputType::StdIn => {
             let stdin = uucore::streams::stdin();
-            if is_unsafe_overwrite(&stdin, &uucore::streams::stdout()) {
+            // The overwrite guard compares the real OS stdin/stdout handles, so
+            // it uses std handles: the uucore::streams wrappers are redirect
+            // sinks and carry no single handle to inspect.
+            if is_unsafe_overwrite(&std::io::stdin(), &std::io::stdout()) {
                 return Err(CatError::OutputIsInput);
             }
             let mut handle = InputHandle {
@@ -385,7 +388,7 @@ fn cat_path(path: &OsString, options: &OutputOptions, state: &mut OutputState) -
         InputType::Socket => Err(CatError::NoSuchDeviceOrAddress),
         _ => {
             let file = File::open(path)?;
-            if is_unsafe_overwrite(&file, &uucore::streams::stdout()) {
+            if is_unsafe_overwrite(&file, &std::io::stdout()) {
                 return Err(CatError::OutputIsInput);
             }
             let mut handle = InputHandle {

@@ -4993,6 +4993,16 @@ async fn run_interactive(
                                     cmd_ctx.config = applied_cfg.clone();
                                     tool_ctx.config = applied_cfg.clone();
                                     app.config = applied_cfg.clone();
+                                    // Push the mode straight to the manager the
+                                    // handler reads: this arm set
+                                    // tool_ctx.config.permission_mode, so
+                                    // sync_permission_mode below sees observed ==
+                                    // desired and skips the manager otherwise.
+                                    if let Some(manager) = tool_ctx.permission_manager.as_ref() {
+                                        if let Ok(mut manager) = manager.lock() {
+                                            manager.mode = applied_cfg.permission_mode;
+                                        }
+                                    }
                                     // Sync model/provider shown in the TUI header.
                                     if let Some(ref model) = applied_cfg.model {
                                         app.set_model(model.clone());
@@ -5033,6 +5043,13 @@ async fn run_interactive(
                                         mikmik_core::Settings::load_sync(),
                                     ) {
                                         if let Ok(mut manager) = manager.lock() {
+                                            // Push the mode straight to the manager
+                                            // the handler reads. This arm already
+                                            // set tool_ctx.config.permission_mode, so
+                                            // sync_permission_mode below sees observed
+                                            // == desired and skips the manager, which
+                                            // is how `/yolo` never reached it.
+                                            manager.mode = applied_cfg.permission_mode;
                                             manager.reload_persistent_rules(&settings);
                                         }
                                     }

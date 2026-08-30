@@ -440,6 +440,12 @@ This block is read from the user settings file only. A project settings file can
 
 `MIKMIK_BRIDGE_URL` and `MIKMIK_BRIDGE_TOKEN` override it when set.
 
+A separate top-level key controls whether the bridge opens on its own:
+
+| Key                       | Type    | Default | Description                                                                                     |
+|---------------------------|---------|---------|-------------------------------------------------------------------------------------------------|
+| `remoteControlAtStartup`  | boolean | false   | Open the remote-control bridge when the session starts, so a web or mobile client can join without a command. Editable from `/settings`. |
+
 ### Workspace server
 
 The organisation's configuration server: the providers it assigns you, the
@@ -547,7 +553,7 @@ the session only and writes nothing.
 |-----------------|----------------|-------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `theme`         | string         | `"default"` | Colour theme for the TUI. One of `"default"`, `"dark"`, `"light"`, `"deuteranopia"`. Sets the error, success, warning and accent colours; layout colours are fixed. |
 | `output_style`  | string \| null | null        | Named output style. Eleven ship built in: `"default"`, `"concise"`, `"explanatory"`, `"learning"`, `"asd-ste100"`, `"caveman-lite"`, `"caveman"`, `"caveman-ultra"`, `"rocky-lite"`, `"rocky"`, `"rocky-ultra"`. More can be added as `.md` or `.json` files under `~/.config/mikmik/output-styles/`. |
-| `output_format` | string         | `"text"`    | Output format for headless (`--print`) mode. One of `"text"`, `"json"`, `"stream-json"`.                                                                    |
+| `output_format` | string         | `"text"`    | Output format for headless (`--print`) mode. In `settings.json` one of `"text"`, `"json"`, `"streamjson"` (lowercase, no separator); the `--output-format` CLI flag spells the last one `stream-json`.                                                                    |
 | `verbose`       | boolean        | false       | Enable debug-level log output.                                                                                                                              |
 
 ### Context compaction
@@ -628,7 +634,7 @@ the address and writes it to `searxngUrl`; turning it off clears the key.
 
 | Key               | Type    | Default | Description                                                                                                                                                  |
 |-------------------|---------|---------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `timelineEnabled` | boolean | false   | Record every tool call and finished turn, and offer the panel through `/timeline` and `Ctrl+Shift+L`. Off by default; while off nothing is collected at all. |
+| `timelineEnabled` | boolean | false   | Record every tool call, finished turn, todo update, and plan-mode change, and offer the panel through `/timeline` and `Ctrl+Shift+L`. When enabled the panel shows from the start of the session. Off by default; while off nothing is collected at all. |
 | `mouseCapture`    | boolean | true    | Let MikMik handle the mouse: wheel scrolling, right-click menus and drag-select. Turn it off to give the mouse back to the terminal. Applies at next start. |
 | `liveToolOutput`  | boolean | false   | Show what a shell command prints while it is still running, under the tool block, instead of only its preview when it ends. Off by default: a command that prints steadily redraws the transcript on every frame. |
 

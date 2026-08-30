@@ -244,8 +244,46 @@ fn duplicate<SE: ShellExtensions>(
         Some(open) => open,
         None => brush_core::openfiles::null()?,
     };
-    let owned = open.try_borrow_as_fd()?.try_clone_to_owned()?;
-    Ok(Arc::new(File::from(owned)))
+    Ok(Arc::new(File::from(owned_stream_handle(&open)?)))
+}
+
+/// Duplicate the descriptor behind `open` as an owned OS handle.
+///
+/// The bundled utilities read and write the shell's descriptors through a
+/// private `File` clone, so the borrow must become an owned handle. Unix keeps
+/// a file descriptor and Windows keeps a handle, so each has its own path.
+/// `brush_core` only exposes the descriptor form, so Windows reads the handle
+/// off the concrete variant here.
+#[cfg(unix)]
+fn owned_stream_handle(
+    open: &brush_core::openfiles::OpenFile,
+) -> Result<std::os::fd::OwnedFd, brush_core::Error> {
+    Ok(open.try_borrow_as_fd()?.try_clone_to_owned()?)
+}
+
+#[cfg(windows)]
+fn owned_stream_handle(
+    open: &brush_core::openfiles::OpenFile,
+) -> Result<std::os::windows::io::OwnedHandle, brush_core::Error> {
+    use brush_core::openfiles::OpenFile;
+    use std::os::windows::io::AsHandle as _;
+
+    let handle = match open {
+        OpenFile::Stdin(f) => f.as_handle(),
+        OpenFile::Stdout(f) => f.as_handle(),
+        OpenFile::Stderr(f) => f.as_handle(),
+        OpenFile::File(f) => f.as_handle(),
+        OpenFile::PipeReader(r) => r.as_handle(),
+        OpenFile::PipeWriter(w) => w.as_handle(),
+        OpenFile::Stream(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "a custom stream has no OS handle to borrow",
+            )
+            .into())
+        }
+    };
+    Ok(handle.try_clone_to_owned()?)
 }
 
 fn native_registration<SE: ShellExtensions>() -> Registration<SE> {

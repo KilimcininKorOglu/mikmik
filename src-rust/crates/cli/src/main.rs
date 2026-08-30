@@ -4671,6 +4671,36 @@ async fn run_interactive(
                                     ));
                                     transcript_replaced = true;
                                 }
+                                Some(CommandResult::RetryInterrupted) => {
+                                    // Drop the aborted turn (from its user prompt
+                                    // onward) and resubmit that prompt, so the
+                                    // model answers it again from the start.
+                                    if app.is_streaming {
+                                        app.status_message = Some(
+                                            "Wait for the current turn to finish before retrying."
+                                                .to_string(),
+                                        );
+                                    } else if let Some((truncated, prompt)) = app.plan_retry() {
+                                        messages = truncated.clone();
+                                        app.replace_messages(truncated);
+                                        session.messages = messages.clone();
+                                        session.updated_at = chrono::Utc::now();
+                                        let tip = messages.last().and_then(|m| m.uuid.clone());
+                                        if let Err(e) =
+                                            transcript.set_active_leaf(tip.as_deref()).await
+                                        {
+                                            app.push_notification(
+                                                mikmik_tui::NotificationKind::Error,
+                                                format!("Could not move the transcript's tip: {e}"),
+                                                None,
+                                            );
+                                        }
+                                        transcript_replaced = true;
+                                        submit_user_msg = Some(prompt);
+                                    } else {
+                                        app.status_message = Some("Nothing to retry.".to_string());
+                                    }
+                                }
                                 Some(CommandResult::RunCompaction { instruction }) => {
                                     transcript_replaced |= compact_conversation(
                                         instruction.as_deref(),

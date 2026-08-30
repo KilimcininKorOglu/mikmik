@@ -2605,6 +2605,29 @@ impl App {
             .checked_sub(1)
     }
 
+    /// Whether the most recent turn was interrupted (aborted with Esc), so its
+    /// trailing assistant message holds only a partial answer.
+    pub fn last_turn_interrupted(&self) -> bool {
+        self.turn_metadata.last().is_some_and(|m| m.interrupted)
+    }
+
+    /// Plan a `/retry`: if the last turn was interrupted and the session is
+    /// idle, return the message list with that turn removed (from its user
+    /// prompt onward) plus the prompt text to re-run. `None` when there is
+    /// nothing to retry (still streaming, no interrupted last turn, or an empty
+    /// prompt). Pure: the caller applies the truncation and re-submits the text.
+    pub fn plan_retry(&self) -> Option<(Vec<Message>, String)> {
+        if self.is_streaming || !self.last_turn_interrupted() {
+            return None;
+        }
+        let user_idx = self.messages.iter().rposition(|m| m.role == Role::User)?;
+        let user_text = self.messages[user_idx].get_all_text();
+        if user_text.trim().is_empty() {
+            return None;
+        }
+        Some((self.messages[..user_idx].to_vec(), user_text))
+    }
+
     fn current_agent_mode_snapshot(&self) -> String {
         self.agent_mode
             .clone()
@@ -9902,6 +9925,46 @@ mod tests {
         let mut app = make_app();
 
         assert_eq!(finish_turn(&mut app, 400, 9_000, 30_000), 30_400);
+    }
+
+    /// `/retry` on an interrupted turn removes it from the user prompt onward
+    /// and hands the prompt back for a fresh run.
+    #[test]
+    fn plan_retry_removes_the_interrupted_turn_and_returns_its_prompt() {
+        let mut app = make_app();
+        app.add_message(Role::User, "do a thing".to_string());
+        app.add_message(Role::Assistant, "partial ans".to_string());
+        app.complete_current_turn_snapshot(true);
+
+        let (truncated, prompt) = app.plan_retry().expect("an interrupted turn is retryable");
+        assert_eq!(prompt, "do a thing");
+        assert!(
+            truncated.is_empty(),
+            "the turn is removed from its user prompt onward"
+        );
+    }
+
+    /// A turn that ended normally is not a retry candidate.
+    #[test]
+    fn plan_retry_is_none_for_a_completed_turn() {
+        let mut app = make_app();
+        app.add_message(Role::User, "q".to_string());
+        app.add_message(Role::Assistant, "a".to_string());
+        app.complete_current_turn_snapshot(false);
+
+        assert!(app.plan_retry().is_none());
+    }
+
+    /// A busy session cannot retry mid-stream.
+    #[test]
+    fn plan_retry_is_none_while_streaming() {
+        let mut app = make_app();
+        app.add_message(Role::User, "q".to_string());
+        app.add_message(Role::Assistant, "partial".to_string());
+        app.complete_current_turn_snapshot(true);
+        app.is_streaming = true;
+
+        assert!(app.plan_retry().is_none());
     }
 
     /// A compaction replaces the conversation the model sees, so the footer

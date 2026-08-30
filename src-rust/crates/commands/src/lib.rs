@@ -93,6 +93,9 @@ pub enum CommandResult {
     ClearConversation,
     /// Replace the conversation with a specific message list (used by /rewind).
     SetMessages(Vec<Message>),
+    /// Re-run the last interrupted turn from the start (`/retry`): the session
+    /// loop drops the aborted turn and resubmits its user prompt.
+    RetryInterrupted,
     /// Load a previously saved session into the live REPL.
     ResumeSession(mikmik_core::history::ConversationSession),
     /// Update the current session title.
@@ -306,6 +309,7 @@ pub struct VersionCommand;
 pub struct ResumeCommand;
 pub struct StatusCommand;
 pub struct DiffCommand;
+pub struct RetryCommand;
 pub struct InitCommand;
 pub struct HooksCommand;
 pub struct ImportConfigCommand;
@@ -916,6 +920,24 @@ impl SlashCommand for ResumeCommand {
     }
 }
 
+// ---- /retry --------------------------------------------------------------
+
+#[async_trait]
+impl SlashCommand for RetryCommand {
+    fn name(&self) -> &str {
+        "retry"
+    }
+    fn description(&self) -> &str {
+        "Re-run the last interrupted turn from the start"
+    }
+
+    async fn execute(&self, _args: &str, _ctx: &mut CommandContext) -> CommandResult {
+        // Resumability depends on turn metadata the session loop owns, so this
+        // only signals intent; the loop decides and reports.
+        CommandResult::RetryInterrupted
+    }
+}
+
 // ---- /status -------------------------------------------------------------
 
 #[async_trait]
@@ -1389,6 +1411,7 @@ pub fn all_commands() -> Vec<Box<dyn SlashCommand>> {
         Box::new(ReloadPluginsCommand),
         Box::new(StatusCommand),
         Box::new(DiffCommand),
+        Box::new(RetryCommand),
         Box::new(MemoryCommand),
         Box::new(MemoriesCommand),
         Box::new(UsageCommand),

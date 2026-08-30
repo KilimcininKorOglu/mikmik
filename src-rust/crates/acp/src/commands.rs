@@ -252,6 +252,32 @@ async fn apply(
                 if removed == 1 { "" } else { "s" }
             ))
         }
+        R::RetryInterrupted => {
+            // ACP keeps no per-turn interrupted flag, so retry the last turn:
+            // drop it from the user prompt onward and resubmit that prompt.
+            let prompt = {
+                let mut msgs = session.messages.lock();
+                match msgs
+                    .iter()
+                    .rposition(|m| m.role == mikmik_core::types::Role::User)
+                {
+                    Some(idx) => {
+                        let text = msgs[idx].get_all_text();
+                        msgs.truncate(idx);
+                        text
+                    }
+                    None => String::new(),
+                }
+            };
+            if prompt.trim().is_empty() {
+                Outcome::said("Nothing to retry.")
+            } else {
+                Outcome {
+                    prompt: Some(prompt),
+                    ..Default::default()
+                }
+            }
+        }
         R::ResumeSession(stored) => {
             let count = stored.messages.len();
             *session.messages.lock() = stored.messages;

@@ -264,6 +264,18 @@ Rewind the conversation to a previous message. Displays a numbered list of messa
 
 ---
 
+### /retry
+
+Re-run the last turn when you interrupted it with Esc. The aborted turn (its partial answer and everything after your prompt) is dropped, and your prompt is submitted again for a fresh answer. Reports "Nothing to retry" when the last turn finished normally, and asks you to wait when a turn is still streaming.
+
+```
+/retry
+```
+
+Unlike typing your question again, `/retry` leaves no duplicate prompt in the transcript. It re-runs the turn from the start rather than resuming the partial answer.
+
+---
+
 ### /checkpoint
 
 List the points the conversation can be returned to, or return to one. A checkpoint is recorded at the end of every turn.

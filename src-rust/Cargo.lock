@@ -4321,7 +4321,7 @@ dependencies = [
 
 [[package]]
 name = "mikmik"
-version = "0.1.7"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4361,7 +4361,7 @@ dependencies = [
 
 [[package]]
 name = "mikmik-acp"
-version = "0.1.7"
+version = "0.0.0"
 dependencies = [
  "agent-client-protocol-schema",
  "anyhow",
@@ -4390,7 +4390,7 @@ dependencies = [
 
 [[package]]
 name = "mikmik-api"
-version = "0.1.7"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4426,7 +4426,7 @@ dependencies = [
 
 [[package]]
 name = "mikmik-bridge"
-version = "0.1.7"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4455,7 +4455,7 @@ dependencies = [
 
 [[package]]
 name = "mikmik-buddy"
-version = "0.1.7"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4468,7 +4468,7 @@ dependencies = [
 
 [[package]]
 name = "mikmik-commands"
-version = "0.1.7"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -4504,7 +4504,7 @@ dependencies = [
 
 [[package]]
 name = "mikmik-core"
-version = "0.1.7"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -4544,7 +4544,7 @@ dependencies = [
 
 [[package]]
 name = "mikmik-mcp"
-version = "0.1.7"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4576,7 +4576,7 @@ dependencies = [
 
 [[package]]
 name = "mikmik-plugins"
-version = "0.1.7"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4595,7 +4595,7 @@ dependencies = [
 
 [[package]]
 name = "mikmik-query"
-version = "0.1.7"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4623,7 +4623,7 @@ dependencies = [
 
 [[package]]
 name = "mikmik-shell"
-version = "0.1.7"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -4648,7 +4648,7 @@ dependencies = [
 
 [[package]]
 name = "mikmik-tools"
-version = "0.1.7"
+version = "0.0.0"
 dependencies = [
  "agent-client-protocol-schema",
  "anyhow",
@@ -4706,7 +4706,7 @@ dependencies = [
 
 [[package]]
 name = "mikmik-tui"
-version = "0.1.7"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64",

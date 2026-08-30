@@ -250,7 +250,7 @@ mikmik --version
 A successful installation prints the version string, for example:
 
 ```
-mikmik 0.1.7
+mikmik 0.0.0
 ```
 
 To confirm the binary is the one you installed:

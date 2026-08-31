@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Request, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::Router;
@@ -127,6 +127,10 @@ pub fn app(relay: Arc<Relay>, token: Arc<String>) -> Router {
         .merge(client::routes())
         .with_state(relay)
         .layer(middleware::from_fn_with_state(token, require_token))
+        // The API carries session data and live event streams; none of it may
+        // sit in a shared or browser cache. Default every API response that set
+        // no `Cache-Control` of its own to `no-store`.
+        .layer(middleware::from_fn(no_store_if_absent))
         // Liveness sits outside the auth layer so a health check does not need
         // the credential.
         .route("/healthz", axum::routing::get(healthz))
@@ -137,6 +141,20 @@ pub fn app(relay: Arc<Relay>, token: Arc<String>) -> Router {
 
 async fn healthz() -> &'static str {
     "ok"
+}
+
+/// Default any response that set no `Cache-Control` of its own to `no-store`.
+///
+/// A handler that wants its response cached or revalidated sets its own header
+/// and this leaves it untouched; everything else, session data and live
+/// streams, is kept out of every cache.
+async fn no_store_if_absent(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .entry(header::CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
+    response
 }
 
 /// Drop sessions whose runner has gone quiet.
@@ -317,6 +335,46 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn an_api_response_is_kept_out_of_every_cache() {
+        let response = test_app()
+            .oneshot(
+                authed("GET", "/api/client/sessions")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store"),
+        );
+    }
+
+    #[tokio::test]
+    async fn liveness_is_left_out_of_the_cache_layer() {
+        let response = test_app()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        // `/healthz` sits outside the API layer, so it gets no `no-store`.
+        assert_ne!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store"),
+        );
     }
 
     #[tokio::test]

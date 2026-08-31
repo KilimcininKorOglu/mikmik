@@ -1511,6 +1511,7 @@ checkout, and the model writes to it during a session.
 |---------------------|---------|---------|---------------------------------------------------------|
 | `autoMemoryEnabled` | boolean | false   | Keep the directory and show it to the model.            |
 | `memoryModel`       | string  | unset   | Model the memory jobs run on. Unset uses the session's. |
+| `memoryBackend`     | string  | unset   | Storage engine: unset/`"file"` for `.md` files, `"sqlite"` for a database. |
 
 Both work at the top level and inside the `config` block:
 
@@ -1532,6 +1533,16 @@ a bare model ID or `"provider/model"`, and the account comes with the model
 rather than staying on the session's. Set it from `/settings` → **Memory
 model**; a project's `settings.json` cannot set it, because it names a model
 that runs on the user's account without being asked for.
+
+`memoryBackend` picks the storage engine. Unset or `"file"` keeps the `.md`-file
+store described below. `"sqlite"` keeps the memories in one `memory.db` inside
+the same directory, an FTS5 database that `Learn`, `Retain`, `Memory` and the
+consolidation dream all read and write through instead of files. The two engines
+migrate both ways: the first time a project opens on sqlite it imports the
+existing `.md` files, and switching back to files exports the database's lessons
+and facts to `learned.md` and `facts.md`, so a project can move its memories in
+either direction without losing them. Like `memoryModel`, a project's
+`settings.json` cannot set it; it selects where the user's own memories live.
 
 `/memories` reads, measures and clears the directory; see
 [Commands](commands.md#memories).
@@ -1564,9 +1575,11 @@ Tag the commit, then wait for the release workflow.
 without frontmatter is still findable through its text but ranks below one that
 names the topic.
 
-Session extraction writes `session-notes.md` there on its own, and the
-[`Learn`](tools.md#learn) tool writes `learned.md`: one durable lesson per
-entry, newest first, deduplicated, 100 entries at most.
+Session extraction writes `session-notes.md` there on its own, the
+[`Learn`](tools.md#learn) tool writes `learned.md`, and the
+[`Retain`](tools.md#retain) tool writes `facts.md`: one durable lesson or fact
+per entry, newest first, deduplicated, 100 entries at most. On the sqlite engine
+the same writes become rows in `memory.db` instead.
 
 ### What the model sees
 
@@ -1575,8 +1588,9 @@ the directory, the `MEMORY.md` index (capped at 200 lines and 25 KB), and a
 one-line manifest entry per file with its type, description and age. Bodies are
 not loaded; the model reads one with the [`Memory`](tools.md#memory) tool. The
 block also tells the model to record a single lesson with
-[`Learn`](tools.md#learn) and a whole document with `Write`. Both tools are
-offered only while the feature is on.
+[`Learn`](tools.md#learn), a single fact with [`Retain`](tools.md#retain), and a
+whole document with `Write`. These tools are offered only while the feature is
+on.
 
 Each body the tool returns is prefixed with a staleness note when the file is
 more than a day old, because a memory is a point-in-time observation and a

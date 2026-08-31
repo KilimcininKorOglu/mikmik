@@ -651,6 +651,36 @@ Use `Write` instead when the memory is a whole document rather than a sentence. 
 
 ---
 
+### Retain
+
+**Permission level:** Write
+
+Record one durable fact about the project, so a later session starts knowing it. `Retain` is the fact twin of `Learn`: `Learn` records a reusable lesson (a convention, a constraint, a trap), `Retain` records a plain fact you established (a port, an owner, a path, a decision). Writes into `facts.md` in the [auto memory directory](configuration.md#auto-memory), which `Memory` then loads like any other memory file.
+
+| Parameter | Type   | Required | Description                                        |
+|-----------|--------|----------|----------------------------------------------------|
+| `fact`    | string | yes      | The fact, as a statement that stands on its own    |
+| `topic`   | string | no       | A few words for the heading                        |
+| `context` | string | no       | Where the fact came from                           |
+
+Same bookkeeping as `Learn`: newest first, deduplicated, `fact` kept to 2000 characters and `context` to 400, 100 entries with the oldest dropping. Facts and lessons live in separate files, so the same sentence can be both without colliding. A credential in a fact is masked, not refused. Offered only while auto memory is on.
+
+---
+
+### Reflect
+
+**Permission level:** Write
+
+Consolidate recent sessions into durable memory now, instead of waiting for the scheduled consolidation. Runs the same memory dream a background pass runs, but on demand: it reviews recent signal and records durable lessons and facts through `Learn` and `Retain`, so the result lands in whichever memory engine the session uses.
+
+| Parameter | Type   | Required | Description                                             |
+|-----------|--------|----------|---------------------------------------------------------|
+| `focus`   | string | no       | A topic to steer the pass toward                        |
+
+The pass runs inline and returns a short summary of what it consolidated. It takes the same lock the scheduled consolidation takes, so if a consolidation is already running it declines with a clear message rather than running a second one. Offered only while auto memory is on.
+
+---
+
 ### SendMessage
 
 **Permission level:** None

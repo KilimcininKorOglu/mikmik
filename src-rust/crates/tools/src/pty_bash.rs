@@ -270,7 +270,6 @@ async fn run_in_background(command: String, cwd: PathBuf, timeout_ms: u64) -> To
 // ---------------------------------------------------------------------------
 
 /// Remove ANSI/VT escape sequences from PTY output, producing clean text.
-#[cfg(unix)]
 fn strip_ansi(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();

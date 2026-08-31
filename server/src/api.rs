@@ -347,11 +347,28 @@ async fn policy(
         .get(header::IF_NONE_MATCH)
         .and_then(|value| value.to_str().ok())
         .map(str::trim);
+    // `private, no-cache` rather than `no-store`: the client revalidates with
+    // the checksum it holds, and this keeps the ETag/304 flow from the API's
+    // default `no-store` layer while still barring a shared cache.
     if known == Some(stored.checksum.as_str()) {
-        return (StatusCode::NOT_MODIFIED, [(header::ETAG, stored.checksum)]).into_response();
+        return (
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::ETAG, stored.checksum),
+                (header::CACHE_CONTROL, "private, no-cache".to_string()),
+            ],
+        )
+            .into_response();
     }
 
-    ([(header::ETAG, stored.checksum)], Json(stored.settings)).into_response()
+    (
+        [
+            (header::ETAG, stored.checksum),
+            (header::CACHE_CONTROL, "private, no-cache".to_string()),
+        ],
+        Json(stored.settings),
+    )
+        .into_response()
 }
 
 /// Every provider this account may use, with its key.

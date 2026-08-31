@@ -27,7 +27,10 @@ mod web;
 
 use std::sync::Arc;
 
-use axum::middleware;
+use axum::extract::Request;
+use axum::http::{header, HeaderValue};
+use axum::middleware::{self, Next};
+use axum::response::Response;
 use axum::Router;
 use tracing::info;
 
@@ -54,6 +57,10 @@ pub fn app(state: Arc<AppState>) -> Router {
 
     guarded
         .merge(public)
+        // The API serves session data, provider keys and the audit log; none of
+        // it may sit in a shared or browser cache. Default every API response
+        // that set no `Cache-Control` of its own to `no-store`.
+        .layer(middleware::from_fn(no_store_if_absent))
         // The page has to load before anyone can sign in, so it sits outside
         // the session layer too. It carries nothing an anonymous visitor could
         // not already see: everything it fills in comes from the API.
@@ -65,6 +72,21 @@ pub fn app(state: Arc<AppState>) -> Router {
 
 async fn healthz() -> &'static str {
     "ok"
+}
+
+/// Default any response that set no `Cache-Control` of its own to `no-store`.
+///
+/// A handler that wants its response cached or revalidated sets its own header
+/// and this leaves it untouched; the `policy` endpoint does exactly that with
+/// `private, no-cache`. Everything else, session data and provider keys, is
+/// kept out of every cache.
+async fn no_store_if_absent(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .entry(header::CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
+    response
 }
 
 /// Prove the listener is up, for the container healthcheck.
@@ -401,6 +423,32 @@ mod tests {
         assert!(
             !body.contains("password"),
             "a password field leaked: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_guarded_response_is_kept_out_of_every_cache() {
+        let state = test_state();
+        let token = logged_in(&state, "ayse@firma.com", false).await;
+
+        let response = app(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/me")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store"),
+            "an authenticated API response was left cacheable"
         );
     }
 

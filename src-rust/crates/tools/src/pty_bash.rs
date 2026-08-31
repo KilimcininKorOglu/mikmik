@@ -873,6 +873,17 @@ async fn run_bash(params: BashInput, ctx: &ToolContext) -> ToolResult {
             }
         }
     }
+
+    // Windows has no PTY path, so the embedded shell above is the only engine.
+    // Reaching here means a non-embedded engine was selected, which the
+    // platform does not support.
+    #[cfg(not(unix))]
+    {
+        ToolResult::error(
+            "The PTY bash engine is not available on Windows; use the embedded shell engine."
+                .to_string(),
+        )
+    }
 }
 
 /// Run the wrapper script in a terminal the client owns.

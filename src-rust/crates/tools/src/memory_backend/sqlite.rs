@@ -185,6 +185,27 @@ impl SqliteBackend {
         }
     }
 
+    /// Persist auto-extracted session notes as `session_note` rows, one per
+    /// note, credentials redacted. The sqlite counterpart of
+    /// `SessionMemoryExtractor::persist`: on the sqlite engine the notes become
+    /// searchable rows instead of a `session-notes.md` section. Each note's
+    /// category labels the row for search ranking. Best effort: a database that
+    /// cannot open drops the notes rather than failing the turn.
+    pub fn persist_session_notes(&self, notes: &[(String, String)]) {
+        let conn = match self.open() {
+            Ok(conn) => conn,
+            Err(error) => {
+                tracing::debug!(error = %error, "sqlite session-note persist skipped");
+                return;
+            }
+        };
+        for (label, content) in notes {
+            let redacted = mikmik_core::redact::redact_secrets(content);
+            let title = format!("session note: {label}");
+            let _ = self.insert_row(&conn, "session_note", &title, None, &redacted.text);
+        }
+    }
+
     fn search_impl(&self, query: &str, max_files: usize) -> rusqlite::Result<Vec<MemoryHit>> {
         let match_query = build_fts_query(query);
         if match_query.is_empty() {
@@ -531,6 +552,26 @@ mod tests {
             "the database was not set aside"
         );
         assert!(mem.join("memory.db.bak").exists(), "the backup is missing");
+    }
+
+    #[test]
+    fn session_notes_persist_as_searchable_rows() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let be = backend(tmp.path());
+        be.persist_session_notes(&[
+            (
+                "decision".to_string(),
+                "we chose sqlite for memory".to_string(),
+            ),
+            (
+                "constraint".to_string(),
+                "cargo runs from src-rust".to_string(),
+            ),
+        ]);
+        assert_eq!(be.search("sqlite", 5).len(), 1, "the first note was lost");
+        let hits = be.search("cargo", 5);
+        assert_eq!(hits.len(), 1, "the second note was lost");
+        assert!(hits[0].body.contains("src-rust"));
     }
 
     #[tokio::test]

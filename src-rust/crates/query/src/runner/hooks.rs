@@ -221,17 +221,7 @@ pub(crate) async fn fire_end_of_turn(
             let extractor = crate::session_memory::SessionMemoryExtractor::new(route.model);
             match extractor.extract(&messages, &working_dir, &backend).await {
                 Ok(memories) if !memories.is_empty() => {
-                    let project_root =
-                        mikmik_core::session_storage::transcript_root_for(&working_dir);
-                    let target = crate::session_memory::session_notes_path(
-                        &mikmik_core::memdir::auto_memory_path(&project_root),
-                    );
-                    if let Err(e) =
-                        crate::session_memory::SessionMemoryExtractor::persist(&memories, &target)
-                            .await
-                    {
-                        tracing::warn!(error = %e, "Failed to persist session memories");
-                    }
+                    persist_session_memories(&config, &working_dir, &memories).await;
                 }
                 Ok(_) => {}
                 Err(e) => {
@@ -251,6 +241,35 @@ pub(crate) async fn fire_end_of_turn(
     let dreamer = crate::auto_dream::AutoDream::new(memory_dir, conversations_dir);
     if let Ok(Some(task)) = dreamer.maybe_trigger().await {
         crate::consolidation::run_consolidation(task, tool_ctx, true).await;
+    }
+}
+
+/// Route extracted session notes to the session's memory engine: `session_note`
+/// rows on the sqlite engine, the `session-notes.md` section on the file
+/// engine. The sqlite rows are searchable at once and preserved in the
+/// database's backup if the project later switches back to files.
+async fn persist_session_memories(
+    config: &mikmik_core::Config,
+    working_dir: &std::path::Path,
+    memories: &[crate::session_memory::ExtractedMemory],
+) {
+    let project_root = mikmik_core::session_storage::transcript_root_for(working_dir);
+    let memory_dir = mikmik_core::memdir::auto_memory_path(&project_root);
+
+    if config.memory_backend.as_deref() == Some("sqlite") {
+        let notes: Vec<(String, String)> = memories
+            .iter()
+            .map(|memory| (memory.category.label().to_string(), memory.content.clone()))
+            .collect();
+        mikmik_tools::memory_backend::sqlite::SqliteBackend::new(memory_dir)
+            .persist_session_notes(&notes);
+        return;
+    }
+
+    let target = crate::session_memory::session_notes_path(&memory_dir);
+    if let Err(e) = crate::session_memory::SessionMemoryExtractor::persist(memories, &target).await
+    {
+        tracing::warn!(error = %e, "Failed to persist session memories");
     }
 }
 

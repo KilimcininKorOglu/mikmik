@@ -81,8 +81,9 @@ impl MemoryCategory {
         }
     }
 
-    /// Display label used in the persisted markdown.
-    fn label(&self) -> &'static str {
+    /// Display label used in the persisted markdown, and the search label on a
+    /// sqlite `session_note` row.
+    pub fn label(&self) -> &'static str {
         match self {
             Self::UserPreference => "user-preference",
             Self::ProjectFact => "project-fact",

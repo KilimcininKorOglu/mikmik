@@ -203,6 +203,10 @@ pub struct QueryConfig {
     /// Resolved once here rather than re-read per turn, so every turn in a
     /// session builds the same prompt shape.
     pub auto_memory_enabled: bool,
+    /// Which memory engine backs the auto-memory directory (`file` or
+    /// `sqlite`). `None` reads as `file`. Resolved once here so every turn
+    /// builds the same prompt shape.
+    pub memory_backend: Option<String>,
 }
 
 impl Default for QueryConfig {
@@ -238,6 +242,7 @@ impl Default for QueryConfig {
             continuation: crate::continuation::ContinuationMode::Default,
             companion_addendum: None,
             auto_memory_enabled: false,
+            memory_backend: None,
         }
     }
 }
@@ -277,6 +282,7 @@ impl QueryConfig {
             auto_memory_enabled: mikmik_core::memdir::is_auto_memory_enabled(
                 cfg.auto_memory_enabled,
             ),
+            memory_backend: cfg.memory_backend.clone(),
             ..Default::default()
         }
     }
@@ -316,6 +322,7 @@ impl QueryConfig {
             auto_memory_enabled: mikmik_core::memdir::is_auto_memory_enabled(
                 cfg.auto_memory_enabled,
             ),
+            memory_backend: cfg.memory_backend.clone(),
             ..Default::default()
         }
     }
@@ -3043,6 +3050,7 @@ mod tests {
             continuation: crate::continuation::ContinuationMode::Default,
             companion_addendum: None,
             auto_memory_enabled: false,
+            memory_backend: None,
         }
     }
 

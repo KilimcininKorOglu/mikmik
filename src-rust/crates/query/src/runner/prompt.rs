@@ -57,9 +57,10 @@ fn memory_content(config: &QueryConfig) -> String {
     };
     let project_root =
         mikmik_core::session_storage::transcript_root_for(std::path::Path::new(working_dir));
-    mikmik_core::memdir::build_memory_prompt_content(&mikmik_core::memdir::auto_memory_path(
-        &project_root,
-    ))
+    let memory_dir = mikmik_core::memdir::auto_memory_path(&project_root);
+    let backend =
+        mikmik_tools::memory_backend::backend_for(config.memory_backend.as_deref(), &memory_dir);
+    backend.prompt_block()
 }
 
 #[cfg(test)]

@@ -54,6 +54,7 @@ pub mod mcp_auth_tool;
 pub mod mcp_resources;
 pub mod mcp_tool;
 pub(crate) mod memory_append;
+pub mod memory_backend;
 pub mod memory_guard;
 pub mod memory_tool;
 pub mod monitor_tool;

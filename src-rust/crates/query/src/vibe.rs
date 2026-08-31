@@ -390,6 +390,7 @@ fn worker_config(
         auto_memory_enabled: mikmik_core::memdir::is_auto_memory_enabled(
             ctx.config.auto_memory_enabled,
         ),
+        memory_backend: ctx.config.memory_backend.clone(),
         auto_compact: ctx.config.effective_auto_compact(),
         compact_threshold: ctx.config.effective_compact_threshold(),
         system_prompt: Some(

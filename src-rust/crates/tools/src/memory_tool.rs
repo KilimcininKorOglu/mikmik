@@ -85,11 +85,9 @@ impl Tool for MemoryTool {
             .unwrap_or(DEFAULT_MAX_FILES)
             .clamp(1, MAX_FILES_LIMIT);
 
-        let matches = mikmik_core::memdir::find_relevant_memories_simple(
-            &memory_dir,
-            &params.query,
-            max_files,
-        );
+        let backend =
+            crate::memory_backend::backend_for(ctx.config.memory_backend.as_deref(), &memory_dir);
+        let matches = backend.search(&params.query, max_files);
 
         if matches.is_empty() {
             return ToolResult::success(format!(
@@ -103,12 +101,12 @@ impl Tool for MemoryTool {
         // time the model has read a stale claim it has already been believed.
         let body = matches
             .iter()
-            .map(|file| {
+            .map(|hit| {
                 format!(
                     "{}## {}\n\n{}",
-                    mikmik_core::memdir::memory_freshness_note(file.meta.modified_secs),
-                    file.meta.filename,
-                    file.content.trim()
+                    mikmik_core::memdir::memory_freshness_note(hit.modified_secs),
+                    hit.title,
+                    hit.body.trim()
                 )
             })
             .collect::<Vec<_>>()

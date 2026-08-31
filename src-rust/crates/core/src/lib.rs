@@ -1604,6 +1604,16 @@ pub mod config {
             skip_serializing_if = "Option::is_none"
         )]
         pub memory_model: Option<String>,
+        /// Live copy of [`Settings::memory_backend`], merged in by
+        /// [`Settings::effective_config`]. Selects the memory engine: `file`
+        /// (default, `.md` files) or `sqlite` (an FTS5 database). Unset reads as
+        /// `file`, the behaviour this tree had before the key existed.
+        #[serde(
+            default,
+            rename = "memoryBackend",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub memory_backend: Option<String>,
         /// Which advisor shapes run: `off`, `tool`, `runtime` or `both`.
         ///
         /// Unset reads as `tool`, the behaviour this tree had before the
@@ -2347,6 +2357,16 @@ pub mod config {
             skip_serializing_if = "Option::is_none"
         )]
         pub memory_model: Option<String>,
+        /// Which memory engine stores auto-memory: `file` (default, `.md`
+        /// files) or `sqlite` (an FTS5 database). Taken from the user config,
+        /// not a project override, so a repo cannot silently switch a user's
+        /// memory store.
+        #[serde(
+            default,
+            rename = "memoryBackend",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub memory_backend: Option<String>,
         /// Which advisor shapes run: `off`, `tool`, `runtime` or `both`.
         /// Mirrors [`Config::advisor_mode`]; the nested block wins.
         #[serde(
@@ -3706,6 +3726,9 @@ pub mod config {
             if config.memory_model.is_none() {
                 config.memory_model = self.memory_model.clone();
             }
+            if config.memory_backend.is_none() {
+                config.memory_backend = self.memory_backend.clone();
+            }
             if config.advisor_mode.is_none() {
                 config.advisor_mode = self.advisor_mode.clone();
             }
@@ -4222,6 +4245,7 @@ pub mod config {
                 // its own after every turn, on the user's account. A
                 // repository does not choose it.
                 memory_model: base.config.memory_model,
+                memory_backend: base.config.memory_backend,
                 // SECURITY: the stricter of the two wins. A repository may ask
                 // for more checking than the user configured, because that only
                 // costs an extra read. It may never ask for less: a checkout
@@ -4489,6 +4513,7 @@ pub mod config {
                 advisor_immune_turns: base.advisor_immune_turns,
                 max_concurrent_subagents: base.max_concurrent_subagents,
                 memory_model: base.memory_model.clone(),
+                memory_backend: base.memory_backend.clone(),
                 companion: over.companion.clone().or(base.companion.clone()),
                 reduce_motion: base.reduce_motion,
                 terminal_progress_bar: base.terminal_progress_bar,

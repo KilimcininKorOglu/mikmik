@@ -27,3 +27,7 @@ editors/vscode/node_modules/
 editors/vscode/out/
 editors/vscode/*.vsix
 
+# Python bytecode cache (scripts/)
+__pycache__/
+*.pyc
+

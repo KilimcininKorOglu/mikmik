@@ -3,45 +3,16 @@
 //! `Retain` is the fact twin of `Learn`. `Learn` records a reusable lesson (a
 //! convention, a constraint, a trap); `Retain` records a plain fact the model
 //! established mid-run and wants a later session to start knowing (a port, an
-//! owner, a path, a decision). They write separate files so facts and lessons
-//! never collide, but they share the same bookkeeping through
-//! [`crate::memory_append`]: one file, newest first, no duplicates, a bounded
-//! number of entries, credentials masked on the way in.
+//! owner, a path, a decision). They write to separate stores so facts and
+//! lessons never collide, but both hand the sentence to the session's memory
+//! backend, which does the bookkeeping (newest first, no duplicates, a bounded
+//! number of entries, credentials masked on the way in).
 
-use crate::memory_append::AppendConfig;
+use crate::memory_backend::{backend_for, file::RETAIN};
 use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
-
-/// The one file this tool writes.
-pub const RETAINED_FILENAME: &str = "facts.md";
-
-/// Entries kept. The oldest is dropped when a new one arrives.
-const MAX_ENTRIES: usize = 100;
-
-/// Characters kept from a fact.
-const MAX_FACT_CHARS: usize = 2000;
-
-/// Characters kept from the optional context.
-const MAX_CONTEXT_CHARS: usize = 400;
-
-/// Written once, when the file is created.
-const FRONTMATTER: &str = "---\n\
-name: Retained facts\n\
-description: Durable facts about this project, newest first\n\
-type: project\n\
----\n";
-
-/// The append policy for `facts.md`, shared with [`crate::memory_append`].
-const RETAIN_CONFIG: AppendConfig = AppendConfig {
-    filename: RETAINED_FILENAME,
-    frontmatter: FRONTMATTER,
-    max_item_chars: MAX_FACT_CHARS,
-    max_context_chars: MAX_CONTEXT_CHARS,
-    cap: MAX_ENTRIES,
-    noun: "fact",
-};
 
 pub struct RetainTool;
 
@@ -83,8 +54,9 @@ impl Tool for RetainTool {
                     "description": format!(
                         "The fact, in one or two sentences. Write it as a \
                          statement that stands on its own, because a later \
-                         session reads it without this conversation. Kept to \
-                         {MAX_FACT_CHARS} characters."
+                         session reads it without this conversation. Kept to {} \
+                         characters.",
+                        RETAIN.max_item_chars
                     )
                 },
                 "topic": {
@@ -94,8 +66,8 @@ impl Tool for RetainTool {
                 "context": {
                     "type": "string",
                     "description": format!(
-                        "Optional. Where the fact came from. Kept to \
-                         {MAX_CONTEXT_CHARS} characters."
+                        "Optional. Where the fact came from. Kept to {} characters.",
+                        RETAIN.max_context_chars
                     )
                 }
             },
@@ -116,14 +88,13 @@ impl Tool for RetainTool {
         let project_root = mikmik_core::session_storage::transcript_root_for(&ctx.working_dir);
         let memory_dir = mikmik_core::memdir::auto_memory_path(&project_root);
 
-        crate::memory_append::append_entry(
-            &memory_dir,
-            &RETAIN_CONFIG,
-            &params.fact,
-            params.topic.as_deref(),
-            params.context.as_deref(),
-        )
-        .await
+        backend_for(ctx.config.memory_backend.as_deref(), &memory_dir)
+            .retain_fact(
+                &params.fact,
+                params.topic.as_deref(),
+                params.context.as_deref(),
+            )
+            .await
     }
 }
 
@@ -171,7 +142,7 @@ mod tests {
             _dir: dir,
             _guard: guard,
             ctx,
-            facts: memory.join(RETAINED_FILENAME),
+            facts: memory.join(RETAIN.filename),
         }
     }
 
@@ -238,7 +209,7 @@ mod tests {
         let _lock = ENV_LOCK.lock().await;
         let f = fixture();
 
-        for i in 0..MAX_ENTRIES {
+        for i in 0..RETAIN.cap {
             retain(&f.ctx, &format!("fact number {i}")).await;
         }
         assert!(std::fs::read_to_string(&f.facts)
@@ -255,10 +226,9 @@ mod tests {
         let written = std::fs::read_to_string(&f.facts).expect("read back");
         assert!(!written.contains("fact number 0"), "the cap did not fire");
         assert!(written.contains("one fact too many"));
-        assert_eq!(written.matches("\n## ").count(), MAX_ENTRIES);
+        assert_eq!(written.matches("\n## ").count(), RETAIN.cap);
     }
 
-    /// The fact is masked rather than refused, exactly like a lesson.
     #[tokio::test]
     async fn a_credential_in_a_fact_is_masked() {
         let _lock = ENV_LOCK.lock().await;

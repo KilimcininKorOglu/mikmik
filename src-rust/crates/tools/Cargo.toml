@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 mikmik-core = { workspace = true }
+rusqlite = { workspace = true }
 mikmik-api = { workspace = true }
 mikmik-mcp = { workspace = true }
 mikmik-plugins = { workspace = true }

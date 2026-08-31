@@ -7,48 +7,17 @@
 //! to the index. In practice it either skips the check and leaves five files
 //! saying the same thing, or it skips the whole thing.
 //!
-//! This tool takes the sentence and does the bookkeeping through
-//! [`crate::memory_append`], which `Retain` shares. One file, newest first, no
-//! duplicates, a bounded number of entries, and credentials masked on the way
-//! in.
+//! This tool takes the sentence and hands it to the session's memory backend,
+//! which does the bookkeeping (one place, newest first, no duplicates, a
+//! bounded number of entries, credentials masked on the way in). `Retain` is
+//! the fact twin; both ride the backend so a sqlite session records the same
+//! lesson into the database instead of a file.
 
-use crate::memory_append::AppendConfig;
+use crate::memory_backend::{backend_for, file::LEARN};
 use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
-
-/// The one file this tool writes.
-pub const LEARNED_FILENAME: &str = "learned.md";
-
-/// Entries kept. The oldest is dropped when a new one arrives.
-///
-/// The file is a memory file, so its body is loaded whole when a search picks
-/// it. An unbounded log would eventually be the largest thing the model reads.
-const MAX_ENTRIES: usize = 100;
-
-/// Characters kept from a lesson.
-const MAX_LESSON_CHARS: usize = 2000;
-
-/// Characters kept from the optional context.
-const MAX_CONTEXT_CHARS: usize = 400;
-
-/// Written once, when the file is created.
-const FRONTMATTER: &str = "---\n\
-name: Learned lessons\n\
-description: Durable lessons this project taught, newest first\n\
-type: project\n\
----\n";
-
-/// The append policy for `learned.md`, shared with [`crate::memory_append`].
-const LEARN_CONFIG: AppendConfig = AppendConfig {
-    filename: LEARNED_FILENAME,
-    frontmatter: FRONTMATTER,
-    max_item_chars: MAX_LESSON_CHARS,
-    max_context_chars: MAX_CONTEXT_CHARS,
-    cap: MAX_ENTRIES,
-    noun: "lesson",
-};
 
 pub struct LearnTool;
 
@@ -91,8 +60,9 @@ impl Tool for LearnTool {
                     "description": format!(
                         "The lesson, in one or two sentences. Write it as a \
                          statement that stands on its own, because a later \
-                         session reads it without this conversation. Kept to \
-                         {MAX_LESSON_CHARS} characters."
+                         session reads it without this conversation. Kept to {} \
+                         characters.",
+                        LEARN.max_item_chars
                     )
                 },
                 "topic": {
@@ -102,8 +72,8 @@ impl Tool for LearnTool {
                 "context": {
                     "type": "string",
                     "description": format!(
-                        "Optional. Where the lesson came from. Kept to \
-                         {MAX_CONTEXT_CHARS} characters."
+                        "Optional. Where the lesson came from. Kept to {} characters.",
+                        LEARN.max_context_chars
                     )
                 }
             },
@@ -124,14 +94,13 @@ impl Tool for LearnTool {
         let project_root = mikmik_core::session_storage::transcript_root_for(&ctx.working_dir);
         let memory_dir = mikmik_core::memdir::auto_memory_path(&project_root);
 
-        crate::memory_append::append_entry(
-            &memory_dir,
-            &LEARN_CONFIG,
-            &params.lesson,
-            params.topic.as_deref(),
-            params.context.as_deref(),
-        )
-        .await
+        backend_for(ctx.config.memory_backend.as_deref(), &memory_dir)
+            .append_lesson(
+                &params.lesson,
+                params.topic.as_deref(),
+                params.context.as_deref(),
+            )
+            .await
     }
 }
 
@@ -179,7 +148,7 @@ mod tests {
             _dir: dir,
             _guard: guard,
             ctx,
-            learned: memory.join(LEARNED_FILENAME),
+            learned: memory.join(LEARN.filename),
         }
     }
 
@@ -204,8 +173,6 @@ mod tests {
         assert!(written.contains("Cargo commands run from src-rust."));
     }
 
-    /// Newest first, because a search loads the body whole and the reader
-    /// stops early.
     #[tokio::test]
     async fn the_newest_lesson_comes_first() {
         let _lock = ENV_LOCK.lock().await;
@@ -221,8 +188,6 @@ mod tests {
         assert_eq!(written.matches("name: Learned lessons").count(), 1);
     }
 
-    /// Without this the model records the same thing every session and the
-    /// file becomes the largest memory it owns.
     #[tokio::test]
     async fn the_same_lesson_is_not_recorded_twice() {
         let _lock = ENV_LOCK.lock().await;
@@ -246,7 +211,7 @@ mod tests {
         let _lock = ENV_LOCK.lock().await;
         let f = fixture();
 
-        for i in 0..MAX_ENTRIES {
+        for i in 0..LEARN.cap {
             learn(&f.ctx, &format!("lesson number {i}")).await;
         }
         let written = std::fs::read_to_string(&f.learned).expect("read back");
@@ -262,34 +227,30 @@ mod tests {
         let written = std::fs::read_to_string(&f.learned).expect("read back");
         assert!(!written.contains("lesson number 0"), "the cap did not fire");
         assert!(written.contains("one lesson too many"));
-        assert_eq!(written.matches("\n## ").count(), MAX_ENTRIES);
+        assert_eq!(written.matches("\n## ").count(), LEARN.cap);
     }
 
     #[tokio::test]
     async fn a_long_lesson_is_clipped() {
         let _lock = ENV_LOCK.lock().await;
         let f = fixture();
-        let long = "x".repeat(MAX_LESSON_CHARS + 500);
+        let long = "x".repeat(LEARN.max_item_chars + 500);
 
         learn(&f.ctx, &long).await;
 
         let written = std::fs::read_to_string(&f.learned).expect("read back");
         assert!(written.contains('…'), "nothing was clipped");
         assert!(
-            written.matches('x').count() <= MAX_LESSON_CHARS,
+            written.matches('x').count() <= LEARN.max_item_chars,
             "the clip let {} characters through",
             written.matches('x').count()
         );
     }
 
-    /// The lesson is masked rather than refused: refusing would lose the whole
-    /// lesson over a value that is not the point of it.
     #[tokio::test]
     async fn a_credential_in_a_lesson_is_masked() {
         let _lock = ENV_LOCK.lock().await;
         let f = fixture();
-        // Assembled at run time: a contiguous `ghp_AAAA…` in the source is a
-        // GitHub token as far as push protection is concerned.
         let secret = format!("ghp{}{}", "_", "A".repeat(30));
 
         let result = learn(&f.ctx, &format!("the deploy token is {secret}")).await;

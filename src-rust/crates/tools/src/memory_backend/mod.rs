@@ -7,7 +7,10 @@
 //! search, go through this trait so a different engine can answer them.
 
 pub mod file;
+pub mod sqlite;
 
+use crate::ToolResult;
+use async_trait::async_trait;
 use std::path::Path;
 
 /// One memory a search returned, independent of the engine that stored it.
@@ -20,21 +23,38 @@ pub struct MemoryHit {
     pub modified_secs: u64,
 }
 
-/// The read operations every memory engine provides. Extended with the write
-/// paths when the sqlite engine lands and needs to intercept them.
+/// The operations every memory engine provides: the two read paths that feed
+/// the model, and the two write paths behind the `Learn` and `Retain` tools.
+/// Both engines answer them, so which one a session uses is invisible to the
+/// call sites.
+#[async_trait]
 pub trait MemoryBackend: Send + Sync {
     /// The `<memory>` block for the system prompt.
     fn prompt_block(&self) -> String;
     /// The most relevant memories for a query, best first.
     fn search(&self, query: &str, max_files: usize) -> Vec<MemoryHit>;
+    /// Record one durable lesson (the `Learn` tool). Returns the tool result.
+    async fn append_lesson(
+        &self,
+        item: &str,
+        topic: Option<&str>,
+        context: Option<&str>,
+    ) -> ToolResult;
+    /// Record one durable fact (the `Retain` tool). Returns the tool result.
+    async fn retain_fact(
+        &self,
+        item: &str,
+        topic: Option<&str>,
+        context: Option<&str>,
+    ) -> ToolResult;
 }
 
-/// Select the engine for a `memoryBackend` setting. `Some("sqlite")` will
-/// select the sqlite engine once it lands; every other value, including `None`,
-/// is the file engine, so an unset setting behaves exactly as before.
+/// Select the engine for a `memoryBackend` setting. `Some("sqlite")` selects
+/// the sqlite engine; every other value, including `None`, is the file engine,
+/// so an unset setting behaves exactly as before.
 pub fn backend_for(backend: Option<&str>, memory_dir: &Path) -> Box<dyn MemoryBackend> {
-    // The sqlite engine reads `backend` once it lands; until then every value
-    // resolves to the file engine.
-    let _ = backend;
-    Box::new(file::FileBackend::new(memory_dir.to_path_buf()))
+    match backend {
+        Some("sqlite") => Box::new(sqlite::SqliteBackend::new(memory_dir.to_path_buf())),
+        _ => Box::new(file::FileBackend::new(memory_dir.to_path_buf())),
+    }
 }

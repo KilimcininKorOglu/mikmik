@@ -17,7 +17,7 @@
 
 ---
 
-MikMik is an open-source, multi-provider terminal coding agent written from the ground up in Rust. It began as a clean-room reimplementation of Claude Code's behavior, specified in [`spec/`](https://github.com/KilimcininKorOglu/mikmik/tree/main/spec), and has grown into a full TUI pair programmer: multi-provider routing, a rich terminal UI, a plugin system, subagents and teams, session forking, memory consolidation, and editor integration over the Agent Client Protocol.
+MikMik is an open-source, multi-provider terminal coding agent written from the ground up in Rust. It began as a clean-room reimplementation of Claude Code's behavior and has grown into a full TUI pair programmer: multi-provider routing, a rich terminal UI, a plugin system, subagents and teams, session forking, memory consolidation, and editor integration over the Agent Client Protocol.
 
 It is fast and memory-efficient, it runs however you want it to, and it collects no tracking or telemetry.
 
@@ -269,7 +269,7 @@ GPG and SSH forwarding are enabled in the devcontainer if you have them set up o
 
 This repository does not hold a copy of the proprietary Claude Code TypeScript source code. It is a clean-room Rust reimplementation of Claude Code's behavior, built in two explicit phases:
 
-**Specification** ([`spec/`](https://github.com/KilimcininKorOglu/mikmik/tree/main/spec)) — An AI agent analyzed the source and produced exhaustive behavioral specifications and improvements that deviate from the original: architecture, data flows, tool contracts, system designs. No source code was carried forward.
+**Specification** — An AI agent analyzed the source and produced exhaustive behavioral specifications and improvements that deviate from the original: architecture, data flows, tool contracts, system designs. No source code was carried forward.
 
 **Implementation** ([`src-rust/`](https://github.com/KilimcininKorOglu/mikmik/tree/main/src-rust)) — A separate AI agent implemented from the spec alone, never referencing the original TypeScript. The result is idiomatic Rust that reproduces the behavior, not the expression.
 

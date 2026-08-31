@@ -307,12 +307,29 @@ impl AutoDream {
             return Ok(None);
         }
         self.acquire_lock().await?;
-        Ok(Some(ConsolidationTask {
+        Ok(Some(self.build_task()))
+    }
+
+    /// Bypass the time and session gates but still take the lock: for an
+    /// on-demand consolidation (the `Reflect` tool), where the schedule is
+    /// moot because the model asked for it directly. Returns `Ok(None)` when a
+    /// fresh lock is already held, so a scheduled run mid-flight is not doubled.
+    pub async fn force_consolidation(&self) -> Result<Option<ConsolidationTask>> {
+        if !self.lock_gate_passes().await? {
+            return Ok(None);
+        }
+        self.acquire_lock().await?;
+        Ok(Some(self.build_task()))
+    }
+
+    /// The task for one consolidation run, once the caller holds the lock.
+    fn build_task(&self) -> ConsolidationTask {
+        ConsolidationTask {
             prompt: self.consolidation_prompt(),
             memory_dir: self.memory_dir.clone(),
             state_file: self.state_file.clone(),
             lock_file: self.lock_file.clone(),
-        }))
+        }
     }
 
     /// Persist the updated consolidation state and release the lock.
@@ -425,6 +442,32 @@ mod tests {
         let mem = tmp.path().join("memory");
         let conv = tmp.path().join("conversations");
         AutoDream::new(mem, conv)
+    }
+
+    // --- force_consolidation ---
+
+    #[tokio::test]
+    async fn force_consolidation_bypasses_the_schedule_but_takes_the_lock() {
+        let tmp = TempDir::new().unwrap();
+        let dream = make_dream(&tmp);
+        // No prior run and no accumulated sessions, so the scheduled path is
+        // gated out; the forced path runs anyway.
+        assert!(dream.maybe_trigger().await.unwrap().is_none());
+        let task = dream.force_consolidation().await.unwrap();
+        assert!(
+            task.is_some(),
+            "force must bypass the time and session gates"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_held_lock_refuses_a_second_force() {
+        let tmp = TempDir::new().unwrap();
+        let dream = make_dream(&tmp);
+        let first = dream.force_consolidation().await.unwrap();
+        assert!(first.is_some());
+        let second = dream.force_consolidation().await.unwrap();
+        assert!(second.is_none(), "a fresh lock must refuse a second force");
     }
 
     // --- time_gate_passes ---

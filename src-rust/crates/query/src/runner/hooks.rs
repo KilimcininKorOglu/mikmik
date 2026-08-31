@@ -250,24 +250,7 @@ pub(crate) async fn fire_end_of_turn(
     let conversations_dir = mikmik_core::session_storage::transcript_dir(&project_root);
     let dreamer = crate::auto_dream::AutoDream::new(memory_dir, conversations_dir);
     if let Ok(Some(task)) = dreamer.maybe_trigger().await {
-        let agent_input = serde_json::json!({
-            "description": "memory consolidation",
-            "prompt": task.prompt,
-            "max_turns": 20,
-            "system_prompt": "You are performing automatic memory consolidation. Complete the task and return a brief summary.",
-            "run_in_background": true,
-            "isolation": null,
-            // `AgentTool` reads this through `resolve_subagent_model`, which
-            // falls back to the session's own route when the value is absent.
-            // A null therefore keeps the behaviour the tree had.
-            "model": tool_ctx.config.memory_model,
-        });
-        let ctx = tool_ctx.clone();
-        tokio::spawn(async move {
-            let agent = crate::agent_tool::AgentTool;
-            let _result = mikmik_tools::Tool::execute(&agent, agent_input, &ctx).await;
-            crate::auto_dream::AutoDream::finish_consolidation(&task).await;
-        });
+        crate::consolidation::run_consolidation(task, tool_ctx, true).await;
     }
 }
 

@@ -6446,6 +6446,8 @@ pub mod constants {
     pub const TOOL_NAME_LEARN: &str = "Learn";
     /// Writes one durable fact into the memory directory.
     pub const TOOL_NAME_RETAIN: &str = "Retain";
+    /// Runs an on-demand memory consolidation pass.
+    pub const TOOL_NAME_REFLECT: &str = "Reflect";
     pub const TOOL_NAME_TASK_CREATE: &str = "TaskCreate";
     pub const TOOL_NAME_TASK_GET: &str = "TaskGet";
     pub const TOOL_NAME_TASK_UPDATE: &str = "TaskUpdate";

@@ -75,6 +75,7 @@ pub fn build_tool_roster(
         tools.push(Box::new(mikmik_tools::MemoryTool));
         tools.push(Box::new(mikmik_tools::LearnTool));
         tools.push(Box::new(mikmik_tools::RetainTool));
+        tools.push(Box::new(crate::ReflectTool));
     }
 
     if let Some(manager) = &mcp_manager {

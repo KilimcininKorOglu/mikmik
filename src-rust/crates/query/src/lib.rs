@@ -17,11 +17,13 @@ pub mod agent_tool;
 pub mod auto_dream;
 pub mod command_queue;
 pub mod compact;
+pub mod consolidation;
 pub mod context_analyzer;
 pub mod continuation;
 pub mod cron_scheduler;
 pub mod goal_loop;
 pub mod managed_orchestrator;
+pub mod reflect_tool;
 pub mod roster;
 pub mod sanitize;
 pub mod session_memory;
@@ -48,6 +50,7 @@ pub use goal_loop::{
     check_and_continue_goal, decide_goal_continuation, mark_goal_complete, GoalContinuation,
     StopReason,
 };
+pub use reflect_tool::ReflectTool;
 pub use roster::build_tool_roster;
 pub use runner::*;
 pub use sanitize::sanitize_history;

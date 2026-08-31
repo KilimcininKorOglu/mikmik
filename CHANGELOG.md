@@ -703,7 +703,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Fixed
 
 - correct the cc_version OAuth golden suffix for 2.1.246
-- build the bundled utilities and their shell wiring on Windows
+- build the embedded shell, bundled utilities and bash tool on Windows
 - push the permission mode to the manager on a config change
 - feed the slash command typeahead from the command registry
 - deliver macOS notifications through osascript

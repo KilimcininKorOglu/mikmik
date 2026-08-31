@@ -4,8 +4,8 @@
 //! in a `memories` table, mirrored into an FTS5 index for search. The `kind`
 //! column (`lesson`, `fact`, `session_note`, `topic`) keeps the four sources
 //! apart. On first open the existing `.md` files are imported once, so
-//! switching a project to sqlite does not lose what it already knew; the
-//! reverse export lives on the file side.
+//! switching a project to sqlite does not lose what it already knew;
+//! [`export_to_files`] does the reverse when a project switches back.
 //!
 //! rusqlite is blocking, so the async trait methods do their work inline. The
 //! store is small (bounded per kind), so a query is a handful of rows.
@@ -14,7 +14,7 @@ use super::{MemoryBackend, MemoryHit};
 use crate::ToolResult;
 use async_trait::async_trait;
 use rusqlite::{params, Connection};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Entries kept per kind; the oldest drops when a new one arrives, matching the
@@ -83,9 +83,8 @@ impl SqliteBackend {
         Ok(conn)
     }
 
-    /// One-time import of the `.md` store into the database. Each known file
-    /// becomes a row of its kind; unknown `.md` files become `topic` rows. Best
-    /// effort: a file that cannot be read is skipped, not fatal.
+    /// One-time import of the `.md` store into the database, on first open.
+    /// Best effort: a file that cannot be read is skipped, not fatal.
     fn import_markdown(&self, conn: &Connection) {
         let entries = match std::fs::read_dir(&self.memory_dir) {
             Ok(entries) => entries,
@@ -102,11 +101,23 @@ impl SqliteBackend {
             let Ok(content) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let kind = kind_for_filename(filename);
-            let (name, description, _) = mikmik_core::memdir::parse_frontmatter_quick(&content);
-            let title = name.unwrap_or_else(|| filename.to_string());
-            let _ = self.insert_row(conn, kind, &title, description.as_deref(), &content);
+            self.import_one(conn, kind_for_filename(filename), filename, &content);
         }
+    }
+
+    /// Import one file. `learned.md` and `facts.md` import per entry, so each
+    /// lesson or fact is its own searchable row and survives the reverse export
+    /// unchanged; every other file imports whole, as one row of its kind.
+    fn import_one(&self, conn: &Connection, kind: &str, filename: &str, content: &str) {
+        if matches!(kind, "lesson" | "fact") {
+            for item in entry_items(content) {
+                let _ = self.insert_row(conn, kind, kind, None, &item);
+            }
+            return;
+        }
+        let (name, description, _) = mikmik_core::memdir::parse_frontmatter_quick(content);
+        let title = name.unwrap_or_else(|| filename.to_string());
+        let _ = self.insert_row(conn, kind, &title, description.as_deref(), content);
     }
 
     /// Insert or refresh one row, enforcing the per-kind cap. Returns whether a
@@ -201,47 +212,66 @@ impl SqliteBackend {
         rows.collect()
     }
 
-    fn manifest_impl(&self) -> rusqlite::Result<Vec<(String, Option<String>, i64)>> {
+    /// The compact index for the system prompt: a count for each append-style
+    /// kind that has rows, then one line per topic file. Per-entry lessons and
+    /// facts would flood the prompt if listed one by one, so they are summed.
+    fn index_lines(&self) -> rusqlite::Result<Vec<String>> {
         let conn = self.open()?;
+        let mut lines = Vec::new();
+        for (kind, plural) in [
+            ("lesson", "lessons"),
+            ("fact", "facts"),
+            ("session_note", "session notes"),
+        ] {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM memories WHERE kind = ?1",
+                params![kind],
+                |row| row.get(0),
+            )?;
+            if count > 0 {
+                lines.push(format!("- {count} {plural}"));
+            }
+        }
         let mut stmt = conn.prepare(
-            "SELECT title, description, updated_at FROM memories ORDER BY updated_at DESC LIMIT 200",
+            "SELECT title, description FROM memories WHERE kind = 'topic' ORDER BY updated_at DESC",
         )?;
-        let rows = stmt.query_map([], |row| {
+        let topics = stmt.query_map([], |row| {
             let title: Option<String> = row.get(0)?;
             let description: Option<String> = row.get(1)?;
-            let updated: i64 = row.get(2)?;
-            Ok((title.unwrap_or_default(), description, updated))
+            Ok((title.unwrap_or_default(), description))
         })?;
-        rows.collect()
+        for (title, description) in topics.flatten() {
+            match description {
+                Some(desc) if !desc.is_empty() => lines.push(format!("- {title}: {desc}")),
+                _ => lines.push(format!("- {title}")),
+            }
+        }
+        Ok(lines)
     }
 }
 
 #[async_trait]
 impl MemoryBackend for SqliteBackend {
     fn prompt_block(&self) -> String {
-        let rows = match self.manifest_impl() {
-            Ok(rows) => rows,
+        let lines = match self.index_lines() {
+            Ok(lines) => lines,
             Err(error) => {
                 tracing::debug!(error = %error, "sqlite memory manifest failed");
                 return String::new();
             }
         };
-        if rows.is_empty() {
+        if lines.is_empty() {
             return String::new();
         }
         let mut out = format!(
             "Memory database: {}\nFor one durable lesson, call the `Learn` tool; for a durable \
-             fact, call `Retain`. Both file and deduplicate for you.\n\n## Memory Index",
+             fact, call `Retain`. Search recall with the `Memory` tool. Both file and \
+             deduplicate for you.\n\n## Memory Index",
             self.db_path().display()
         );
-        for (title, description, updated) in rows {
-            let age = mikmik_core::memdir::memory_age(updated.max(0) as u64);
-            match description {
-                Some(desc) if !desc.is_empty() => {
-                    out.push_str(&format!("\n- {title} ({age}): {desc}"))
-                }
-                _ => out.push_str(&format!("\n- {title} ({age})")),
-            }
+        for line in lines {
+            out.push('\n');
+            out.push_str(&line);
         }
         out
     }
@@ -283,6 +313,64 @@ fn kind_for_filename(filename: &str) -> &'static str {
         "session-notes.md" => "session_note",
         _ => "topic",
     }
+}
+
+/// The item sentence of every entry in an append-style `.md` body: the first
+/// non-empty, non-context line under each `## ` heading. Used by per-entry
+/// import so lessons and facts land as one row each.
+fn entry_items(content: &str) -> Vec<String> {
+    crate::memory_append::parse_entries(crate::memory_append::body_after_frontmatter(content))
+        .into_iter()
+        .filter_map(|entry| first_item_line(&entry.text))
+        .collect()
+}
+
+/// The line under an entry heading that carries the item, skipping the heading
+/// and any `_context:` line.
+fn first_item_line(block: &str) -> Option<String> {
+    block
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("_context:"))
+        .map(str::to_string)
+}
+
+/// Export the sqlite store back to `.md` files when a project switches to the
+/// file engine, then set the database aside so the export runs once. Only the
+/// append-style stores are exported; session notes and topic files were
+/// imported from `.md` that still exist untouched, so re-writing them would
+/// duplicate what is already on disk.
+pub(crate) fn export_to_files(memory_dir: &Path) {
+    let db = memory_dir.join("memory.db");
+    if !db.exists() {
+        return;
+    }
+    let conn = match Connection::open(&db) {
+        Ok(conn) => conn,
+        Err(_) => return,
+    };
+    let lessons = read_items(&conn, "lesson");
+    let facts = read_items(&conn, "fact");
+    let _ = crate::memory_append::merge_entries(memory_dir, &super::file::LEARN, &lessons);
+    let _ = crate::memory_append::merge_entries(memory_dir, &super::file::RETAIN, &facts);
+    drop(conn);
+    let _ = std::fs::rename(&db, memory_dir.join("memory.db.bak"));
+}
+
+/// Read the item text of every row of a kind, oldest first, so the newest lands
+/// on top after each is prepended during the merge.
+fn read_items(conn: &Connection, kind: &str) -> Vec<String> {
+    let mut stmt =
+        match conn.prepare("SELECT body FROM memories WHERE kind = ?1 ORDER BY updated_at ASC") {
+            Ok(stmt) => stmt,
+            Err(_) => return Vec::new(),
+        };
+    let items = match stmt.query_map(params![kind], |row| row.get::<_, String>(0)) {
+        Ok(rows) => rows.flatten().collect(),
+        Err(_) => Vec::new(),
+    };
+    items
 }
 
 /// Lower-case, whitespace collapsed, for the dedup key.
@@ -397,5 +485,77 @@ mod tests {
         // First search opens the db, which triggers the import.
         let hits = be.search("relay", 5);
         assert_eq!(hits.len(), 1, "the markdown file was not imported");
+    }
+
+    #[test]
+    fn a_learned_file_with_two_entries_imports_as_two_rows() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mem = tmp.path().join("memory");
+        std::fs::create_dir_all(&mem).expect("mkdir");
+        std::fs::write(
+            mem.join("learned.md"),
+            "---\nname: Learned lessons\ndescription: d\ntype: project\n---\n\n\
+             ## 2026-01-01\ncargo runs from src-rust\n\n## 2026-01-02\nthe relay binds 8350\n",
+        )
+        .expect("write");
+        let be = SqliteBackend::new(mem);
+
+        let cargo = be.search("cargo", 5);
+        assert_eq!(cargo.len(), 1, "the first entry was not imported");
+        assert!(cargo[0].body.contains("cargo runs from src-rust"));
+        assert!(
+            !cargo[0].body.contains("Learned lessons"),
+            "frontmatter leaked into the row body: {}",
+            cargo[0].body
+        );
+        assert_eq!(be.search("relay", 5).len(), 1, "the second entry was lost");
+    }
+
+    #[tokio::test]
+    async fn switching_back_to_files_exports_the_store() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mem = tmp.path().join("memory");
+        let be = SqliteBackend::new(mem.clone());
+        be.append_lesson("cargo runs from src-rust", None, None)
+            .await;
+        be.retain_fact("the relay binds 8350", None, None).await;
+
+        export_to_files(&mem);
+
+        let learned = std::fs::read_to_string(mem.join("learned.md")).expect("learned.md");
+        assert!(learned.contains("cargo runs from src-rust"), "{learned}");
+        let facts = std::fs::read_to_string(mem.join("facts.md")).expect("facts.md");
+        assert!(facts.contains("the relay binds 8350"), "{facts}");
+        assert!(
+            !mem.join("memory.db").exists(),
+            "the database was not set aside"
+        );
+        assert!(mem.join("memory.db.bak").exists(), "the backup is missing");
+    }
+
+    #[tokio::test]
+    async fn export_does_not_duplicate_entries_already_in_the_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mem = tmp.path().join("memory");
+        std::fs::create_dir_all(&mem).expect("mkdir");
+        std::fs::write(
+            mem.join("learned.md"),
+            "---\nname: Learned lessons\ndescription: d\ntype: project\n---\n\n\
+             ## 2026-01-01\ncargo runs from src-rust\n",
+        )
+        .expect("write");
+        // Opening imports the file into the database.
+        let be = SqliteBackend::new(mem.clone());
+        let _ = be.search("cargo", 5);
+
+        // Switching back exports; the entry is already on disk, so it stays once.
+        export_to_files(&mem);
+
+        let learned = std::fs::read_to_string(mem.join("learned.md")).expect("read");
+        assert_eq!(
+            learned.matches("cargo runs from src-rust").count(),
+            1,
+            "the export duplicated an entry:\n{learned}"
+        );
     }
 }

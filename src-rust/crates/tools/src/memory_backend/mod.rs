@@ -52,9 +52,16 @@ pub trait MemoryBackend: Send + Sync {
 /// Select the engine for a `memoryBackend` setting. `Some("sqlite")` selects
 /// the sqlite engine; every other value, including `None`, is the file engine,
 /// so an unset setting behaves exactly as before.
+///
+/// Selecting the file engine while a `memory.db` is present exports it back to
+/// `.md` files first, so a project that switches sqlite → file gets its stored
+/// memories back. The export runs once, then sets the database aside.
 pub fn backend_for(backend: Option<&str>, memory_dir: &Path) -> Box<dyn MemoryBackend> {
     match backend {
         Some("sqlite") => Box::new(sqlite::SqliteBackend::new(memory_dir.to_path_buf())),
-        _ => Box::new(file::FileBackend::new(memory_dir.to_path_buf())),
+        _ => {
+            sqlite::export_to_files(memory_dir);
+            Box::new(file::FileBackend::new(memory_dir.to_path_buf()))
+        }
     }
 }

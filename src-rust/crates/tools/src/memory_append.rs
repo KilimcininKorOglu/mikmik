@@ -248,6 +248,45 @@ pub async fn append_entry(
     ToolResult::success(build_report(&path, entries.len(), dropped, &masked, cfg))
 }
 
+/// Merge item lines back into an append-style file: newest first, deduplicated
+/// against what is already there, capped. Used by the reverse migration when a
+/// project switches from the sqlite engine back to files, so the items are
+/// already clipped and masked and carry no context. Returns how many new
+/// entries were written.
+pub(crate) fn merge_entries(
+    memory_dir: &Path,
+    cfg: &AppendConfig,
+    items: &[String],
+) -> std::io::Result<usize> {
+    let path = memory_dir.join(cfg.filename);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut entries = parse_entries(body_after_frontmatter(&existing));
+
+    let mut added = 0;
+    for item in items {
+        let key = normalise(item);
+        if key.is_empty() || entries.iter().any(|entry| entry.key == key) {
+            continue;
+        }
+        entries.insert(
+            0,
+            Entry {
+                text: build_block(None, item, &None),
+                key,
+            },
+        );
+        added += 1;
+    }
+    if added == 0 {
+        return Ok(0);
+    }
+
+    entries.truncate(cfg.cap);
+    std::fs::create_dir_all(memory_dir)?;
+    std::fs::write(&path, render(cfg.frontmatter, &entries))?;
+    Ok(added)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

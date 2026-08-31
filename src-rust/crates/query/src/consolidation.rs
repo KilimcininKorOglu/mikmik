@@ -5,9 +5,15 @@
 use crate::auto_dream::{AutoDream, ConsolidationTask};
 use mikmik_tools::{Tool, ToolContext};
 
-/// Given to the consolidation sub-agent as its system prompt.
+/// Given to the consolidation sub-agent as its system prompt. It steers the
+/// dream toward the memory tools, which write through whichever engine the
+/// session selected, so one consolidation works on the file and sqlite engines
+/// alike.
 const CONSOLIDATION_SYSTEM_PROMPT: &str = "You are performing automatic memory consolidation. \
-     Complete the task and return a brief summary.";
+     Persist durable lessons with the `Learn` tool and durable facts with the `Retain` tool; \
+     both file into the active memory engine and deduplicate for you. Read existing memory with \
+     the `Memory` tool first, so you extend what is there rather than repeat it. Complete the \
+     task and return a brief summary.";
 
 /// Run one consolidation. `background` spawns and returns `None` at once;
 /// otherwise it waits and returns the sub-agent's summary. Either way the lock
@@ -24,6 +30,9 @@ pub async fn run_consolidation(
         "system_prompt": CONSOLIDATION_SYSTEM_PROMPT,
         "run_in_background": background,
         "isolation": null,
+        // Grant the dream the memory tools so it records through the active
+        // engine (files or sqlite) rather than only editing `.md` by hand.
+        "memory_tools": true,
         // `AgentTool` reads this through `resolve_subagent_model`, which falls
         // back to the session's own route when the value is absent.
         "model": ctx.config.memory_model,

@@ -182,9 +182,21 @@ const SPAWNING_TOOLS: &[&str] = &[
 ///
 /// The spawn filter comes first and an allowlist narrows what is left, so a
 /// model that asks for a spawning tool by name does not receive one.
-pub(crate) fn subagent_tools(allowed: Option<&Vec<String>>) -> Vec<Box<dyn Tool>> {
-    mikmik_tools::all_tools()
-        .into_iter()
+pub(crate) fn subagent_tools(
+    allowed: Option<&Vec<String>>,
+    include_memory: bool,
+) -> Vec<Box<dyn Tool>> {
+    let mut pool = mikmik_tools::all_tools();
+    if include_memory {
+        // The memory tools are gated out of `all_tools()` and added per session
+        // by the roster. The consolidation dream needs them to record durable
+        // memories through the active engine, so add them to the pool here; a
+        // subagent without this flag never sees them.
+        pool.push(Box::new(mikmik_tools::MemoryTool));
+        pool.push(Box::new(mikmik_tools::LearnTool));
+        pool.push(Box::new(mikmik_tools::RetainTool));
+    }
+    pool.into_iter()
         .filter(|t| !SPAWNING_TOOLS.contains(&t.name()))
         .filter(|t| match allowed {
             Some(names) => names.contains(&t.name().to_string()),
@@ -332,6 +344,12 @@ struct AgentInput {
     /// Default: false (wait for completion).
     #[serde(default)]
     run_in_background: bool,
+    /// Internal: grant the sub-agent the memory tools (`Memory`, `Learn`,
+    /// `Retain`) on top of its toolset. Set by the consolidation dream so it can
+    /// record durable memories through the active engine. Default false, so a
+    /// model-spawned agent does not get them unless the setting asks.
+    #[serde(default)]
+    memory_tools: bool,
 }
 
 /// A batch spawn: one shared `context` and a list of task inputs.
@@ -557,7 +575,7 @@ impl Tool for AgentTool {
         );
         let model_registry = Arc::new(build_model_registry());
 
-        let agent_tools = subagent_tools(params.tools.as_ref());
+        let agent_tools = subagent_tools(params.tools.as_ref(), params.memory_tools);
 
         // Resolve model: explicit override > managed config executor model > provider default.
         let model = resolve_subagent_model(&params, ctx);
@@ -729,7 +747,7 @@ impl Tool for AgentTool {
             // Re-create the tool list inside the closure so it is owned and
             // Send. It honours the caller's allowlist, which the background
             // branch used to ignore.
-            let agent_tools_bg = subagent_tools(params.tools.as_ref());
+            let agent_tools_bg = subagent_tools(params.tools.as_ref(), params.memory_tools);
 
             let client_bg = client.clone();
             let ctx_bg = subagent_context(ctx, sub_address);
@@ -1074,7 +1092,7 @@ pub fn init_team_swarm_runner() {
                 );
                 let model_registry = Arc::new(build_model_registry());
 
-                let agent_tools = subagent_tools(tools.as_ref());
+                let agent_tools = subagent_tools(tools.as_ref(), false);
 
                 let model = resolve_subagent_model(
                     &AgentInput {
@@ -1090,6 +1108,7 @@ pub fn init_team_swarm_runner() {
                         context: None,
                         isolation: None,
                         run_in_background: false,
+                        memory_tools: false,
                     },
                     &ctx,
                 );
@@ -1305,7 +1324,7 @@ pub(crate) mod tests {
     /// goes.
     #[test]
     fn a_sub_agent_holds_no_tool_that_spawns_agents() {
-        let tools = subagent_tools(None);
+        let tools = subagent_tools(None, false);
         let names = names_of(&tools);
 
         assert!(!names.contains(&mikmik_core::constants::TOOL_NAME_AGENT));
@@ -1316,7 +1335,7 @@ pub(crate) mod tests {
     /// anything, so the filter must not take them.
     #[test]
     fn a_sub_agent_keeps_the_tools_that_only_coordinate() {
-        let tools = subagent_tools(None);
+        let tools = subagent_tools(None, false);
         let names = names_of(&tools);
 
         assert!(names.contains(&"SendMessage"));
@@ -1332,7 +1351,7 @@ pub(crate) mod tests {
             mikmik_core::constants::TOOL_NAME_TEAM_CREATE.to_string(),
             mikmik_core::constants::TOOL_NAME_FILE_READ.to_string(),
         ];
-        let tools = subagent_tools(Some(&asked));
+        let tools = subagent_tools(Some(&asked), false);
         let names = names_of(&tools);
 
         assert_eq!(names, vec![mikmik_core::constants::TOOL_NAME_FILE_READ]);
@@ -1341,11 +1360,23 @@ pub(crate) mod tests {
     #[test]
     fn an_allowlist_still_narrows_the_rest() {
         let asked = vec![mikmik_core::constants::TOOL_NAME_GREP.to_string()];
-        let tools = subagent_tools(Some(&asked));
+        let tools = subagent_tools(Some(&asked), false);
 
         assert_eq!(
             names_of(&tools),
             vec![mikmik_core::constants::TOOL_NAME_GREP]
+        );
+    }
+
+    /// The consolidation dream asks for the memory tools by name; the flag is
+    /// what lets them through, since they are gated out of the base pool.
+    #[test]
+    fn memory_tools_reach_a_sub_agent_only_with_the_flag() {
+        let asked = vec![mikmik_core::constants::TOOL_NAME_LEARN.to_string()];
+        assert!(names_of(&subagent_tools(Some(&asked), false)).is_empty());
+        assert_eq!(
+            names_of(&subagent_tools(Some(&asked), true)),
+            vec![mikmik_core::constants::TOOL_NAME_LEARN]
         );
     }
 

@@ -289,7 +289,7 @@ fn spawn_worker_loop(
         },
     );
     let model_registry = Arc::new(build_model_registry());
-    let tools = subagent_tools(params.tools.as_ref());
+    let tools = subagent_tools(params.tools.as_ref(), false);
     let model = subagent_model_for(&ctx.config, params.model.as_deref());
     let config = worker_config(
         ctx,

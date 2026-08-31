@@ -652,16 +652,6 @@ pub fn find_relevant_memories_simple(
 }
 
 // ---------------------------------------------------------------------------
-// Team memory helpers
-// ---------------------------------------------------------------------------
-
-/// Return the team-memory sub-directory path.
-/// Mirrors `getTeamMemPath` in `teamMemPaths.ts`.
-pub fn team_memory_path(auto_memory_dir: &Path) -> PathBuf {
-    auto_memory_dir.join("team")
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

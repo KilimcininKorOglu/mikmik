@@ -27,7 +27,6 @@ verification_agent = ["mikmik-core/verification_agent"]
 builtin_explore_plan_agents = ["mikmik-core/builtin_explore_plan_agents"]
 compaction_reminders = ["mikmik-core/compaction_reminders"]
 agent_memory_snapshot = ["mikmik-core/agent_memory_snapshot"]
-teammem = ["mikmik-core/teammem"]
 
 # Tools & Infrastructure features (pass-through from cc-core)
 bash_classifier = ["mikmik-core/bash_classifier"]

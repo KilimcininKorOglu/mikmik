@@ -1,12 +1,11 @@
 # Releasing MikMik
 
-Three artefacts ship separately: the GitHub release (binaries), the npm package, and the VS Code extension. Only the first is automated today.
+Two artefacts ship separately: the GitHub release (binaries) and the VS Code extension. Only the first is automated today.
 
 ## Order
 
 1. Cut the GitHub release, which stamps the version itself. The installers read its assets.
-2. Publish to npm. The workflow refuses to run before the release exists.
-3. Publish the VS Code extension. Independent of the other two.
+2. Publish the VS Code extension. Independent of the release.
 
 ## Version stamping
 
@@ -16,7 +15,7 @@ Three artefacts ship separately: the GitHub release (binaries), the npm package,
 python scripts/bump-version.py vX.Y.Z
 ```
 
-Versioning is forward-only; the release workflow refuses a tag less than or equal to the highest existing tag. Never edit `src-rust/Cargo.lock` or the `version` field in `npm/package.json` by hand.
+Versioning is forward-only; the release workflow refuses a tag less than or equal to the highest existing tag. Never edit `src-rust/Cargo.lock` by hand. The human-readable `CHANGELOG.md` and the release body are owned by the project-scoped `version-update` skill, not by this flow.
 
 ## 1. GitHub release
 
@@ -27,59 +26,9 @@ Triggered by a marker in the head commit message, handled by `.github/workflows/
 
 `release.yml` builds five targets and publishes archives named `mikmik-<os>-<arch>`. `install.sh` and `install.ps1` read exactly these names, so a mismatch breaks the one-line installer rather than failing loudly.
 
-Nothing else is needed: the workflow runs under `GITHUB_TOKEN`, and it hands off to `npm-publish.yml` explicitly rather than relying on the `workflow_run` trigger.
+Nothing else is needed: the workflow runs under `GITHUB_TOKEN`.
 
-## 2. npm
-
-Package name: `mikmik`. Wrapper lives in `npm/`; `install.js` downloads the prebuilt binary for the platform on postinstall.
-
-### State as measured
-
-- `mikmik` is unclaimed on the registry (`registry.npmjs.org/mikmik` returns 404).
-- The `claurst` package on npm belongs to **`kuberwastaken`**, the upstream author. This fork has no rights over it. Do not plan to deprecate or redirect it.
-- The npm account `kilimcininkoroglu` exists and already maintains one package.
-
-### First publish (manual, once)
-
-`npm-publish.yml` authenticates through OIDC with no token (`NODE_AUTH_TOKEN` and `NPM_TOKEN` are both empty). That requires a trusted publisher, which cannot be attached to a package that does not exist yet. So the first version is published from a machine:
-
-```bash
-cd npm
-npm login                 # account: kilimcininkoroglu
-npm publish --provenance --access public
-```
-
-npm requires 2FA for creating and publishing a package. Either complete the OTP prompt interactively, or use a granular access token with "bypass 2FA" enabled.
-
-`--access public` is required because the name is unscoped and new. `--provenance` matches what CI publishes afterwards.
-
-### Then wire CI (once)
-
-After the package exists, register the workflow as a trusted publisher so every later release publishes itself:
-
-```bash
-npm trust github mikmik \
-  --file npm-publish.yml \
-  --repo KilimcininKorOglu/mikmik \
-  --allow-publish
-```
-
-The equivalent settings in the npm web UI, which `npm-publish.yml` prints at run time:
-
-| Field | Value |
-|---|---|
-| Organization or user | `KilimcininKorOglu` |
-| Repository | `mikmik` |
-| Workflow filename | `npm-publish.yml` |
-| Environment name | *(empty)* |
-
-The workflow verifies that `npm/package.json`'s `repository.url` equals `git+https://github.com/KilimcininKorOglu/mikmik.git` and fails the run if it does not, so the repository rename and the trusted-publisher record have to stay in step.
-
-### Later releases
-
-Automatic. `release.yml` dispatches `npm-publish.yml`, which resolves the version from `src-rust/Cargo.toml`, verifies the GitHub release exists, and publishes. It can also be run by hand from the Actions tab with a version input.
-
-## 3. VS Code extension
+## 2. VS Code extension
 
 Extension id: `kilimcininkoroglu.mikmik-vscode`. Source in `editors/vscode/`.
 
@@ -145,6 +94,5 @@ This needs a trusted publishing policy configured on the Marketplace for the pub
 
 ## What is not automated
 
-- The first npm publish, because trusted publishing needs an existing package.
 - Everything about the VS Code extension.
 - Open VSX, which is not set up at all.

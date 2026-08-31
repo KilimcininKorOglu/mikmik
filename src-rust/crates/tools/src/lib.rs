@@ -53,6 +53,7 @@ pub mod lsp_tool;
 pub mod mcp_auth_tool;
 pub mod mcp_resources;
 pub mod mcp_tool;
+pub(crate) mod memory_append;
 pub mod memory_guard;
 pub mod memory_tool;
 pub mod monitor_tool;
@@ -62,6 +63,7 @@ pub mod powershell;
 pub(crate) mod powershell_session;
 pub mod pty_bash;
 pub mod repl_tool;
+pub mod retain_tool;
 pub mod send_message;
 pub mod skill_tool;
 pub mod sleep;
@@ -115,6 +117,7 @@ pub use notebook_edit::NotebookEditTool;
 pub use powershell::PowerShellTool;
 pub use pty_bash::PtyBashTool;
 pub use repl_tool::ReplTool;
+pub use retain_tool::RetainTool;
 pub use send_message::{
     drain_inbox, peek_inbox, register_main, register_named, AgentAddress, AgentMessage, InboxGuard,
     SendMessageTool, MAIN_NAME,

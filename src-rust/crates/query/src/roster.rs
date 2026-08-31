@@ -74,6 +74,7 @@ pub fn build_tool_roster(
     if mikmik_core::tool_gates::offers_memory_tools(config) {
         tools.push(Box::new(mikmik_tools::MemoryTool));
         tools.push(Box::new(mikmik_tools::LearnTool));
+        tools.push(Box::new(mikmik_tools::RetainTool));
     }
 
     if let Some(manager) = &mcp_manager {

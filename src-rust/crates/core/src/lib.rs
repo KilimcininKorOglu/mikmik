@@ -6444,6 +6444,8 @@ pub mod constants {
     pub const TOOL_NAME_MEMORY: &str = "Memory";
     /// Writes one durable lesson into the memory directory.
     pub const TOOL_NAME_LEARN: &str = "Learn";
+    /// Writes one durable fact into the memory directory.
+    pub const TOOL_NAME_RETAIN: &str = "Retain";
     pub const TOOL_NAME_TASK_CREATE: &str = "TaskCreate";
     pub const TOOL_NAME_TASK_GET: &str = "TaskGet";
     pub const TOOL_NAME_TASK_UPDATE: &str = "TaskUpdate";

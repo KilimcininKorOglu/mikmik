@@ -7,10 +7,12 @@
 //! to the index. In practice it either skips the check and leaves five files
 //! saying the same thing, or it skips the whole thing.
 //!
-//! This tool takes the sentence and does the bookkeeping. One file, newest
-//! first, no duplicates, a bounded number of entries, and credentials masked on
-//! the way in.
+//! This tool takes the sentence and does the bookkeeping through
+//! [`crate::memory_append`], which `Retain` shares. One file, newest first, no
+//! duplicates, a bounded number of entries, and credentials masked on the way
+//! in.
 
+use crate::memory_append::AppendConfig;
 use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -38,6 +40,16 @@ description: Durable lessons this project taught, newest first\n\
 type: project\n\
 ---\n";
 
+/// The append policy for `learned.md`, shared with [`crate::memory_append`].
+const LEARN_CONFIG: AppendConfig = AppendConfig {
+    filename: LEARNED_FILENAME,
+    frontmatter: FRONTMATTER,
+    max_item_chars: MAX_LESSON_CHARS,
+    max_context_chars: MAX_CONTEXT_CHARS,
+    cap: MAX_ENTRIES,
+    noun: "lesson",
+};
+
 pub struct LearnTool;
 
 #[derive(Debug, Deserialize)]
@@ -47,95 +59,6 @@ struct LearnInput {
     topic: Option<String>,
     #[serde(default)]
     context: Option<String>,
-}
-
-/// One recorded lesson, as it appears in the file.
-struct Entry {
-    /// The whole block, heading included, without a trailing newline.
-    text: String,
-    /// The lesson line, normalised for comparison.
-    key: String,
-}
-
-/// Lower-case, whitespace collapsed. Two lessons that differ only in spacing or
-/// capitalisation are the same lesson.
-fn normalise(line: &str) -> String {
-    line.to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Keep at most `limit` characters, on a character boundary.
-fn clip(text: &str, limit: usize) -> String {
-    let trimmed = text.trim();
-    if trimmed.chars().count() <= limit {
-        return trimmed.to_string();
-    }
-    let kept: String = trimmed.chars().take(limit).collect();
-    format!("{}…", kept.trim_end())
-}
-
-/// Split a `learned.md` body into entries, newest first.
-///
-/// An entry is a `## ` heading and everything under it. Anything before the
-/// first heading is dropped: the frontmatter is handled separately, and a
-/// stray note between entries has no lesson line to compare.
-fn parse_entries(body: &str) -> Vec<Entry> {
-    let mut entries: Vec<Entry> = Vec::new();
-    let mut current: Option<Vec<&str>> = None;
-
-    for line in body.lines() {
-        if line.starts_with("## ") {
-            if let Some(lines) = current.take() {
-                entries.push(build_entry(&lines));
-            }
-            current = Some(vec![line]);
-        } else if let Some(lines) = current.as_mut() {
-            lines.push(line);
-        }
-    }
-    if let Some(lines) = current {
-        entries.push(build_entry(&lines));
-    }
-
-    entries
-}
-
-/// The lesson is the first non-empty line under the heading.
-fn build_entry(lines: &[&str]) -> Entry {
-    let key = lines
-        .iter()
-        .skip(1)
-        .find(|line| !line.trim().is_empty())
-        .map(|line| normalise(line))
-        .unwrap_or_default();
-    Entry {
-        text: lines.join("\n").trim_end().to_string(),
-        key,
-    }
-}
-
-/// Render the file from its entries.
-fn render(entries: &[Entry]) -> String {
-    let mut out = String::from(FRONTMATTER);
-    for entry in entries {
-        out.push('\n');
-        out.push_str(&entry.text);
-        out.push('\n');
-    }
-    out
-}
-
-/// Everything after the frontmatter block, or the whole text when there is none.
-fn body_after_frontmatter(text: &str) -> &str {
-    let Some(rest) = text.strip_prefix("---\n") else {
-        return text;
-    };
-    match rest.find("\n---\n") {
-        Some(end) => &rest[end + "\n---\n".len()..],
-        None => text,
-    }
 }
 
 #[async_trait]
@@ -148,7 +71,8 @@ impl Tool for LearnTool {
         "Record one durable lesson about this project, so a later session \
          starts knowing it. Use this for something that will still be true \
          next week: a convention, a constraint, a trap you fell into. Do not \
-         use it for what you are doing right now. Lessons are kept newest \
+         use it for what you are doing right now, and do not use it for a plain \
+         fact about the code (use Retain for that). Lessons are kept newest \
          first, deduplicated, and loaded back through the Memory tool. For a \
          whole document rather than a sentence, write a memory file with Write \
          instead."
@@ -199,90 +123,15 @@ impl Tool for LearnTool {
 
         let project_root = mikmik_core::session_storage::transcript_root_for(&ctx.working_dir);
         let memory_dir = mikmik_core::memdir::auto_memory_path(&project_root);
-        let path = memory_dir.join(LEARNED_FILENAME);
 
-        // Masked rather than refused. The tool is the model recording what it
-        // understood, and refusing would lose the whole lesson over a value
-        // that is not the point of it. `Write` refuses instead, because there
-        // the content is the model's own and it can send it again without it.
-        let lesson = mikmik_core::redact::redact_secrets(&clip(&params.lesson, MAX_LESSON_CHARS));
-        let context = params
-            .context
-            .as_deref()
-            .map(|text| mikmik_core::redact::redact_secrets(&clip(text, MAX_CONTEXT_CHARS)));
-
-        let mut masked: Vec<&'static str> = lesson.classes.clone();
-        if let Some(context) = &context {
-            for class in &context.classes {
-                if !masked.contains(class) {
-                    masked.push(class);
-                }
-            }
-        }
-        if !masked.is_empty() {
-            tracing::warn!(
-                classes = %masked.join(", "),
-                path = %path.display(),
-                "Masked a credential on its way into a learned lesson"
-            );
-        }
-
-        let existing = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-        let mut entries = parse_entries(body_after_frontmatter(&existing));
-
-        let key = normalise(&lesson.text);
-        if entries.iter().any(|entry| entry.key == key) {
-            return ToolResult::success(format!(
-                "Already recorded, so nothing was written. {} holds this lesson.",
-                path.display()
-            ));
-        }
-
-        let heading = match params.topic.as_deref().map(str::trim) {
-            Some(topic) if !topic.is_empty() => {
-                format!("## {} — {}", chrono::Local::now().format("%Y-%m-%d"), topic)
-            }
-            _ => format!("## {}", chrono::Local::now().format("%Y-%m-%d")),
-        };
-
-        let mut text = format!("{heading}\n{}", lesson.text);
-        if let Some(context) = &context {
-            if !context.text.is_empty() {
-                text.push_str(&format!("\n\n_context: {}_", context.text));
-            }
-        }
-
-        entries.insert(0, Entry { text, key });
-        let dropped = entries.len().saturating_sub(MAX_ENTRIES);
-        entries.truncate(MAX_ENTRIES);
-
-        if let Err(error) = tokio::fs::create_dir_all(&memory_dir).await {
-            return ToolResult::error(format!(
-                "Failed to create {}: {error}",
-                memory_dir.display()
-            ));
-        }
-        if let Err(error) = tokio::fs::write(&path, render(&entries)).await {
-            return ToolResult::error(format!("Failed to write {}: {error}", path.display()));
-        }
-
-        let mut report = format!(
-            "Recorded in {} ({} lessons).",
-            path.display(),
-            entries.len()
-        );
-        if dropped > 0 {
-            report.push_str(&format!(
-                " The {dropped} oldest dropped at the {MAX_ENTRIES}-lesson cap."
-            ));
-        }
-        if !masked.is_empty() {
-            report.push_str(&format!(
-                " A credential was masked before writing ({}).",
-                masked.join(", ")
-            ));
-        }
-        ToolResult::success(report)
+        crate::memory_append::append_entry(
+            &memory_dir,
+            &LEARN_CONFIG,
+            &params.lesson,
+            params.topic.as_deref(),
+            params.context.as_deref(),
+        )
+        .await
     }
 }
 
@@ -482,23 +331,5 @@ mod tests {
         let _lock = ENV_LOCK.lock().await;
         let f = fixture();
         assert!(learn(&f.ctx, "   ").await.is_error);
-    }
-
-    /// The file has to survive a round trip, or a second call would lose what
-    /// the first one wrote.
-    #[tokio::test]
-    async fn parsing_what_was_rendered_gives_the_same_entries() {
-        let _lock = ENV_LOCK.lock().await;
-        let f = fixture();
-
-        learn(&f.ctx, "first lesson").await;
-        learn(&f.ctx, "second lesson").await;
-        learn(&f.ctx, "third lesson").await;
-
-        let written = std::fs::read_to_string(&f.learned).expect("read back");
-        let entries = parse_entries(body_after_frontmatter(&written));
-        assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0].key, "third lesson");
-        assert_eq!(entries[2].key, "first lesson");
     }
 }

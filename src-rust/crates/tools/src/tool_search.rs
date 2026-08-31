@@ -56,6 +56,7 @@ fn keywords_for(name: &str) -> &'static [&'static str] {
         "SendMessage" => &["message", "broadcast", "inbox", "communicate"],
         "Memory" => &["memory", "remember", "recall", "notes", "past"],
         "Learn" => &["memory", "remember", "lesson", "record", "note"],
+        "Retain" => &["memory", "remember", "fact", "record", "note", "retain"],
         _ => &[],
     }
 }
@@ -74,6 +75,10 @@ static SUPPLEMENTAL_TOOLS: &[(&str, &str)] = &[
     (
         "Learn",
         "Record one durable lesson about this project for a later session.",
+    ),
+    (
+        "Retain",
+        "Record a durable fact about this project for a later session.",
     ),
 ];
 
@@ -122,7 +127,7 @@ fn build_catalog(ctx: &ToolContext) -> Vec<CatalogEntry> {
     let memory_tools = mikmik_core::tool_gates::offers_memory_tools(&ctx.config);
     for (name, desc) in SUPPLEMENTAL_TOOLS {
         let conditional_on = match *name {
-            "Memory" | "Learn" => memory_tools,
+            "Memory" | "Learn" | "Retain" => memory_tools,
             _ => true,
         };
         if conditional_on && offered(name) && !entries.iter().any(|e| e.name == *name) {

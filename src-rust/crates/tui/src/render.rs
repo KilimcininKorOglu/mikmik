@@ -6781,6 +6781,9 @@ mod message_timestamp_tests {
 
     fn app_with_a_turn() -> App {
         let mut app = App::new(Config::default(), CostTracker::new());
+        // `SettingsScreen::new` loads the real on-disk settings, so pin the flag
+        // this test controls rather than inheriting the developer's preference.
+        app.settings_screen.show_message_timestamps = false;
         app.replace_messages(vec![Message::user("ping"), Message::assistant("pong")]);
         app
     }

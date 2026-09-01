@@ -3271,6 +3271,29 @@ fn confidence_color(score: u8) -> Color {
     }
 }
 
+/// Glyph and content spans for one todo item, coloured by status: completed is
+/// green and struck through, in-progress is yellow and bold, pending is white.
+/// Shared by the inline transcript block and the pinned timeline-panel section
+/// so both read the same. ASCII checkboxes (`[x]`/`[>]`/`[ ]`) keep alignment
+/// on every terminal.
+fn todo_item_spans(status: &str, content: &str, indent: &str) -> Vec<Span<'static>> {
+    let (glyph, color, crossed) = match status {
+        "completed" => ("[x]", Color::Rgb(120, 200, 120), true),
+        "in_progress" => ("[>]", Color::Rgb(220, 200, 90), false),
+        _ => ("[ ]", Color::Rgb(230, 230, 230), false),
+    };
+    let mut text_style = Style::default().fg(color);
+    if crossed {
+        text_style = text_style.add_modifier(Modifier::CROSSED_OUT);
+    } else if status == "in_progress" {
+        text_style = text_style.add_modifier(Modifier::BOLD);
+    }
+    vec![
+        Span::styled(format!("{indent}{glyph} "), Style::default().fg(color)),
+        Span::styled(content.to_string(), text_style),
+    ]
+}
+
 /// Render a TodoWrite call as a checklist. Returns `false` (so the caller can
 /// fall back to the generic block) when the input carries no `todos` array.
 fn render_todo_block(
@@ -3334,31 +3357,7 @@ fn render_todo_block(
         if content.is_empty() {
             continue;
         }
-        // ASCII checkboxes (markdown-style) so alignment holds on every
-        // terminal: [x] done, [>] in-progress, [ ] pending.
-        let (glyph, glyph_color, text_style) = match status_of(t) {
-            "completed" => (
-                "[x]",
-                Color::Rgb(120, 200, 120),
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::DIM),
-            ),
-            "in_progress" => (
-                "[>]",
-                accent,
-                Style::default().fg(accent).add_modifier(Modifier::BOLD),
-            ),
-            _ => (
-                "[ ]",
-                Color::Rgb(150, 150, 150),
-                Style::default().fg(Color::Rgb(170, 170, 170)),
-            ),
-        };
-        let mut item = vec![
-            Span::styled(format!("     {} ", glyph), Style::default().fg(glyph_color)),
-            Span::styled(content.to_string(), text_style),
-        ];
+        let mut item = todo_item_spans(status_of(t), content, "     ");
         if let Some(score) = todo_confidence(t) {
             item.push(Span::styled(
                 format!(" [{}%]", score),
@@ -5434,6 +5433,24 @@ mod tool_block_tests {
             None,
         );
         assert!(render(&b).join("\n").contains("[60%]"));
+    }
+
+    #[test]
+    fn todo_item_colours_match_status() {
+        let done = todo_item_spans("completed", "x", "  ");
+        assert_eq!(done[1].style.fg, Some(Color::Rgb(120, 200, 120)));
+        assert!(done[1].style.add_modifier.contains(Modifier::CROSSED_OUT));
+
+        let doing = todo_item_spans("in_progress", "x", "  ");
+        assert_eq!(doing[1].style.fg, Some(Color::Rgb(220, 200, 90)));
+        assert!(doing[1].style.add_modifier.contains(Modifier::BOLD));
+
+        let pending = todo_item_spans("pending", "x", "  ");
+        assert_eq!(pending[1].style.fg, Some(Color::Rgb(230, 230, 230)));
+        assert!(!pending[1]
+            .style
+            .add_modifier
+            .contains(Modifier::CROSSED_OUT));
     }
 
     #[test]

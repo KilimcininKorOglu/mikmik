@@ -685,9 +685,12 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     // transcript rewraps at the narrower width (the render caches key on that
     // width, so the change invalidates them on its own).
     let (transcript_area, timeline_area) = split_area_for_timeline(chunks[0], app.timeline_visible);
+    // When the panel is side-docked (wide terminal) it takes over the ambient
+    // status: the footer sheds those items and the panel shows them instead.
+    let relocate = timeline_area.is_some() && chunks[0].width >= TIMELINE_SIDE_THRESHOLD;
     render_messages(frame, app, transcript_area);
     if let Some(timeline_area) = timeline_area {
-        render_timeline_panel(frame, app, timeline_area);
+        render_timeline_panel(frame, app, timeline_area, relocate);
     }
     // chunks[1] is the blank separator — intentionally left empty
     if status_height > 0 {
@@ -716,7 +719,7 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     if status_line_height > 0 {
         frame.render_widget(Paragraph::new(status_line_rows), chunks[6]);
     }
-    render_footer(frame, app, chunks[7]);
+    render_footer(frame, app, chunks[7], relocate);
 
     // Overlays (rendered on top in Z-order)
 
@@ -1731,6 +1734,215 @@ fn usage_limit_line(limit: &mikmik_api::usage::UsageLimit, width: u16) -> Line<'
     ])
 }
 
+/// The parsed input of the most recent TodoWrite call, or None when no todo
+/// list has been written yet. The panel and the footer both read from this one
+/// in-memory copy, so the pinned checklist and the footer summary can never
+/// disagree.
+fn latest_todos(app: &App) -> Option<serde_json::Value> {
+    let block = app.tool_use_blocks.iter().rev().find(|block| {
+        matches!(
+            block.name.to_ascii_lowercase().as_str(),
+            "todowrite" | "todo_write" | "todo"
+        )
+    })?;
+    serde_json::from_str(&block.input_json).ok()
+}
+
+/// The pinned Todos section at the top of the timeline panel. It draws the most
+/// recent TodoWrite state, coloured by status, so the checklist stays visible
+/// after the inline transcript block has scrolled away. Empty when no todo list
+/// has been written.
+fn todo_panel_lines(app: &App) -> Vec<Line<'static>> {
+    const PANEL_TODO_ITEMS: usize = 8;
+    let Some(input) = latest_todos(app) else {
+        return Vec::new();
+    };
+    let Some(todos) = input.get("todos").and_then(|value| value.as_array()) else {
+        return Vec::new();
+    };
+    if todos.is_empty() {
+        return Vec::new();
+    }
+    let total = todos.len();
+    let done = todos
+        .iter()
+        .filter(|todo| todo.get("status").and_then(|s| s.as_str()) == Some("completed"))
+        .count();
+    let mut lines = Vec::with_capacity(total.min(PANEL_TODO_ITEMS) + 3);
+    lines.push(Line::from(vec![
+        Span::styled(
+            "Todos",
+            Style::default()
+                .fg(MIKMIK_ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("   {done}/{total} done"),
+            Style::default().fg(Color::Rgb(150, 150, 160)),
+        ),
+    ]));
+    for todo in todos.iter().take(PANEL_TODO_ITEMS) {
+        let status = todo
+            .get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("pending");
+        let content = todo
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .trim();
+        if content.is_empty() {
+            continue;
+        }
+        lines.push(Line::from(todo_item_spans(status, content, "  ")));
+    }
+    if total > PANEL_TODO_ITEMS {
+        lines.push(Line::from(Span::styled(
+            format!("  … {} more", total - PANEL_TODO_ITEMS),
+            Style::default().fg(Color::Rgb(150, 150, 160)),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines
+}
+
+/// One `Status` row: a left-aligned label and its value.
+fn status_row(label: &str, value: String, value_color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{label:<9}"),
+            Style::default().fg(Color::Rgb(180, 180, 190)),
+        ),
+        Span::styled(value, Style::default().fg(value_color)),
+    ])
+}
+
+/// The context-window row: used/total in thousands, coloured by pressure so the
+/// `/compact` nudge is not lost when the footer drops this item.
+fn context_status_row(app: &App) -> Option<Line<'static>> {
+    if app.context_window_size == 0 {
+        return None;
+    }
+    let used_k = app.context_used_tokens / 1000;
+    let total_k = app.context_window_size / 1000;
+    let used_pct = app.context_used_tokens.saturating_mul(100) / app.context_window_size.max(1);
+    let (value, color) = if used_pct >= 95 {
+        (
+            format!("{used_k}k/{total_k}k · /compact"),
+            Color::Rgb(220, 90, 90),
+        )
+    } else if used_pct >= 70 {
+        (format!("{used_k}k/{total_k}k"), Color::Rgb(220, 200, 90))
+    } else {
+        (format!("{used_k}k/{total_k}k"), Color::Rgb(150, 150, 160))
+    };
+    Some(status_row("Context", value, color))
+}
+
+/// The cost row: 4 decimals under $0.50, else 2, matching the footer.
+fn cost_status_row(app: &App) -> Option<Line<'static>> {
+    if app.cost_usd < 0.0 {
+        return None;
+    }
+    let cost = if app.cost_usd < 0.5 {
+        format!("${:.4}", app.cost_usd)
+    } else {
+        format!("${:.2}", app.cost_usd)
+    };
+    Some(status_row("Cost", cost, Color::Rgb(150, 150, 160)))
+}
+
+/// The token-budget row, coloured by pressure like the footer.
+#[cfg(feature = "token_budget")]
+fn token_status_row(app: &App) -> Option<Line<'static>> {
+    let max_tokens = app.token_budget?;
+    let used = app.token_count as u64;
+    let max = max_tokens as u64;
+    let pct = if max > 0 {
+        (used as f64 / max as f64 * 100.0) as u32
+    } else {
+        0
+    };
+    let color = if pct >= 90 {
+        Color::Rgb(220, 90, 90)
+    } else if pct >= 75 {
+        Color::Rgb(220, 200, 90)
+    } else {
+        Color::Rgb(150, 150, 160)
+    };
+    Some(status_row(
+        "Tokens",
+        format!("{used}/{max} ({pct}%)"),
+        color,
+    ))
+}
+
+/// Stub when the token-budget feature is off, so the panel carries no row.
+#[cfg(not(feature = "token_budget"))]
+fn token_status_row(_app: &App) -> Option<Line<'static>> {
+    None
+}
+
+/// Append a `5h 63%` style rate-limit span, red at/over 90% and yellow below.
+/// Skips a zero or absent percentage so a fresh session adds nothing.
+fn push_rate_span(spans: &mut Vec<Span<'static>>, label: &str, pct: Option<f32>) {
+    let Some(pct) = pct.filter(|value| *value > 0.0) else {
+        return;
+    };
+    let color = if pct >= 90.0 {
+        Color::Rgb(220, 90, 90)
+    } else {
+        Color::Rgb(220, 200, 90)
+    };
+    if !spans.is_empty() {
+        spans.push(Span::raw("   "));
+    }
+    spans.push(Span::styled(
+        format!("{label} {pct:.0}%"),
+        Style::default().fg(color),
+    ));
+}
+
+/// The rate-limit row, with the 5h and 7d percentages sharing one line.
+fn rate_limit_status_row(app: &App) -> Option<Line<'static>> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    push_rate_span(&mut spans, "5h", app.rate_limit_5h_pct);
+    push_rate_span(&mut spans, "7d", app.rate_limit_7day_pct);
+    if spans.is_empty() {
+        return None;
+    }
+    let mut line = vec![Span::styled(
+        format!("{:<9}", "Limits"),
+        Style::default().fg(Color::Rgb(180, 180, 190)),
+    )];
+    line.extend(spans);
+    Some(Line::from(line))
+}
+
+/// The `Status` section at the top of the timeline panel: the ambient metrics
+/// the footer sheds when the panel is side-docked. Empty when none apply, so a
+/// bare session adds no section.
+fn status_panel_lines(app: &App) -> Vec<Line<'static>> {
+    let mut rows: Vec<Line<'static>> = Vec::new();
+    rows.extend(context_status_row(app));
+    rows.extend(cost_status_row(app));
+    rows.extend(token_status_row(app));
+    rows.extend(rate_limit_status_row(app));
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = Vec::with_capacity(rows.len() + 2);
+    lines.push(Line::from(Span::styled(
+        "Status",
+        Style::default()
+            .fg(MIKMIK_ACCENT)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.extend(rows);
+    lines.push(Line::from(""));
+    lines
+}
+
 /// The usage section shown at the top of the timeline panel when
 /// `show_usage_limits` is on and a report has landed. Empty otherwise, so the
 /// panel is unchanged when the feature is off.
@@ -1758,7 +1970,7 @@ fn usage_panel_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     lines
 }
 
-fn render_timeline_panel(frame: &mut Frame, app: &App, area: Rect) {
+fn render_timeline_panel(frame: &mut Frame, app: &App, area: Rect, relocate: bool) {
     let focused = app.timeline_focused;
     let border_color = if focused {
         MIKMIK_ACCENT
@@ -1787,12 +1999,21 @@ fn render_timeline_panel(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    // The pinned Todos and Status sections ride above usage; they only appear
+    // when the panel is side-docked and takes over the footer's ambient status.
+    let (todo_lines, status_lines) = if relocate {
+        (todo_panel_lines(app), status_panel_lines(app))
+    } else {
+        (Vec::new(), Vec::new())
+    };
     // The usage section rides at the top of the panel; it spends from the same
     // row budget as the timeline below it.
     let usage_lines = usage_panel_lines(app, inner.width);
 
     if app.timeline.is_empty() {
-        let mut lines = usage_lines;
+        let mut lines = todo_lines;
+        lines.extend(status_lines);
+        lines.extend(usage_lines);
         lines.push(Line::from(Span::styled(
             "No steps recorded yet.",
             Style::default().fg(Color::DarkGray),
@@ -1814,13 +2035,23 @@ fn render_timeline_panel(frame: &mut Frame, app: &App, area: Rect) {
     // be pushed off the panel.
     let summary = timeline_summary_line(app, inner.width);
     let capacity = (inner.height as usize)
+        .saturating_sub(todo_lines.len())
+        .saturating_sub(status_lines.len())
         .saturating_sub(usage_lines.len())
         .saturating_sub(detail_lines.len())
         .saturating_sub(usize::from(summary.is_some()))
         .max(1);
 
     let window = timeline_window(app.timeline.len(), app.timeline.selected_idx, capacity);
-    let mut lines = Vec::with_capacity(usage_lines.len() + window.len() + detail_lines.len());
+    let mut lines = Vec::with_capacity(
+        todo_lines.len()
+            + status_lines.len()
+            + usage_lines.len()
+            + window.len()
+            + detail_lines.len(),
+    );
+    lines.extend(todo_lines);
+    lines.extend(status_lines);
     lines.extend(usage_lines);
     for idx in window {
         let Some(row) = app.timeline.rows.get(idx) else {
@@ -3781,13 +4012,7 @@ fn shimmer_spans(text: &str, frame_count: u64) -> Vec<Span<'static>> {
 /// file read per frame, and the in-memory copy is the same one the transcript
 /// checklist draws from, so the two can never disagree.
 fn footer_todo_progress(app: &App) -> Option<(usize, usize)> {
-    let block = app.tool_use_blocks.iter().rev().find(|block| {
-        matches!(
-            block.name.to_ascii_lowercase().as_str(),
-            "todowrite" | "todo_write" | "todo"
-        )
-    })?;
-    let input: serde_json::Value = serde_json::from_str(&block.input_json).ok()?;
+    let input = latest_todos(app)?;
     let todos = input.get("todos")?.as_array()?;
     if todos.is_empty() {
         return None;
@@ -3802,7 +4027,7 @@ fn footer_todo_progress(app: &App) -> Option<(usize, usize)> {
 /// Single footer line matching the TS contract more closely:
 /// - `? for shortcuts` is suppressed once the prompt becomes non-empty
 /// - the right side shows comprehensive status info and notifications
-fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
+fn render_footer(frame: &mut Frame, app: &App, area: Rect, relocate: bool) {
     if area.height == 0 {
         return;
     }
@@ -4005,7 +4230,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         // 1. Context window usage — show "N% until auto-compact" mirroring TS TokenWarning.
         //    When an update is available and context is below 85%, show the update notification
         //    instead to keep the status bar uncluttered.
-        if app.context_window_size > 0 {
+        if app.context_window_size > 0 && !relocate {
             let used_pct =
                 (app.context_used_tokens as f64 / app.context_window_size as f64 * 100.0) as u64;
             let left_pct = 100u64.saturating_sub(used_pct);
@@ -4054,7 +4279,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
 
         // 3. Cost — mirrors TS formatCost: 4 decimal places for costs < $0.50, else 2.
         // Display cost if it's >= 0.0, so free models show $0.00
-        if app.cost_usd >= 0.0 {
+        if app.cost_usd >= 0.0 && !relocate {
             if !parts.is_empty() {
                 parts.push(Span::raw("  "));
             }
@@ -4071,7 +4296,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
 
         // 3b. Token budget (feature-gated)
         #[cfg(feature = "token_budget")]
-        if let Some(max_tokens) = app.token_budget {
+        if let Some(max_tokens) = app.token_budget.filter(|_| !relocate) {
             if !parts.is_empty() {
                 parts.push(Span::raw("  "));
             }
@@ -4096,7 +4321,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         }
 
         // 3c. Todo progress — mirrors the checklist block in the transcript.
-        if let Some((done, total)) = footer_todo_progress(app) {
+        if let Some((done, total)) = footer_todo_progress(app).filter(|_| !relocate) {
             if !parts.is_empty() {
                 parts.push(Span::raw("  "));
             }
@@ -4112,7 +4337,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         }
 
         // 4. Rate limits
-        if let Some(pct) = app.rate_limit_5h_pct {
+        if let Some(pct) = app.rate_limit_5h_pct.filter(|_| !relocate) {
             if pct > 0.0 {
                 if !parts.is_empty() {
                     parts.push(Span::raw("  "));
@@ -4128,7 +4353,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 ));
             }
         }
-        if let Some(pct) = app.rate_limit_7day_pct {
+        if let Some(pct) = app.rate_limit_7day_pct.filter(|_| !relocate) {
             if pct > 0.0 {
                 if !parts.is_empty() {
                     parts.push(Span::raw("  "));
@@ -7705,6 +7930,68 @@ mod footer_todo_progress_tests {
         let app = app_with_todos(r#"{"todos":[{"id":"1","content":"a","status":"pending"}]}"#);
         let footer = footer_row(&app, 40, 24);
         assert_eq!(footer.chars().count(), 40, "{footer:?}");
+    }
+
+    fn full_screen(app: &App, width: u16, height: u16) -> String {
+        let mut terminal = match Terminal::new(TestBackend::new(width, height)) {
+            Ok(terminal) => terminal,
+            Err(err) => panic!("test terminal: {err}"),
+        };
+        if let Err(err) = terminal.draw(|frame| render_app(frame, app)) {
+            panic!("draw: {err}");
+        }
+        let buffer = terminal.backend().buffer();
+        let mut out = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                out.push_str(buffer[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    fn a_side_docked_panel_pins_todos_and_takes_over_the_footer() {
+        let mut app = app_with_todos(
+            r#"{"todos":[
+                {"id":"1","content":"read app","status":"completed"},
+                {"id":"2","content":"edit footer","status":"in_progress"},
+                {"id":"3","content":"run tests","status":"pending"}
+            ]}"#,
+        );
+        app.timeline_visible = true;
+        app.context_window_size = 200_000;
+        app.context_used_tokens = 50_000;
+        app.cost_usd = 0.42;
+
+        // Wide: the panel is side-docked, so it pins the Todos and Status
+        // sections and the footer sheds the ambient counter.
+        let wide = full_screen(&app, 130, 30);
+        assert!(
+            wide.contains("Todos"),
+            "panel has no Todos section:\n{wide}"
+        );
+        assert!(
+            wide.contains("Status"),
+            "panel has no Status section:\n{wide}"
+        );
+        assert!(
+            wide.contains("Context"),
+            "panel has no Context row:\n{wide}"
+        );
+        let footer_line = wide.lines().last().unwrap_or_default();
+        assert!(
+            !footer_line.contains('\u{2713}'),
+            "footer kept the todo counter:\n{footer_line}"
+        );
+
+        // Narrow: no side-dock, so the footer keeps the counter.
+        let narrow = footer_row(&app, 100, 30);
+        assert!(
+            narrow.contains('\u{2713}'),
+            "narrow footer lost the counter:\n{narrow}"
+        );
     }
 }
 

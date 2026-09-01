@@ -6,7 +6,7 @@
 
 <p>
     <a href="https://github.com/KilimcininKorOglu/mikmik"><img src="https://img.shields.io/badge/Built_with-Rust-CE4D2B?style=for-the-badge&logo=rust&logoColor=white" alt="Built with Rust"></a>
-    <a href="https://github.com/KilimcininKorOglu/mikmik"><img src="https://img.shields.io/badge/Version-1.0.0-2E8B57?style=for-the-badge" alt="Version 1.0.0"></a>
+    <a href="https://github.com/KilimcininKorOglu/mikmik"><img src="https://img.shields.io/badge/Version-1.0.1-2E8B57?style=for-the-badge" alt="Version 1.0.1"></a>
     <a href="https://github.com/KilimcininKorOglu/mikmik/blob/main/LICENSE.md"><img src="https://img.shields.io/badge/License-GPL--3.0-blue?style=for-the-badge" alt="GPL-3.0 License"></a>
 </p>
 
@@ -22,7 +22,7 @@ MikMik is an open-source, multi-provider terminal coding agent written from the 
 It is fast and memory-efficient, it runs however you want it to, and it collects no tracking or telemetry.
 
 > [!IMPORTANT]
-> MikMik is now officially in Beta (v1.0.0). The core agent, multi-provider routing, and TUI are stable enough for daily driving. Expect rough edges around the experimental features flagged below. Bug reports and pull requests are welcome.
+> MikMik is now officially in Beta (v1.0.1). The core agent, multi-provider routing, and TUI are stable enough for daily driving. Expect rough edges around the experimental features flagged below. Bug reports and pull requests are welcome.
 
 ---
 

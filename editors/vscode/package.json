@@ -2,7 +2,7 @@
   "name": "mikmik-vscode",
   "displayName": "MikMik",
   "description": "Chat with MikMik, an AI coding agent, without leaving VS Code.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "kilimcininkoroglu",
   "license": "GPL-3.0-only",
   "repository": {

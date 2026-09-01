@@ -1,7 +1,7 @@
 {
   "id": "mikmik",
   "name": "MikMik",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Open-source, multi-provider terminal coding agent built in Rust. Multi-provider routing (Anthropic, OpenAI, Google, Groq, Ollama, OpenAI-compatible, …), full MCP support, plugin system, Rustle companion, chat forking, memory consolidation. No telemetry.",
   "repository": "https://github.com/KilimcininKorOglu/mikmik",
   "website": "https://kilimcininkoroglu.github.io/mikmik",
@@ -12,27 +12,27 @@
   "distribution": {
     "binary": {
       "darwin-aarch64": {
-        "archive": "https://github.com/KilimcininKorOglu/mikmik/releases/download/v1.0.0/mikmik-macos-aarch64.tar.gz",
+        "archive": "https://github.com/KilimcininKorOglu/mikmik/releases/download/v1.0.1/mikmik-macos-aarch64.tar.gz",
         "cmd": "./mikmik",
         "args": ["acp"]
       },
       "darwin-x86_64": {
-        "archive": "https://github.com/KilimcininKorOglu/mikmik/releases/download/v1.0.0/mikmik-macos-x86_64.tar.gz",
+        "archive": "https://github.com/KilimcininKorOglu/mikmik/releases/download/v1.0.1/mikmik-macos-x86_64.tar.gz",
         "cmd": "./mikmik",
         "args": ["acp"]
       },
       "linux-aarch64": {
-        "archive": "https://github.com/KilimcininKorOglu/mikmik/releases/download/v1.0.0/mikmik-linux-aarch64.tar.gz",
+        "archive": "https://github.com/KilimcininKorOglu/mikmik/releases/download/v1.0.1/mikmik-linux-aarch64.tar.gz",
         "cmd": "./mikmik",
         "args": ["acp"]
       },
       "linux-x86_64": {
-        "archive": "https://github.com/KilimcininKorOglu/mikmik/releases/download/v1.0.0/mikmik-linux-x86_64.tar.gz",
+        "archive": "https://github.com/KilimcininKorOglu/mikmik/releases/download/v1.0.1/mikmik-linux-x86_64.tar.gz",
         "cmd": "./mikmik",
         "args": ["acp"]
       },
       "windows-x86_64": {
-        "archive": "https://github.com/KilimcininKorOglu/mikmik/releases/download/v1.0.0/mikmik-windows-x86_64.zip",
+        "archive": "https://github.com/KilimcininKorOglu/mikmik/releases/download/v1.0.1/mikmik-windows-x86_64.zip",
         "cmd": "./mikmik.exe",
         "args": ["acp"]
       }

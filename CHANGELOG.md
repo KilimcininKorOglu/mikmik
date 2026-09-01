@@ -4,6 +4,28 @@ All notable changes to MikMik are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-09-01
+
+### Added
+
+- add a SQLite (FTS5) memory engine behind `memoryBackend`
+- export the sqlite memory store back to files on switch-back
+- route session notes to the sqlite engine when it is selected
+- give the consolidation dream the memory tools
+- add a Retain tool for durable facts
+- add a Reflect tool for on-demand memory consolidation
+- harden HTTP caching with ETag revalidation and no-store in the relay
+- harden HTTP caching with ETag revalidation and no-store in the config server
+
+### Changed
+
+- route memory reads through a MemoryBackend trait
+- drop the dead team_memory_path and teammem feature
+- document the memoryBackend setting and the Retain and Reflect tools
+- drop the npm publish flow from RELEASING.md
+- stop tracking Python bytecode cache
+- remove the spec/ reference folder
+
 ## [1.0.0] - 2026-08-30
 
 ### Added

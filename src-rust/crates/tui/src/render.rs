@@ -1684,7 +1684,8 @@ fn timeline_summary_line(app: &App, width: u16) -> Option<Line<'static>> {
     )))
 }
 
-/// Build the visible rows, newest last, ending on the selected row.
+/// Build the visible row range, newest last, ending on the selected row. The
+/// panel renders this range in reverse, so the newest row draws at the top.
 ///
 /// The panel has no scrollbar: it always shows the window that contains the
 /// cursor, so a selection made with the arrow keys can never fall off-screen.
@@ -1970,6 +1971,9 @@ fn usage_panel_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     lines
 }
 
+/// The panel shows at most this many tools at once, newest first.
+const PANEL_TIMELINE_ROWS: usize = 5;
+
 fn render_timeline_panel(frame: &mut Frame, app: &App, area: Rect, relocate: bool) {
     let focused = app.timeline_focused;
     let border_color = if focused {
@@ -2034,13 +2038,21 @@ fn render_timeline_panel(frame: &mut Frame, app: &App, area: Rect, relocate: boo
     // budget as the detail lines. Without this the bottom timeline entry would
     // be pushed off the panel.
     let summary = timeline_summary_line(app, inner.width);
-    let capacity = (inner.height as usize)
+    // The newest tools sit at the top. The side-docked panel shows only the last
+    // few so the feed flows: a new tool drops in at the top and the oldest falls
+    // off the bottom. The bottom dock keeps filling its rows as before.
+    let budget = (inner.height as usize)
         .saturating_sub(todo_lines.len())
         .saturating_sub(status_lines.len())
         .saturating_sub(usage_lines.len())
         .saturating_sub(detail_lines.len())
         .saturating_sub(usize::from(summary.is_some()))
         .max(1);
+    let capacity = if relocate {
+        budget.min(PANEL_TIMELINE_ROWS)
+    } else {
+        budget
+    };
 
     let window = timeline_window(app.timeline.len(), app.timeline.selected_idx, capacity);
     let mut lines = Vec::with_capacity(
@@ -2053,7 +2065,9 @@ fn render_timeline_panel(frame: &mut Frame, app: &App, area: Rect, relocate: boo
     lines.extend(todo_lines);
     lines.extend(status_lines);
     lines.extend(usage_lines);
-    for idx in window {
+    // Reverse the window so the newest row sits at the top of the feed and the
+    // oldest at the bottom.
+    for idx in window.rev() {
         let Some(row) = app.timeline.rows.get(idx) else {
             continue;
         };
@@ -8137,6 +8151,54 @@ mod timeline_summary_tests {
             "summary missing: {screen:?}"
         );
         assert_eq!(screen.len(), 24);
+    }
+
+    #[test]
+    fn the_side_docked_panel_shows_the_last_five_tools_newest_first() {
+        let mut app = app_with_summary_inputs();
+        app.timeline.rows = (0..7u64)
+            .map(|i| {
+                let mut r = row(i * 1_000, Some(i * 1_000 + 500), Some(100));
+                r.id = format!("row-{i}");
+                r.title = format!("tool{i}");
+                r
+            })
+            .collect();
+        app.timeline.set_selected_idx(6);
+
+        let mut terminal = match Terminal::new(TestBackend::new(130, 30)) {
+            Ok(terminal) => terminal,
+            Err(err) => panic!("test terminal: {err}"),
+        };
+        if let Err(err) = terminal.draw(|frame| render_app(frame, &app)) {
+            panic!("draw: {err}");
+        }
+        let buffer = terminal.backend().buffer();
+        let screen: Vec<String> = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect()
+            })
+            .collect();
+        let text = screen.join("\n");
+
+        // Only the last five tools show; the two oldest fall off the bottom.
+        assert!(!text.contains("tool0"), "tool0 should fall off:\n{text}");
+        assert!(!text.contains("tool1"), "tool1 should fall off:\n{text}");
+        for i in 2..=6 {
+            assert!(
+                text.contains(&format!("tool{i}")),
+                "tool{i} missing:\n{text}"
+            );
+        }
+
+        // Newest first: tool6 draws above tool2.
+        let y_of = |needle: &str| screen.iter().position(|line| line.contains(needle));
+        assert!(
+            y_of("tool6") < y_of("tool2"),
+            "the newest tool must sit above the oldest:\n{text}"
+        );
     }
 }
 

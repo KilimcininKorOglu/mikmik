@@ -8422,16 +8422,18 @@ impl App {
         if !self.timeline_visible || !self.timeline_focused {
             return false;
         }
+        // The panel draws newest at the top, so up moves toward newer rows
+        // (higher indices) and down toward older ones.
         match key.code {
-            KeyCode::Up => self.move_timeline_cursor(-1),
-            KeyCode::Down => self.move_timeline_cursor(1),
-            KeyCode::PageUp => self.move_timeline_cursor(-10),
-            KeyCode::PageDown => self.move_timeline_cursor(10),
-            KeyCode::Home => self.timeline.set_selected_idx(0),
-            KeyCode::End => {
+            KeyCode::Up => self.move_timeline_cursor(1),
+            KeyCode::Down => self.move_timeline_cursor(-1),
+            KeyCode::PageUp => self.move_timeline_cursor(10),
+            KeyCode::PageDown => self.move_timeline_cursor(-10),
+            KeyCode::Home => {
                 let last = self.timeline.len().saturating_sub(1);
                 self.timeline.set_selected_idx(last);
             }
+            KeyCode::End => self.timeline.set_selected_idx(0),
             // Right and left rather than enter: the command loop answers a
             // plain enter itself, before this runs, so binding expansion to it
             // would look dead here and would steal the prompt's submit key if
@@ -11950,9 +11952,15 @@ mod timeline_tests {
         app.apply_timeline_command("show");
         assert_eq!(app.timeline.selected_idx, 1, "the cursor follows new rows");
 
+        // The panel draws newest first, so down moves toward older rows and up
+        // back toward newer ones.
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        assert!(app.handle_timeline_key(&down), "the panel consumes the key");
+        assert_eq!(app.timeline.selected_idx, 0, "down selects the older row");
+
         let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
-        assert!(app.handle_timeline_key(&up), "the panel consumes the key");
-        assert_eq!(app.timeline.selected_idx, 0);
+        assert!(app.handle_timeline_key(&up));
+        assert_eq!(app.timeline.selected_idx, 1, "up selects the newer row");
 
         let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
         assert!(app.handle_timeline_key(&right));

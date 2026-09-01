@@ -3479,6 +3479,13 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
                         .add_modifier(Modifier::BOLD),
                 ),
             ];
+            // Tell the user how to change the mode, but only on an empty prompt
+            // so the hint does not compete with what they are typing (the same
+            // contract the `? shortcuts` hint follows). `shift+tab` cycles the
+            // mode (`reverseIndent` in keybindings.rs).
+            if app.prompt_input.text.is_empty() {
+                spans.insert(1, Span::styled(" (shift+tab)", Style::default().fg(dim)));
+            }
             spans.push(Span::styled(
                 format!(" · {}", provider),
                 Style::default().fg(dim),

@@ -4,6 +4,19 @@ All notable changes to MikMik are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-09-01
+
+### Added
+
+- flow the timeline newest-first and cap the side dock at five
+- pin todos and relocate status into the side-docked panel
+- show a (shift+tab) hint next to the mode badge
+- recolour todo items green/yellow/white with a shared helper
+
+### Changed
+
+- pin the timestamp flag so the opt-in tests are deterministic
+
 ## [1.0.1] - 2026-09-01
 
 ### Added
